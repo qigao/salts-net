@@ -11,6 +11,8 @@
 #ifndef TURBO_DATAGRAM_H
 #define TURBO_DATAGRAM_H
 
+
+#include "coronet_api.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -43,31 +45,31 @@ typedef enum turbo_datagram_kind_e {
  * @param kind UDP4 or UDP6.
  * @return Heap-allocated datagram, or NULL on failure.
  */
-CXX_C_API turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
+CORONET_C_API turbo_datagram_t *turbo_datagram_create(coro_context_t *ctx,
                                                     turbo_datagram_kind_t kind);
 
 /**
  * @brief Destroy a datagram and release all resources.
  */
-CXX_C_API void turbo_datagram_destroy(turbo_datagram_t *d);
+CORONET_C_API void turbo_datagram_destroy(turbo_datagram_t *d);
 
 /* ── Bind + Connect ───────────────────────────────────────── */
 
 /**
  * @brief Bind to a local address.
  */
-CXX_C_API int turbo_datagram_bind(turbo_datagram_t *d, const char *host,
+CORONET_C_API int turbo_datagram_bind(turbo_datagram_t *d, const char *host,
                                    unsigned short port);
 
 /**
  * @brief Enable or disable SO_REUSEPORT for future bind calls on this handle.
  */
-CXX_C_API void turbo_datagram_set_reuse_port(turbo_datagram_t *d, int enable);
+CORONET_C_API void turbo_datagram_set_reuse_port(turbo_datagram_t *d, int enable);
 
 /**
  * @brief Connect to a remote address (enables send without dest).
  */
-CXX_C_API int turbo_datagram_connect(turbo_datagram_t *d, const char *host,
+CORONET_C_API int turbo_datagram_connect(turbo_datagram_t *d, const char *host,
                                       unsigned short port);
 
 /* ── Send ─────────────────────────────────────────────────── */
@@ -75,39 +77,39 @@ CXX_C_API int turbo_datagram_connect(turbo_datagram_t *d, const char *host,
 /**
  * @brief Copy-based send to a specific destination.
  */
-CXX_C_API int turbo_datagram_sendto(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_sendto(turbo_datagram_t *d,
                                      const struct sockaddr *dest,
                                      const char *data, size_t len);
 
 /**
  * @brief Copy-based send on a connected datagram.
  */
-CXX_C_API int turbo_datagram_send(turbo_datagram_t *d, const char *data,
+CORONET_C_API int turbo_datagram_send(turbo_datagram_t *d, const char *data,
                                    size_t len);
 
 /**
  * @brief Get a zero-copy send buffer from the arena.
  */
-CXX_C_API mem_buffer_t *turbo_datagram_get_send_buffer(turbo_datagram_t *d,
+CORONET_C_API mem_buffer_t *turbo_datagram_get_send_buffer(turbo_datagram_t *d,
                                                         size_t min_size);
 
 /**
  * @brief Send a pre-filled buffer to a specific destination.
  */
-CXX_C_API int turbo_datagram_sendto_buffer(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_sendto_buffer(turbo_datagram_t *d,
                                             const struct sockaddr *dest,
                                             mem_buffer_t *buf, size_t len);
 
 /**
  * @brief Send a pre-filled buffer on a connected datagram.
  */
-CXX_C_API int turbo_datagram_send_buffer(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_send_buffer(turbo_datagram_t *d,
                                           mem_buffer_t *buf, size_t len);
 
 /**
  * @brief Scatter-gather send on a connected datagram.
  */
-CXX_C_API int turbo_datagram_sendv(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_sendv(turbo_datagram_t *d,
                                     const turbo_iovec_t *iov, size_t iovcnt);
 
 /* ── Receive ──────────────────────────────────────────────── */
@@ -115,20 +117,20 @@ CXX_C_API int turbo_datagram_sendv(turbo_datagram_t *d,
 /**
  * @brief Start receiving datagrams. Callback fires on each packet.
  */
-CXX_C_API int turbo_datagram_recv_start(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_recv_start(turbo_datagram_t *d,
                                          turbo_recv_cb on_recv);
 
 /**
  * @brief Stop receiving datagrams.
  */
-CXX_C_API void turbo_datagram_recv_stop(turbo_datagram_t *d);
+CORONET_C_API void turbo_datagram_recv_stop(turbo_datagram_t *d);
 
 /* ── Close ────────────────────────────────────────────────── */
 
 /**
  * @brief Close the datagram and release the socket.
  */
-CXX_C_API void turbo_datagram_close(turbo_datagram_t *d);
+CORONET_C_API void turbo_datagram_close(turbo_datagram_t *d);
 
 /* ── Multicast / Broadcast ────────────────────────────────── */
 
@@ -139,40 +141,40 @@ CXX_C_API void turbo_datagram_close(turbo_datagram_t *d);
  * is a local IPv4 address. For UDP6, @p iface is a decimal interface index.
  * Pass NULL or an empty string to use the default interface.
  */
-CXX_C_API int turbo_datagram_join_multicast(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_join_multicast(turbo_datagram_t *d,
                                              const char *group,
                                              const char *iface);
 /**
  * @brief Leave a multicast group previously joined with the same interface.
  */
-CXX_C_API int turbo_datagram_leave_multicast(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_leave_multicast(turbo_datagram_t *d,
                                               const char *group,
                                               const char *iface);
 /**
  * @brief Enable or disable multicast loopback after binding the datagram.
  */
-CXX_C_API int turbo_datagram_set_multicast_loop(turbo_datagram_t *d, int on);
+CORONET_C_API int turbo_datagram_set_multicast_loop(turbo_datagram_t *d, int on);
 /**
  * @brief Set IPv4 multicast TTL or IPv6 multicast hop limit in [0, 255].
  */
-CXX_C_API int turbo_datagram_set_multicast_ttl(turbo_datagram_t *d, int ttl);
+CORONET_C_API int turbo_datagram_set_multicast_ttl(turbo_datagram_t *d, int ttl);
 /**
  * @brief Enable or disable IPv4 UDP broadcast after binding the datagram.
  *
  * IPv6 has no broadcast and returns TURBO_ENOTSUP.
  */
-CXX_C_API int turbo_datagram_set_broadcast(turbo_datagram_t *d, int on);
+CORONET_C_API int turbo_datagram_set_broadcast(turbo_datagram_t *d, int on);
 
 /* ── Query ────────────────────────────────────────────────── */
 
-CXX_C_API int turbo_datagram_get_local_addr(turbo_datagram_t *d,
+CORONET_C_API int turbo_datagram_get_local_addr(turbo_datagram_t *d,
                                              struct sockaddr_storage *addr);
-CXX_C_API void turbo_datagram_set_user_data(turbo_datagram_t *d, void *data);
-CXX_C_API void *turbo_datagram_get_user_data(turbo_datagram_t *d);
+CORONET_C_API void turbo_datagram_set_user_data(turbo_datagram_t *d, void *data);
+CORONET_C_API void *turbo_datagram_get_user_data(turbo_datagram_t *d);
 
 /* ── Memory management ────────────────────────────────────── */
 
-CXX_C_API void turbo_datagram_trim_memory(turbo_datagram_t *d);
+CORONET_C_API void turbo_datagram_trim_memory(turbo_datagram_t *d);
 
 /* ── Convenience macros ───────────────────────────────────── */
 

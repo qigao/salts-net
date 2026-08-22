@@ -6,6 +6,8 @@
 #ifndef TURBO_TLS_H
 #define TURBO_TLS_H
 
+
+#include "coronet_api.h"
 #include "platform.h"
 
 #ifdef __cplusplus
@@ -27,7 +29,7 @@ struct ssl_ctx_st;
  * @return TURBO_OK when at least one system trust source is available,
  *         TURBO_EINVAL for NULL, or TURBO_EIO when every source fails.
  */
-CXX_C_API int turbo_tls_load_system_ca_certificates(struct ssl_ctx_st *context);
+CORONET_C_API int turbo_tls_load_system_ca_certificates(struct ssl_ctx_st *context);
 
 #ifdef __cplusplus
 }

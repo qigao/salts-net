@@ -36,22 +36,22 @@ spec("x509_integration") {
         
         // Verify structure
         check_not_null(cert);
-        check_int_eq(cert->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(cert->value.sequence.count, 3);
+        check_equal(cert->type, ASN1_TYPE_SEQUENCE);
+        check_equal(cert->value.sequence.count, 3);
         
         // Check TBS
         asn1_value_t *tbs_check = cert->value.sequence.children[0];
-        check_int_eq(tbs_check->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(tbs_check->value.sequence.count, 2);
+        check_equal(tbs_check->type, ASN1_TYPE_SEQUENCE);
+        check_equal(tbs_check->value.sequence.count, 2);
         
         // Check algorithm
         asn1_value_t *alg_check = cert->value.sequence.children[1];
-        check_int_eq(alg_check->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(alg_check->value.sequence.count, 1);
+        check_equal(alg_check->type, ASN1_TYPE_SEQUENCE);
+        check_equal(alg_check->value.sequence.count, 1);
         
         // Check signature
         asn1_value_t *sig_check = cert->value.sequence.children[2];
-        check_int_eq(sig_check->type, ASN1_TYPE_BIT_STRING);
+        check_equal(sig_check->type, ASN1_TYPE_BIT_STRING);
         
         asn1_free(cert);
     }
@@ -73,26 +73,26 @@ spec("x509_integration") {
         
         // Verify structure
         check_not_null(name);
-        check_int_eq(name->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(name->value.sequence.count, 1);
+        check_equal(name->type, ASN1_TYPE_SEQUENCE);
+        check_equal(name->value.sequence.count, 1);
         
         // Check RDN
         asn1_value_t *rdn_check = name->value.sequence.children[0];
-        check_int_eq(rdn_check->type, ASN1_TYPE_SET);
-        check_size_eq(rdn_check->value.set.count, 1);
+        check_equal(rdn_check->type, ASN1_TYPE_SET);
+        check_equal(rdn_check->value.set.count, 1);
         
         // Check attribute
         asn1_value_t *attr_check = rdn_check->value.set.children[0];
-        check_int_eq(attr_check->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(attr_check->value.sequence.count, 2);
+        check_equal(attr_check->type, ASN1_TYPE_SEQUENCE);
+        check_equal(attr_check->value.sequence.count, 2);
         
         // Check OID
         asn1_value_t *oid_check = attr_check->value.sequence.children[0];
-        check_int_eq(oid_check->type, ASN1_TYPE_OBJECT_IDENTIFIER);
+        check_equal(oid_check->type, ASN1_TYPE_OBJECT_IDENTIFIER);
         
         // Check value
         asn1_value_t *val_check = attr_check->value.sequence.children[1];
-        check_int_eq(val_check->type, ASN1_TYPE_UTF8_STRING);
+        check_equal(val_check->type, ASN1_TYPE_UTF8_STRING);
         
         asn1_free(name);
     }
@@ -113,22 +113,22 @@ spec("x509_integration") {
         
         // Verify structure
         check_not_null(ext);
-        check_int_eq(ext->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(ext->value.sequence.count, 3);
+        check_equal(ext->type, ASN1_TYPE_SEQUENCE);
+        check_equal(ext->value.sequence.count, 3);
         
         // Check OID
         asn1_value_t *oid = ext->value.sequence.children[0];
-        check_int_eq(oid->type, ASN1_TYPE_OBJECT_IDENTIFIER);
+        check_equal(oid->type, ASN1_TYPE_OBJECT_IDENTIFIER);
         
         // Check critical flag
         asn1_value_t *critical = ext->value.sequence.children[1];
-        check_int_eq(critical->type, ASN1_TYPE_BOOLEAN);
+        check_equal(critical->type, ASN1_TYPE_BOOLEAN);
         check(critical->value.boolean);
         
         // Check value
         asn1_value_t *value = ext->value.sequence.children[2];
-        check_int_eq(value->type, ASN1_TYPE_OCTET_STRING);
-        check_size_eq(value->value.octet_string.length, 5);
+        check_equal(value->type, ASN1_TYPE_OCTET_STRING);
+        check_equal(value->value.octet_string.length, 5);
         
         asn1_free(ext);
     }
@@ -147,10 +147,10 @@ spec("x509_integration") {
         
         asn1_sequence_add_child(version_ctx, asn1_create_integer(2)); // v3
         
-        check_int_eq(version_ctx->tag, 0xA0);
-        check_int_eq(version_ctx->tag_class, 2);
-        check_int_eq(version_ctx->constructed, 1);
-        check_int_eq(version_ctx->tag_number, 0);
+        check_equal(version_ctx->tag, 0xA0);
+        check_equal(version_ctx->tag_class, 2);
+        check_equal(version_ctx->constructed, 1);
+        check_equal(version_ctx->tag_number, 0);
         
         asn1_free(version_ctx);
     }
@@ -176,13 +176,13 @@ spec("x509_integration") {
             asn1_value_t *oid = asn1_create_oid_from_string(test_oids[i].oid_str);
             check_not_null(oid);
             if (oid) {
-                check_int_eq(oid->type, ASN1_TYPE_OBJECT_IDENTIFIER);
+                check_equal(oid->type, ASN1_TYPE_OBJECT_IDENTIFIER);
                 
                 // Convert back to string and compare
                 char *str = asn1_oid_to_string(&oid->value.oid);
                 check_not_null(str);
                 if (str) {
-                    check_str_eq(str, test_oids[i].oid_str);
+                    check_equal(str, test_oids[i].oid_str);
                     free(str);
                 }
                 asn1_free(oid);
@@ -202,8 +202,8 @@ spec("x509_integration") {
         asn1_sequence_add_child(cert, tbs);
         
         check_not_null(cert);
-        check_int_eq(cert->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(cert->value.sequence.count, 1);
+        check_equal(cert->type, ASN1_TYPE_SEQUENCE);
+        check_equal(cert->value.sequence.count, 1);
         
         asn1_free(cert);
     }
@@ -232,8 +232,8 @@ spec("x509_integration") {
         asn1_value_t *empty_octet = asn1_create_octet_string(NULL, 0);
         check_not_null(empty_octet);
         if (empty_octet) {
-            check_int_eq(empty_octet->type, ASN1_TYPE_OCTET_STRING);
-            check_size_eq(empty_octet->value.octet_string.length, 0);
+            check_equal(empty_octet->type, ASN1_TYPE_OCTET_STRING);
+            check_equal(empty_octet->value.octet_string.length, 0);
             check_null(empty_octet->value.octet_string.data);
             asn1_free(empty_octet);
         }
@@ -242,8 +242,8 @@ spec("x509_integration") {
     it("should handle NULL parent or child in sequence manipulation functions") {
         // Test add_child with NULL
         asn1_value_t *seq = asn1_create_sequence();
-        check_int_eq(asn1_sequence_add_child(NULL, seq), -1);
-        check_int_eq(asn1_sequence_add_child(seq, NULL), -1);
+        check_equal(asn1_sequence_add_child(NULL, seq), -1);
+        check_equal(asn1_sequence_add_child(seq, NULL), -1);
         asn1_free(seq);
     }
   }

@@ -388,7 +388,7 @@ static void server_lifecycle_prepare(server_lifecycle_state_t *state) {
   test_socket_t probe = TEST_INVALID_SOCKET;
 
   memset(state, 0, sizeof(*state));
-  check_int_eq(tls_test_prepare_listener(&probe, &state->port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state->port), 0);
   test_close_socket(probe);
   state->ctx = coro_context_create(NULL);
   check_not_null(state->ctx);
@@ -426,7 +426,7 @@ spec("Coroutine Server Lifecycle") {
     memset(&state, 0, sizeof(state));
     state.client_rc = TURBO_EBUSY;
     state.handler_rc = TURBO_EBUSY;
-    check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+    check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
     test_close_socket(probe);
     state.ctx = coro_context_create(NULL);
     check_not_null(state.ctx);
@@ -438,31 +438,31 @@ spec("Coroutine Server Lifecycle") {
     admission.callback = server_prefix_admission_callback;
     admission.user_data = &state;
     admission.release = server_prefix_admission_release;
-    check_int_eq(
+    check_equal(
         coro_socket_set_server_pre_tls_admission(state.server, &admission), 0);
-    check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+    check_equal(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                        server_prefix_admission_handler, &state),
                  0);
-    check_int_eq(coro_context_spawn(state.ctx, server_prefix_admission_client,
+    check_equal(coro_context_spawn(state.ctx, server_prefix_admission_client,
                                     &state),
                  0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_prefix_admission_done, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
 
     check_true(state.callback_calls >= 1);
-    check_int_eq(state.context_valid, 1);
-    check_int_eq(state.handler_rc, 0);
-    check_int_eq(state.client_rc, 0);
-    check_int_eq(state.release_hits, 1);
-    check_int_eq(coro_socket_server_stop(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(state.context_valid, 1);
+    check_equal(state.handler_rc, 0);
+    check_equal(state.client_rc, 0);
+    check_equal(state.release_hits, 1);
+    check_equal(coro_socket_server_stop(state.server), 0);
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_prefix_admission_stopped, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
     coro_socket_destroy(state.server);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_context_idle, state.ctx,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
@@ -475,39 +475,39 @@ spec("Coroutine Server Lifecycle") {
     server_lifecycle_state_t state;
 
     server_lifecycle_prepare(&state);
-    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+    check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                              key_file, sizeof(key_file)), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
     state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
     check_not_null(state.server);
-    check_int_eq(coro_socket_set_server_admission_limit(NULL, 1u), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_server_admission_limit(state.server, 0u), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_server_admission_limit(state.server, 1u), 0);
+    check_equal(coro_socket_set_server_admission_limit(NULL, 1u), TURBO_EINVAL);
+    check_equal(coro_socket_set_server_admission_limit(state.server, 0u), TURBO_EINVAL);
+    check_equal(coro_socket_set_server_admission_limit(state.server, 1u), 0);
     coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
-    check_int_eq(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
+    check_equal(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
                                           server_lifecycle_handler, &state,
                                           server_lifecycle_closed, &state), 0);
-    check_int_eq(coro_socket_set_server_admission_limit(state.server, 2u), TURBO_EBUSY);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_held_client, &state), 0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(coro_socket_set_server_admission_limit(state.server, 2u), TURBO_EBUSY);
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_held_client, &state), 0);
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_tls_admission_pending, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_size_eq(state.server->server_task_count, 1u);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_admission_probe, &state), 0);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_probe_done,
+    check_equal(state.server->server_task_count, 1u);
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_admission_probe, &state), 0);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_probe_done,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     check_true(state.probe_status == TURBO_EOF || state.probe_status == TURBO_ECANCELED ||
                state.probe_status == TURBO_ECONNABORTED || state.probe_status == TURBO_ECONNRESET);
-    check_size_eq(state.server->server_task_count, 1u);
-    check_int_eq(state.handler_hits, 0);
-    check_int_eq(state.closed_count, 0);
+    check_equal(state.server->server_task_count, 1u);
+    check_equal(state.handler_hits, 0);
+    check_equal(state.closed_count, 0);
 
     state.release_client = 1;
-    check_int_eq(coro_socket_server_stop(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
+    check_equal(coro_socket_server_stop(state.server), 0);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
+    check_equal(state.closed_count, 1);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     server_lifecycle_cleanup(&state);
     tls_test_clear_server_env();
@@ -521,17 +521,17 @@ spec("Coroutine Server Lifecycle") {
     server_lifecycle_prepare(&state);
     state.server = coro_socket_create_tcpv4(state.ctx);
     check_not_null(state.server);
-    check_int_eq(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
+    check_equal(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
                                           server_lifecycle_handler, &state,
                                           server_lifecycle_closed, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_tcp_client, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_tcp_client, &state), 0);
 
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_connection_closed,
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_connection_closed,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_int_eq(state.handler_hits, 1);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(coro_socket_server_stop(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
+    check_equal(state.handler_hits, 1);
+    check_equal(state.closed_count, 1);
+    check_equal(coro_socket_server_stop(state.server), 0);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     server_lifecycle_cleanup(&state);
   }
@@ -543,16 +543,16 @@ spec("Coroutine Server Lifecycle") {
     state.server = coro_socket_create_tcpv4(state.ctx);
     check_not_null(state.server);
     coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_HANDSHAKE_TIMEOUT_MS);
-    check_int_eq(coro_socket_listen_ws_ex(state.server, "127.0.0.1", state.port, 0,
+    check_equal(coro_socket_listen_ws_ex(state.server, "127.0.0.1", state.port, 0,
                                           server_lifecycle_handler, &state,
                                           server_lifecycle_closed, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_stalled_client, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_stalled_client, &state), 0);
 
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_connection_closed,
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_connection_closed,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_int_eq(state.handler_hits, 0);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
+    check_equal(state.handler_hits, 0);
+    check_equal(state.closed_count, 1);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     server_lifecycle_cleanup(&state);
   }
@@ -564,16 +564,16 @@ spec("Coroutine Server Lifecycle") {
     state.server = coro_socket_create_tcpv4(state.ctx);
     check_not_null(state.server);
     coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_HANDSHAKE_TIMEOUT_MS);
-    check_int_eq(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
+    check_equal(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
                                           server_lifecycle_handler, &state,
                                           server_lifecycle_closed, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_delayed_tcp_client,
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_delayed_tcp_client,
                                     &state), 0);
 
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_connection_closed,
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_connection_closed,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_int_eq(state.handler_hits, 1);
-    check_int_eq(state.closed_count, 1);
+    check_equal(state.handler_hits, 1);
+    check_equal(state.closed_count, 1);
     server_lifecycle_cleanup(&state);
   }
 
@@ -583,34 +583,34 @@ spec("Coroutine Server Lifecycle") {
     server_lifecycle_prepare(&state);
     state.server = coro_socket_create_tcpv4(state.ctx);
     check_not_null(state.server);
-    check_int_eq(coro_socket_listen_on_ex(
+    check_equal(coro_socket_listen_on_ex(
                      state.server, "127.0.0.1", state.port,
                      server_lifecycle_draining_handler, &state,
                      server_lifecycle_closed, &state),
                  0);
-    check_int_eq(
+    check_equal(
         coro_context_spawn(state.ctx, server_lifecycle_stalled_client, &state),
         0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_handler_entered, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
-    check_size_eq(state.server->server_task_count, 1u);
+    check_equal(state.server->server_task_count, 1u);
 
-    check_int_eq(coro_socket_server_close_admission(state.server), 0);
+    check_equal(coro_socket_server_close_admission(state.server), 0);
     coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
-    check_size_eq(state.server->server_task_count, 1u);
+    check_equal(state.server->server_task_count, 1u);
     check_false(coro_socket_server_is_stopped(state.server));
-    check_int_eq(state.closed_count, 0);
+    check_equal(state.closed_count, 0);
 
     state.release_handler = 1;
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_connection_closed, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
-    check_int_eq(state.handler_hits, 1);
-    check_int_eq(coro_socket_server_stop(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(state.handler_hits, 1);
+    check_equal(coro_socket_server_stop(state.server), 0);
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_server_stopped, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
@@ -625,24 +625,24 @@ spec("Coroutine Server Lifecycle") {
     state.second_recv_status = TURBO_EIO;
     state.server = coro_socket_create_udpv4(state.ctx);
     check_not_null(state.server);
-    check_int_eq(coro_socket_listen_on_ex(
+    check_equal(coro_socket_listen_on_ex(
                      state.server, "127.0.0.1", state.port,
                      server_lifecycle_udp_single_datagram_handler, &state,
                      server_lifecycle_closed, &state),
                  0);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_udp_client,
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_udp_client,
                                     &state),
                  0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_connection_closed, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
-    check_int_eq(state.first_recv_status, 0);
-    check_int_eq(state.second_recv_status, TURBO_EOF);
-    check_int_eq(state.handler_hits, 1);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(coro_socket_server_close_admission(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(state.first_recv_status, 0);
+    check_equal(state.second_recv_status, TURBO_EOF);
+    check_equal(state.handler_hits, 1);
+    check_equal(state.closed_count, 1);
+    check_equal(coro_socket_server_close_admission(state.server), 0);
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_server_stopped, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
@@ -657,24 +657,24 @@ spec("Coroutine Server Lifecycle") {
     state.second_recv_status = TURBO_EIO;
     state.server = coro_socket_create_udpv4(state.ctx);
     check_not_null(state.server);
-    check_int_eq(coro_socket_set_udp_sessionized(state.server, 1), 0);
-    check_int_eq(coro_socket_listen_on_ex(
+    check_equal(coro_socket_set_udp_sessionized(state.server, 1), 0);
+    check_equal(coro_socket_listen_on_ex(
                      state.server, "127.0.0.1", state.port,
                      server_lifecycle_udp_single_datagram_handler, &state,
                      server_lifecycle_closed, &state),
                  0);
-    check_int_eq(coro_socket_set_udp_sessionized(state.server, 0), TURBO_EBUSY);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_udp_session_client, &state), 0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(coro_socket_set_udp_sessionized(state.server, 0), TURBO_EBUSY);
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_udp_session_client, &state), 0);
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_connection_closed, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
-    check_int_eq(state.first_recv_status, 0);
-    check_int_eq(state.second_recv_status, 0);
-    check_int_eq(state.handler_hits, 1);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(coro_socket_server_close_admission(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(state.first_recv_status, 0);
+    check_equal(state.second_recv_status, 0);
+    check_equal(state.handler_hits, 1);
+    check_equal(state.closed_count, 1);
+    check_equal(coro_socket_server_close_admission(state.server), 0);
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_server_stopped, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS),
                  0);
@@ -688,19 +688,19 @@ spec("Coroutine Server Lifecycle") {
     state.server = coro_socket_create_tcpv4(state.ctx);
     check_not_null(state.server);
     coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
-    check_int_eq(coro_socket_listen_ws_ex(state.server, "127.0.0.1", state.port, 0,
+    check_equal(coro_socket_listen_ws_ex(state.server, "127.0.0.1", state.port, 0,
                                           server_lifecycle_handler, &state,
                                           server_lifecycle_closed, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_stalled_client, &state), 0);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_connected,
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_stalled_client, &state), 0);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_client_connected,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
 
-    check_int_eq(coro_socket_server_stop(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
+    check_equal(coro_socket_server_stop(state.server), 0);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_int_eq(state.handler_hits, 0);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
+    check_equal(state.handler_hits, 0);
+    check_equal(state.closed_count, 1);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     server_lifecycle_cleanup(&state);
   }
@@ -711,42 +711,42 @@ spec("Coroutine Server Lifecycle") {
     server_lifecycle_state_t state;
 
     server_lifecycle_prepare(&state);
-    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+    check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                              key_file, sizeof(key_file)), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
     state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
     check_not_null(state.server);
     coro_socket_set_timeout(state.server, SERVER_LIFECYCLE_TEST_TIMEOUT_MS);
-    check_int_eq(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
+    check_equal(coro_socket_listen_on_ex(state.server, "127.0.0.1", state.port,
                                           server_lifecycle_handler, &state,
                                           server_lifecycle_closed, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, server_lifecycle_stalled_client,
+    check_equal(coro_context_spawn(state.ctx, server_lifecycle_stalled_client,
                                     &state), 0);
 
     /*
      * The linked server task is the deterministic boundary: the raw TCP peer
      * was accepted, but cannot finish TLS admission without a ClientHello.
      */
-    check_int_eq(server_lifecycle_run_until(
+    check_equal(server_lifecycle_run_until(
                      state.ctx, server_lifecycle_tls_admission_pending, &state,
                      SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     coro_context_run(state.ctx, TURBO_RUN_NOWAIT);
-    check_size_eq(state.server->server_task_count, 1);
-    check_int_eq(state.handler_hits, 0);
-    check_int_eq(state.closed_count, 0);
+    check_equal(state.server->server_task_count, 1);
+    check_equal(state.handler_hits, 0);
+    check_equal(state.closed_count, 0);
 
-    check_int_eq(coro_socket_server_stop(state.server), 0);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
+    check_equal(coro_socket_server_stop(state.server), 0);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_server_stopped,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
-    check_int_eq(state.handler_hits, 0);
-    check_int_eq(state.closed_count, 1);
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
+    check_equal(state.handler_hits, 0);
+    check_equal(state.closed_count, 1);
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_client_done,
                                             &state, SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
 
     coro_socket_destroy(state.server);
     state.server = NULL;
-    check_int_eq(server_lifecycle_run_until(state.ctx, server_lifecycle_context_idle,
+    check_equal(server_lifecycle_run_until(state.ctx, server_lifecycle_context_idle,
                                             state.ctx,
                                             SERVER_LIFECYCLE_TEST_TIMEOUT_MS), 0);
     server_lifecycle_cleanup(&state);

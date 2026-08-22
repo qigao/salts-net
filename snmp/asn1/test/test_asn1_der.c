@@ -13,18 +13,18 @@ spec("asn1_der") {
     it("should create a boolean value correctly") {
         asn1_value_t *v = asn1_create_boolean(1);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_BOOLEAN);
-        check_int_eq(v->value.boolean, 1);
-        check_int_eq(v->tag, 0x01); // BOOLEAN tag
+        check_equal(v->type, ASN1_TYPE_BOOLEAN);
+        check_equal(v->value.boolean, 1);
+        check_equal(v->tag, 0x01); // BOOLEAN tag
         asn1_free(v);
     }
 
     it("should create an integer value correctly") {
         asn1_value_t *v = asn1_create_integer(42);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_INTEGER);
-        check_int_eq((int)v->value.integer, 42);
-        check_int_eq(v->tag, 0x02); // INTEGER tag
+        check_equal(v->type, ASN1_TYPE_INTEGER);
+        check_equal((int)v->value.integer, 42);
+        check_equal(v->tag, 0x02); // INTEGER tag
         asn1_free(v);
     }
 
@@ -32,30 +32,30 @@ spec("asn1_der") {
         uint8_t data[] = {0x01, 0x02, 0x03};
         asn1_value_t *v = asn1_create_octet_string(data, sizeof(data));
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_OCTET_STRING);
-        check_size_eq(v->value.octet_string.length, 3);
-        check_mem_eq(v->value.octet_string.data, data, 3);
-        check_int_eq(v->tag, 0x04); // OCTET STRING tag
+        check_equal(v->type, ASN1_TYPE_OCTET_STRING);
+        check_equal(v->value.octet_string.length, 3);
+        check_equal(v->value.octet_string.data, data, 3);
+        check_equal(v->tag, 0x04); // OCTET STRING tag
         asn1_free(v);
     }
 
     it("should create a null value correctly") {
         asn1_value_t *v = asn1_create_null();
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_NULL);
-        check_int_eq(v->tag, 0x05); // NULL tag
+        check_equal(v->type, ASN1_TYPE_NULL);
+        check_equal(v->tag, 0x05); // NULL tag
         asn1_free(v);
     }
 
     it("should create a sequence and add a child correctly") {
         asn1_value_t *seq = asn1_create_sequence();
         check_not_null(seq);
-        check_int_eq(seq->type, ASN1_TYPE_SEQUENCE);
-        check_int_eq(seq->tag, 0x30); // SEQUENCE tag (constructed)
+        check_equal(seq->type, ASN1_TYPE_SEQUENCE);
+        check_equal(seq->tag, 0x30); // SEQUENCE tag (constructed)
 
         asn1_value_t *child = asn1_create_integer(123);
-        check_int_eq(asn1_sequence_add_child(seq, child), 0);
-        check_size_eq(seq->value.sequence.count, 1);
+        check_equal(asn1_sequence_add_child(seq, child), 0);
+        check_equal(seq->value.sequence.count, 1);
 
         asn1_free(seq);
     }
@@ -63,12 +63,12 @@ spec("asn1_der") {
     it("should create a set and add a child correctly") {
         asn1_value_t *set = asn1_create_set();
         check_not_null(set);
-        check_int_eq(set->type, ASN1_TYPE_SET);
-        check_int_eq(set->tag, 0x31); // SET tag (constructed)
+        check_equal(set->type, ASN1_TYPE_SET);
+        check_equal(set->tag, 0x31); // SET tag (constructed)
 
         asn1_value_t *child = asn1_create_boolean(1);
-        check_int_eq(asn1_set_add_child(set, child), 0);
-        check_size_eq(set->value.set.count, 1);
+        check_equal(asn1_set_add_child(set, child), 0);
+        check_equal(set->value.set.count, 1);
 
         asn1_free(set);
     }
@@ -79,65 +79,65 @@ spec("asn1_der") {
         uint8_t data[] = {0xAB, 0xCD};
         asn1_value_t *v = asn1_create_bit_string(data, 2, 4);  // 4 unused bits
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_BIT_STRING);
-        check_int_eq(v->tag, 0x03); // BIT STRING tag
+        check_equal(v->type, ASN1_TYPE_BIT_STRING);
+        check_equal(v->tag, 0x03); // BIT STRING tag
         // First byte should be unused bits count
-        check_int_eq(v->value.octet_string.data[0], 4);
-        check_int_eq(v->value.octet_string.data[1], 0xAB);
-        check_int_eq(v->value.octet_string.data[2], 0xCD);
+        check_equal(v->value.octet_string.data[0], 4);
+        check_equal(v->value.octet_string.data[1], 0xAB);
+        check_equal(v->value.octet_string.data[2], 0xCD);
         asn1_free(v);
     }
 
     it("should create an OID from a string correctly") {
         asn1_value_t *v = asn1_create_oid_from_string("1.2.840.113549");
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_OBJECT_IDENTIFIER);
-        check_int_eq(v->tag, 0x06); // OID tag
-        check_size_eq(v->value.oid.count, 4);
-        check_int_eq((int)v->value.oid.components[0], 1);
-        check_int_eq((int)v->value.oid.components[1], 2);
-        check_int_eq((int)v->value.oid.components[2], 840);
-        check_int_eq((int)v->value.oid.components[3], 113549);
+        check_equal(v->type, ASN1_TYPE_OBJECT_IDENTIFIER);
+        check_equal(v->tag, 0x06); // OID tag
+        check_equal(v->value.oid.count, 4);
+        check_equal((int)v->value.oid.components[0], 1);
+        check_equal((int)v->value.oid.components[1], 2);
+        check_equal((int)v->value.oid.components[2], 840);
+        check_equal((int)v->value.oid.components[3], 113549);
         asn1_free(v);
     }
 
     it("should create a printable string correctly") {
         asn1_value_t *v = asn1_create_printable_string("Hello World");
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_PRINTABLE_STRING);
-        check_int_eq(v->tag, 0x13); // PrintableString tag
-        check_size_eq(v->value.octet_string.length, 11);
-        check_mem_eq(v->value.octet_string.data, "Hello World", 11);
+        check_equal(v->type, ASN1_TYPE_PRINTABLE_STRING);
+        check_equal(v->tag, 0x13); // PrintableString tag
+        check_equal(v->value.octet_string.length, 11);
+        check_equal(v->value.octet_string.data, "Hello World", 11);
         asn1_free(v);
     }
 
     it("should create a UTF8 string correctly") {
         asn1_value_t *v = asn1_create_utf8_string("UTF8");
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_UTF8_STRING);
-        check_int_eq(v->tag, 0x0C); // UTF8String tag
-        check_size_eq(v->value.octet_string.length, 4);
-        check_mem_eq(v->value.octet_string.data, "UTF8", 4);
+        check_equal(v->type, ASN1_TYPE_UTF8_STRING);
+        check_equal(v->tag, 0x0C); // UTF8String tag
+        check_equal(v->value.octet_string.length, 4);
+        check_equal(v->value.octet_string.data, "UTF8", 4);
         asn1_free(v);
     }
 
     it("should create an IA5 string correctly") {
         asn1_value_t *v = asn1_create_ia5_string("test@example.com");
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_IA5_STRING);
-        check_int_eq(v->tag, 0x16); // IA5String tag
-        check_size_eq(v->value.octet_string.length, 16);
-        check_mem_eq(v->value.octet_string.data, "test@example.com", 16);
+        check_equal(v->type, ASN1_TYPE_IA5_STRING);
+        check_equal(v->tag, 0x16); // IA5String tag
+        check_equal(v->value.octet_string.length, 16);
+        check_equal(v->value.octet_string.data, "test@example.com", 16);
         asn1_free(v);
     }
 
     it("should create a UTC time string correctly") {
         asn1_value_t *v = asn1_create_utc_time("231231235959Z");
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_UTC_TIME);
-        check_int_eq(v->tag, 0x17); // UTCTime tag
-        check_size_eq(v->value.octet_string.length, 13);
-        check_mem_eq(v->value.octet_string.data, "231231235959Z", 13);
+        check_equal(v->type, ASN1_TYPE_UTC_TIME);
+        check_equal(v->tag, 0x17); // UTCTime tag
+        check_equal(v->value.octet_string.length, 13);
+        check_equal(v->value.octet_string.data, "231231235959Z", 13);
         asn1_free(v);
     }
   }
@@ -147,9 +147,9 @@ spec("asn1_der") {
         uint8_t data[] = {0x01, 0x01, 0xFF};  // BOOLEAN TRUE
         asn1_value_t *v = NULL;
         
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_BOOLEAN);
+        check_equal(v->type, ASN1_TYPE_BOOLEAN);
         check(v->value.boolean);
         
         asn1_free(v);
@@ -159,9 +159,9 @@ spec("asn1_der") {
         uint8_t data[] = {0x01, 0x01, 0x00};  // BOOLEAN FALSE
         asn1_value_t *v = NULL;
         
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_BOOLEAN);
+        check_equal(v->type, ASN1_TYPE_BOOLEAN);
         check(!v->value.boolean);
         
         asn1_free(v);
@@ -171,10 +171,10 @@ spec("asn1_der") {
         uint8_t data[] = {0x02, 0x01, 0x2A};  // INTEGER 42
         asn1_value_t *v = NULL;
         
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_INTEGER);
-        check_int_eq((int)v->value.integer, 42);
+        check_equal(v->type, ASN1_TYPE_INTEGER);
+        check_equal((int)v->value.integer, 42);
         
         asn1_free(v);
     }
@@ -183,13 +183,13 @@ spec("asn1_der") {
         uint8_t data[] = {0x04, 0x03, 0xAB, 0xCD, 0xEF};  // OCTET STRING
         asn1_value_t *v = NULL;
         
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_OCTET_STRING);
-        check_size_eq(v->value.octet_string.length, 3);
-        check_int_eq(v->value.octet_string.data[0], 0xAB);
-        check_int_eq(v->value.octet_string.data[1], 0xCD);
-        check_int_eq(v->value.octet_string.data[2], 0xEF);
+        check_equal(v->type, ASN1_TYPE_OCTET_STRING);
+        check_equal(v->value.octet_string.length, 3);
+        check_equal(v->value.octet_string.data[0], 0xAB);
+        check_equal(v->value.octet_string.data[1], 0xCD);
+        check_equal(v->value.octet_string.data[2], 0xEF);
         
         asn1_free(v);
     }
@@ -198,9 +198,9 @@ spec("asn1_der") {
         uint8_t data[] = {0x05, 0x00};  // NULL
         asn1_value_t *v = NULL;
         
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_NULL);
+        check_equal(v->type, ASN1_TYPE_NULL);
         
         asn1_free(v);
     }
@@ -211,15 +211,15 @@ spec("asn1_der") {
         uint8_t data[] = {0x30, 0x06, 0x02, 0x01, 0x2A, 0x01, 0x01, 0xFF};
         asn1_value_t *v = NULL;
         
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
-        check_int_eq(v->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(v->value.sequence.count, 2);
+        check_equal(v->type, ASN1_TYPE_SEQUENCE);
+        check_equal(v->value.sequence.count, 2);
 
-        check_int_eq(v->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
-        check_int_eq((int)v->value.sequence.children[0]->value.integer, 42);
+        check_equal(v->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+        check_equal((int)v->value.sequence.children[0]->value.integer, 42);
 
-        check_int_eq(v->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+        check_equal(v->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
         check(v->value.sequence.children[1]->value.boolean);
         
         asn1_free(v);
@@ -236,10 +236,10 @@ spec("asn1_der") {
         asn1_sequence_add_child(outer, inner);
         asn1_sequence_add_child(outer, asn1_create_boolean(1));
         
-        check_size_eq(outer->value.sequence.count, 2);
-        check_int_eq(outer->value.sequence.children[0]->type, ASN1_TYPE_SEQUENCE);
-        check_size_eq(outer->value.sequence.children[0]->value.sequence.count, 1);
-        check_int_eq(outer->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+        check_equal(outer->value.sequence.count, 2);
+        check_equal(outer->value.sequence.children[0]->type, ASN1_TYPE_SEQUENCE);
+        check_equal(outer->value.sequence.children[0]->value.sequence.count, 1);
+        check_equal(outer->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
         
         asn1_free(outer);
     }
@@ -254,11 +254,11 @@ spec("asn1_der") {
         uint8_t data[] = {0x01, 0x02, 0x03};
         asn1_sequence_add_child(seq, asn1_create_octet_string(data, 3));
         
-        check_size_eq(seq->value.sequence.count, 4);
-        check_int_eq(seq->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
-        check_int_eq(seq->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
-        check_int_eq(seq->value.sequence.children[2]->type, ASN1_TYPE_NULL);
-        check_int_eq(seq->value.sequence.children[3]->type, ASN1_TYPE_OCTET_STRING);
+        check_equal(seq->value.sequence.count, 4);
+        check_equal(seq->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+        check_equal(seq->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+        check_equal(seq->value.sequence.children[2]->type, ASN1_TYPE_NULL);
+        check_equal(seq->value.sequence.children[3]->type, ASN1_TYPE_OCTET_STRING);
         
         asn1_free(seq);
     }
@@ -292,7 +292,7 @@ spec("asn1_der") {
         asn1_value_t *oid2 = asn1_create_oid_from_string("1.2.3.4");
         asn1_value_t *oid3 = asn1_create_oid_from_string("1.2.3.5");
         
-        check_int_eq(asn1_compare_oid(&oid1->value.oid, &oid2->value.oid), 0);
+        check_equal(asn1_compare_oid(&oid1->value.oid, &oid2->value.oid), 0);
         check(asn1_compare_oid(&oid1->value.oid, &oid3->value.oid) != 0);
         
         asn1_free(oid1);
@@ -305,7 +305,7 @@ spec("asn1_der") {
         char *str = asn1_oid_to_string(&oid->value.oid);
         
         check_not_null(str);
-        check_str_eq(str, "2.5.4.3");
+        check_equal(str, "2.5.4.3");
         
         free(str);
         asn1_free(oid);

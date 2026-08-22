@@ -18,7 +18,7 @@
 #include "turbo_coro_context.h"
 #include "turbo_coro_socket.h"
 #include "turbo_thread.h"
-#include "turbo_vec.h"
+#include <turbostl/vec.h>
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -668,7 +668,7 @@ extern const coro_transport_ops_t udp_server_ops;
  *
  * @note Safe to call when client->co_wait is NULL (no-op).
  */
-CXX_C_API void coro_client_wake_eof(coro_socket_t *client);
+void coro_client_wake_eof(coro_socket_t *client);
 
 /**
  * @brief Reference counting for client objects.

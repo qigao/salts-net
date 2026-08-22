@@ -8,6 +8,7 @@
 # ============================================================================
 
 add_library(turbo_ice SHARED src/turbo_stun.c src/turbo_ice.c src/turbo_turn.c)
+cmake_config_api(turbo_ice TURBONET_ICE_C_API)
 cmake_config_target(
   turbo_ice
   ALIAS TurboNet::Ice
@@ -23,8 +24,6 @@ target_link_libraries(
   turbo_ice
   PUBLIC TurboNet::CoroNet
   PRIVATE OpenSSL::SSL OpenSSL::Crypto TurboUtils::Core)
-target_compile_definitions(turbo_ice PRIVATE SHARED_CXX)
-
 if(WIN32)
   target_link_libraries(turbo_ice PRIVATE ws2_32 iphlpapi psapi)
 endif()

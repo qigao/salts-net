@@ -106,7 +106,7 @@ set(STATIC_TARGET_NAME ${TARGET_NAME}_static)
 add_library(${STATIC_TARGET_NAME} STATIC ${SOURCE_FILES})
 # Build SHARED library
 add_library(${TARGET_NAME} SHARED ${SOURCE_FILES})
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+cmake_config_api(${TARGET_NAME} CORONET_C_API)
 if(BUILD_BENCHMARKS)
   target_compile_definitions(${STATIC_TARGET_NAME}
                              PRIVATE TURBO_CORONET_INTERNAL_PROFILING=1)
@@ -142,8 +142,8 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   target_link_libraries(
     ${tgt}
-    PUBLIC TurboUtils::Core TurboUtils::Parser Threads::Threads
-    PRIVATE kcp::kcp ${TURBONET_CARES_TARGET} 
+    PUBLIC TurboUtils::Core TurboParser::Parser Threads::Threads
+    PRIVATE TurboUtils::STL kcp::kcp ${TURBONET_CARES_TARGET}
             OpenSSL::SSL OpenSSL::Crypto
              TurboNet::WebSocketParser TurboNet::Crypto reed
   )

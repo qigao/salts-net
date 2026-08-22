@@ -76,6 +76,26 @@ static void drain_platform_completions(coro_context_t *ctx) {
 static int remove_task_from_context(coro_context_t *ctx, coro_task_t *task);
 static int register_task_with_context(coro_context_t *ctx, coro_task_t *task);
 static void destroy_task_now(coro_task_t *task);
+
+#define CORO_TASK_VECTOR_ELEMENT_LIMIT (SIZE_MAX / sizeof(coro_task_t *))
+
+static int coro_status_from_stl(turbo_stl_status status) {
+  switch (status) {
+    case TURBO_STL_OK:
+      return TURBO_OK;
+    case TURBO_STL_OUT_OF_MEMORY:
+      return TURBO_ENOMEM;
+    case TURBO_STL_CAPACITY_EXCEEDED:
+      return TURBO_ERANGE;
+    case TURBO_STL_INVALID_ARGUMENT:
+    case TURBO_STL_EMPTY:
+    case TURBO_STL_NOT_FOUND:
+    case TURBO_STL_TYPE_MISMATCH:
+    case TURBO_STL_TRAIT_MISSING:
+      return TURBO_EINVAL;
+  }
+  return TURBO_EINVAL;
+}
 static void pooled_coro_cleanup_callback(coro_t *co, void *arg);
 static int ensure_post_queue(coro_context_t *ctx);
 static void drain_post_queue(coro_context_t *ctx);
@@ -155,8 +175,9 @@ coro_context_t *coro_context_create_ex(
   ctx->owns_arena = 1;
 
   /* Initialize lazy task list. Reserve the historical initial capacity. */
-  if (turbo_vec_init(&ctx->tasks, sizeof(coro_task_t *)) != TURBO_OK ||
-      turbo_vec_reserve(&ctx->tasks, 8) != TURBO_OK) {
+  if (turbo_vec_init_bytes(&ctx->tasks, sizeof(coro_task_t *), _Alignof(coro_task_t *),
+                           CORO_TASK_VECTOR_ELEMENT_LIMIT) != TURBO_STL_OK ||
+      turbo_vec_reserve(&ctx->tasks, 8) != TURBO_STL_OK) {
     coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
@@ -364,7 +385,7 @@ static void drain_shutdown_callbacks(coro_context_t *ctx) {
       (atomic_load_explicit(&ctx->external_refs, memory_order_acquire) != 0 ||
        context_loop_alive(ctx) || (ctx->scheduler && coro_scheduler_count(ctx->scheduler) > 0) ||
        !post_queue_empty(ctx))) {
-    TLOG_WARN("coro_context_destroy: forced teardown with pending loop work "
+    TLOG_WARNF("coro_context_destroy: forced teardown with pending loop work "
               "(ctx={}, external_refs={}, loop_alive={}, coro_count={}, post_empty={})",
               (void *)ctx, atomic_load_explicit(&ctx->external_refs, memory_order_acquire),
               turbo_loop_alive(ctx->loop),
@@ -419,7 +440,7 @@ void coro_context_destroy(coro_context_t *ctx) {
   /* Destroy pool */
   if (ctx->pool) {
     if (coro_object_pool_active_count(ctx->pool) > 0) {
-      TLOG_WARN(
+      TLOG_WARNF(
           "coro_context_destroy: dropping {} stale pooled coroutines after scheduler teardown",
           coro_object_pool_active_count(ctx->pool));
       coro_object_pool_forget_active(ctx->pool);
@@ -660,19 +681,19 @@ static int remove_task_from_context(coro_context_t *ctx, coro_task_t *task) {
   if (index >= count || !tasks || tasks[index] != task) return TURBO_EINVAL;
 
   moved = tasks[count - 1];
-  if (turbo_vec_swap_remove(&ctx->tasks, index, NULL) != TURBO_OK) return TURBO_EINVAL;
+  if (turbo_vec_swap_remove(&ctx->tasks, index, NULL) != TURBO_STL_OK) return TURBO_EINVAL;
   if (moved != task) moved->context_index = index;
   task->context_index = SIZE_MAX;
   return TURBO_OK;
 }
 
 static int register_task_with_context(coro_context_t *ctx, coro_task_t *task) {
-  int rc;
+  turbo_stl_status status;
 
   if (!ctx || !task) return TURBO_EINVAL;
 
-  rc = turbo_vec_push(&ctx->tasks, &task);
-  if (rc != TURBO_OK) return rc;
+  status = turbo_vec_push(&ctx->tasks, &task);
+  if (status != TURBO_STL_OK) return coro_status_from_stl(status);
   task->context_index = turbo_vec_size(&ctx->tasks) - 1;
   return TURBO_OK;
 }

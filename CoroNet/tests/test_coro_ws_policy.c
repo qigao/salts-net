@@ -258,11 +258,11 @@ static void ws_policy_prepare_tls(ws_policy_state_t *state, char *ca_file,
                                   size_t cert_size, char *key_file,
                                   size_t key_size) {
   if (!state->secure) return;
-  check_int_eq(tls_test_write_ca_file(ca_file, ca_size), 0);
-  check_int_eq(tls_test_write_server_files(cert_file, cert_size,
+  check_equal(tls_test_write_ca_file(ca_file, ca_size), 0);
+  check_equal(tls_test_write_server_files(cert_file, cert_size,
                                            key_file, key_size), 0);
-  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+  check_equal(tls_test_set_ca_file_env(ca_file), 0);
+  check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 }
 
 static void ws_policy_cleanup_tls(ws_policy_state_t *state, const char *ca_file,
@@ -280,7 +280,7 @@ static void ws_policy_start_server(ws_policy_state_t *state,
   coro_ws_server_config_t config = CORO_WS_SERVER_CONFIG_DEFAULT;
   test_socket_t probe = TEST_INVALID_SOCKET;
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state->port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state->port), 0);
   test_close_socket(probe);
   state->ctx = coro_context_create(NULL);
   check_not_null(state->ctx);
@@ -290,8 +290,8 @@ static void ws_policy_start_server(ws_policy_state_t *state,
   config.subprotocol = "mqtt";
   config.max_message_size = WS_POLICY_MAX_MESSAGE_SIZE;
   config.binary_only = 1;
-  check_int_eq(coro_socket_set_ws_server_config(state->server, &config), 0);
-  check_int_eq(coro_socket_listen_ws(state->server, "127.0.0.1", state->port,
+  check_equal(coro_socket_set_ws_server_config(state->server, &config), 0);
+  check_equal(coro_socket_listen_ws(state->server, "127.0.0.1", state->port,
                                      state->secure, handler, state), 0);
 }
 
@@ -320,13 +320,13 @@ static void ws_policy_run_admission_case(int secure, const char *bad_path,
   ws_policy_prepare_tls(&state, ca_file, sizeof(ca_file), cert_file,
                         sizeof(cert_file), key_file, sizeof(key_file));
   ws_policy_start_server(&state, ws_policy_echo_handler);
-  check_int_eq(coro_context_spawn(state.ctx, ws_policy_admission_client, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, ws_policy_admission_client, &state), 0);
   ws_policy_run_until(state.ctx, 8000, ws_policy_admission_done, &state);
 
   check(state.bad_rc != 0);
-  check_int_eq(state.good_rc, 0);
-  check_int_eq(state.handler_rc, 0);
-  check_int_eq(state.handler_hits, 1);
+  check_equal(state.good_rc, 0);
+  check_equal(state.handler_rc, 0);
+  check_equal(state.handler_hits, 1);
 
   ws_policy_stop_server(&state);
   ws_policy_cleanup_tls(&state, ca_file, cert_file, key_file);
@@ -348,14 +348,14 @@ static void ws_policy_run_frame_case(int secure,
   ws_policy_prepare_tls(&state, ca_file, sizeof(ca_file), cert_file,
                         sizeof(cert_file), key_file, sizeof(key_file));
   ws_policy_start_server(&state, ws_policy_rejecting_handler);
-  check_int_eq(coro_context_spawn(state.ctx, ws_policy_frame_client, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, ws_policy_frame_client, &state), 0);
   ws_policy_run_until(state.ctx, 10000, ws_policy_frame_done, &state);
 
   check(state.rejected_handler_done);
   check(state.rejected_handler_rc != 0);
-  check_int_eq(state.good_rc, 0);
-  check_int_eq(state.handler_rc, 0);
-  check_int_eq(state.handler_hits, 2);
+  check_equal(state.good_rc, 0);
+  check_equal(state.handler_rc, 0);
+  check_equal(state.handler_hits, 2);
 
   ws_policy_stop_server(&state);
   ws_policy_cleanup_tls(&state, ca_file, cert_file, key_file);

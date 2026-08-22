@@ -6,6 +6,8 @@
 #ifndef TURBO_CORO_SOCKET_H
 #define TURBO_CORO_SOCKET_H
 
+
+#include "coronet_api.h"
 #include "platform.h"
 #include "turbo_backend.h"
 #include "turbo_buffer.h"
@@ -89,7 +91,7 @@ typedef struct coro_ws_server_config_s {
  * @param type  Socket type (TCP/UDP/Pipe)
  * @return Socket handle or NULL on failure
  */
-CXX_C_API coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type);
+CORONET_C_API coro_socket_t *coro_socket_create(coro_context_t *ctx, coro_socket_type_t type);
 
 /** Convenience creation helpers */
 static inline coro_socket_t *coro_socket_create_tcpv4(coro_context_t *ctx) {
@@ -118,12 +120,12 @@ static inline coro_socket_t *coro_socket_create_vsock(coro_context_t *ctx) {
  * @brief Close and destroy the socket.
  * @param socket  Socket to destroy
  */
-CXX_C_API void coro_socket_destroy(coro_socket_t *socket);
+CORONET_C_API void coro_socket_destroy(coro_socket_t *socket);
 
 /**
  * @brief Bind a socket to a local address.
  */
-CXX_C_API int coro_socket_bind(coro_socket_t *socket, const struct sockaddr *addr);
+CORONET_C_API int coro_socket_bind(coro_socket_t *socket, const struct sockaddr *addr);
 
 /**
  * @brief Bind a VSOCK socket to a local CID and port.
@@ -136,23 +138,23 @@ CXX_C_API int coro_socket_bind(coro_socket_t *socket, const struct sockaddr *add
  *         non-VSOCK socket; TURBO_EPROTONOSUPPORT when VSOCK is not compiled
  *         for the platform; otherwise an allocation error.
  */
-CXX_C_API int coro_socket_bind_vsock(
+CORONET_C_API int coro_socket_bind_vsock(
     coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint);
 
 /**
  * @brief Put a socket into listening mode.
  */
-CXX_C_API int coro_socket_listen(coro_socket_t *socket, int backlog);
+CORONET_C_API int coro_socket_listen(coro_socket_t *socket, int backlog);
 
 /**
  * @brief Accept a new connection on a listening socket.
  */
-CXX_C_API int coro_socket_accept(coro_socket_t *socket, coro_socket_t **accepted_socket);
+CORONET_C_API int coro_socket_accept(coro_socket_t *socket, coro_socket_t **accepted_socket);
 
 /**
  * @brief Enable or disable SO_REUSEPORT for future listener binds on this socket.
  */
-CXX_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
+CORONET_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
 
 /**
  * @brief Configure OS TCP keepalive for TCP/TLS/WS/WSS sockets.
@@ -160,7 +162,7 @@ CXX_C_API void coro_socket_set_reuse_port(coro_socket_t *socket, int enable);
  * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
  * this policy.
  */
-CXX_C_API int coro_socket_set_tcp_keepalive(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_tcp_keepalive(coro_socket_t *socket,
                                             const turbo_tcp_keepalive_config_t *config);
 
 /**
@@ -169,7 +171,7 @@ CXX_C_API int coro_socket_set_tcp_keepalive(coro_socket_t *socket,
  * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
  * this policy.
  */
-CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_linger(coro_socket_t *socket,
                                      const turbo_socket_linger_config_t *config);
 
 /**
@@ -179,7 +181,7 @@ CXX_C_API int coro_socket_set_linger(coro_socket_t *socket,
  * sockets inherit the request. The operating system may adjust the requested
  * value. `bytes` must be in the range 1..INT_MAX.
  */
-CXX_C_API int coro_socket_set_recv_buffer_size(coro_socket_t *socket, size_t bytes);
+CORONET_C_API int coro_socket_set_recv_buffer_size(coro_socket_t *socket, size_t bytes);
 
 /**
  * @brief Configure the OS SO_SNDBUF request for TCP/TLS/WS/WSS/VSOCK sockets.
@@ -188,7 +190,7 @@ CXX_C_API int coro_socket_set_recv_buffer_size(coro_socket_t *socket, size_t byt
  * sockets inherit the request. The operating system may adjust the requested
  * value. `bytes` must be in the range 1..INT_MAX.
  */
-CXX_C_API int coro_socket_set_send_buffer_size(coro_socket_t *socket, size_t bytes);
+CORONET_C_API int coro_socket_set_send_buffer_size(coro_socket_t *socket, size_t bytes);
 
 /**
  * @brief Limit bytes queued in the socket send path. 0 disables the limit.
@@ -196,13 +198,13 @@ CXX_C_API int coro_socket_set_send_buffer_size(coro_socket_t *socket, size_t byt
  * When configured before a managed TCP/TLS/WS listen, accepted sockets inherit
  * this policy.
  */
-CXX_C_API int coro_socket_set_send_hwm(coro_socket_t *socket, size_t bytes);
+CORONET_C_API int coro_socket_set_send_hwm(coro_socket_t *socket, size_t bytes);
 
 /** Configure the authenticated KCP session before bind/connect. */
-CXX_C_API int coro_socket_set_kcp_config(coro_socket_t *socket, const turbo_kcp_config_t *config);
+CORONET_C_API int coro_socket_set_kcp_config(coro_socket_t *socket, const turbo_kcp_config_t *config);
 
 /** Read the pending or active authenticated KCP configuration. */
-CXX_C_API int coro_socket_get_kcp_config(coro_socket_t *socket, turbo_kcp_config_t *config);
+CORONET_C_API int coro_socket_get_kcp_config(coro_socket_t *socket, turbo_kcp_config_t *config);
 
 /**
  * @brief Connect to a remote host:port.
@@ -210,7 +212,7 @@ CXX_C_API int coro_socket_get_kcp_config(coro_socket_t *socket, turbo_kcp_config
  * The transport is determined by the socket type passed to coro_socket_create.
  * For WebSocket, use coro_socket_connect_ws instead.
  */
-CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
+CORONET_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int port);
 
 /**
  * @brief Connect a VSOCK socket to a remote CID and port.
@@ -225,7 +227,7 @@ CXX_C_API int coro_socket_connect(coro_socket_t *socket, const char *host, int p
  *         VSOCK is not compiled for the platform; otherwise a socket, timeout,
  *         cancellation, or allocation error.
  */
-CXX_C_API int coro_socket_connect_vsock(
+CORONET_C_API int coro_socket_connect_vsock(
     coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint);
 
 /**
@@ -239,13 +241,13 @@ CXX_C_API int coro_socket_connect_vsock(
  * @return 0 on success, TURBO_EINVAL for invalid configuration/state, or
  *         TURBO_ENOTSUP for a non-TCP-backed socket.
  */
-CXX_C_API int coro_socket_set_proxy(coro_socket_t *socket, const coro_proxy_config_t *config);
+CORONET_C_API int coro_socket_set_proxy(coro_socket_t *socket, const coro_proxy_config_t *config);
 
 /** Clear a previously configured outbound proxy before connect. */
-CXX_C_API int coro_socket_clear_proxy(coro_socket_t *socket);
+CORONET_C_API int coro_socket_clear_proxy(coro_socket_t *socket);
 
 /** Configure or clear the pre-connect resolved-address policy callback. */
-CXX_C_API int coro_socket_set_connect_policy(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_connect_policy(coro_socket_t *socket,
                                              coro_socket_connect_policy_fn policy, void *user_data);
 
 /**
@@ -260,7 +262,7 @@ CXX_C_API int coro_socket_set_connect_policy(coro_socket_t *socket,
  * @param request_host  Higher-layer host context; NULL falls back to connect_host.
  * @return 0 on success, negative error code on failure.
  */
-CXX_C_API int coro_socket_connect_host_ex(coro_socket_t *socket, const char *connect_host, int port,
+CORONET_C_API int coro_socket_connect_host_ex(coro_socket_t *socket, const char *connect_host, int port,
                                           const char *request_host);
 
 /**
@@ -277,7 +279,7 @@ CXX_C_API int coro_socket_connect_host_ex(coro_socket_t *socket, const char *con
  *         connected stream exists; TURBO_EBUSY while another wait is active;
  *         or another negative TLS/transport error.
  */
-CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostname);
+CORONET_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostname);
 
 /**
  * @brief Configure per-socket TLS client settings for future TLS/WSS connects.
@@ -285,7 +287,7 @@ CXX_C_API int coro_socket_upgrade_tls(coro_socket_t *socket, const char *hostnam
  * Passing NULL clears any custom client config and restores the default
  * process/global TLS behavior.
  */
-CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
                                                 const turbo_tls_client_config_t *config);
 
 /**
@@ -310,7 +312,7 @@ CXX_C_API int coro_socket_set_tls_client_config(coro_socket_t *socket,
  *         (count == 0, NULL list with count > 0, NULL/empty entry, or an entry
  *         longer than 255 bytes); TURBO_ENOMEM when the copy fails.
  */
-CXX_C_API int coro_socket_set_tls_alpn(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_tls_alpn(coro_socket_t *socket,
                                        const char *const *protocols, size_t count);
 
 /**
@@ -338,7 +340,7 @@ CXX_C_API int coro_socket_set_tls_alpn(coro_socket_t *socket,
  * }
  * @endcode
  */
-CXX_C_API int coro_socket_set_tls_server_config(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_tls_server_config(coro_socket_t *socket,
                                                 const turbo_tls_server_config_t *config);
 
 /**
@@ -352,7 +354,7 @@ CXX_C_API int coro_socket_set_tls_server_config(coro_socket_t *socket,
  *         TURBO_EBUSY after connect/listen starts, or TURBO_ERANGE when a
  *         string exceeds the implementation limit.
  */
-CXX_C_API int coro_socket_set_ws_server_config(coro_socket_t *socket,
+CORONET_C_API int coro_socket_set_ws_server_config(coro_socket_t *socket,
                                                const coro_ws_server_config_t *config);
 
 /** RFC 9266 tls-exporter channel binding output size. */
@@ -378,7 +380,7 @@ CXX_C_API int coro_socket_set_ws_server_config(coro_socket_t *socket,
  *         TURBO_ENOENT when no peer certificate exists; or TURBO_EIO on digest
  *         failure.
  */
-CXX_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
+CORONET_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
     const coro_socket_t *socket, char output[CORO_TLS_PEER_CERT_SHA256_CAPACITY]);
 
 /**
@@ -400,7 +402,7 @@ CXX_C_API int coro_socket_tls_get_verified_peer_certificate_sha256(
  *         TURBO_EPERM when a client connection did not verify its peer; or
  *         TURBO_EIO if OpenSSL cannot export the binding.
  */
-CXX_C_API int coro_socket_tls_export_channel_binding(const coro_socket_t *socket,
+CORONET_C_API int coro_socket_tls_export_channel_binding(const coro_socket_t *socket,
                                                      uint8_t output[CORO_TLS_CHANNEL_BINDING_SIZE]);
 
 /**
@@ -418,7 +420,7 @@ CXX_C_API int coro_socket_tls_export_channel_binding(const coro_socket_t *socket
  *         ALPN protocol; or TURBO_ERANGE when the protocol name does not fit
  *         in @p out.
  */
-CXX_C_API int coro_socket_tls_get_negotiated_alpn(const coro_socket_t *socket,
+CORONET_C_API int coro_socket_tls_get_negotiated_alpn(const coro_socket_t *socket,
                                                   char *out, size_t out_cap);
 
 /**
@@ -434,7 +436,7 @@ CXX_C_API int coro_socket_tls_get_negotiated_alpn(const coro_socket_t *socket,
  * @param subprotocol   Optional Sec-WebSocket-Protocol value, or NULL.
  * @return 0 on success, negative error code on failure.
  */
-CXX_C_API int coro_socket_upgrade_ws_ex(coro_socket_t *socket, const char *request_host,
+CORONET_C_API int coro_socket_upgrade_ws_ex(coro_socket_t *socket, const char *request_host,
                                         const char *path, const char *subprotocol);
 
 /**
@@ -442,7 +444,7 @@ CXX_C_API int coro_socket_upgrade_ws_ex(coro_socket_t *socket, const char *reque
  *
  * Accepts native platform endpoints and the unified `pipe://name` form.
  */
-CXX_C_API int coro_socket_connect_pipe(coro_socket_t *socket, const char *path);
+CORONET_C_API int coro_socket_connect_pipe(coro_socket_t *socket, const char *path);
 
 /**
  * @brief Connect a WebSocket.
@@ -452,7 +454,7 @@ CXX_C_API int coro_socket_connect_pipe(coro_socket_t *socket, const char *path);
  * @param path    WebSocket path (e.g. "/chat").
  * @param is_tls  1 for wss://, 0 for ws://.
  */
-CXX_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host, int port,
+CORONET_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host, int port,
                                      const char *path, int is_tls);
 
 /**
@@ -464,7 +466,7 @@ CXX_C_API int coro_socket_connect_ws(coro_socket_t *socket, const char *host, in
  * @param is_tls       1 for wss://, 0 for ws://.
  * @param subprotocol  Optional Sec-WebSocket-Protocol value, or NULL.
  */
-CXX_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host, int port,
+CORONET_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host, int port,
                                         const char *path, int is_tls, const char *subprotocol);
 
 /**
@@ -478,7 +480,7 @@ CXX_C_API int coro_socket_connect_ws_ex(coro_socket_t *socket, const char *host,
  * @param is_tls         1 for wss://, 0 for ws://.
  * @param subprotocol    Optional Sec-WebSocket-Protocol value, or NULL.
  */
-CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *connect_host,
+CORONET_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *connect_host,
                                              int port, const char *request_host, const char *path,
                                              int is_tls, const char *subprotocol);
 
@@ -488,7 +490,7 @@ CXX_C_API int coro_socket_connect_ws_host_ex(coro_socket_t *socket, const char *
  * If compression is enabled via `coro_socket_set_compression_level()`, the
  * payload is sent as a zstd-compressed frame.
  */
-CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);
+CORONET_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t len);
 
 /**
  * @brief Concatenate and send one bounded vector of byte slices.
@@ -504,7 +506,7 @@ CXX_C_API int coro_socket_send(coro_socket_t *socket, const char *data, size_t l
  *         the total size overflows size_t, TURBO_ENOTSUP for a non-TCP socket,
  *         or a transport error.
  */
-CXX_C_API int coro_socket_sendv(coro_socket_t *socket, const turbo_iovec_t *iov, size_t iovcnt);
+CORONET_C_API int coro_socket_sendv(coro_socket_t *socket, const turbo_iovec_t *iov, size_t iovcnt);
 
 /**
  * @brief Send data through the socket using zstd compression.
@@ -514,12 +516,12 @@ CXX_C_API int coro_socket_sendv(coro_socket_t *socket, const turbo_iovec_t *iov,
  * @param len   Payload length
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_socket_send_compressed(coro_socket_t *socket, const char *data, size_t len);
+CORONET_C_API int coro_socket_send_compressed(coro_socket_t *socket, const char *data, size_t len);
 
 /**
  * @brief Send a WebSocket text message.
  */
-CXX_C_API int coro_socket_send_ws_text(coro_socket_t *socket, const char *text, size_t len);
+CORONET_C_API int coro_socket_send_ws_text(coro_socket_t *socket, const char *text, size_t len);
 
 /**
  * @brief Send a buffer previously returned by coro_socket_recv(), transferring ownership.
@@ -528,7 +530,7 @@ CXX_C_API int coro_socket_send_ws_text(coro_socket_t *socket, const char *text, 
  * zero-copy fast path. The caller must not access or free @p data after
  * calling this function.
  */
-CXX_C_API int coro_socket_send_owned_recv(coro_socket_t *socket, char *data, size_t len);
+CORONET_C_API int coro_socket_send_owned_recv(coro_socket_t *socket, char *data, size_t len);
 
 /**
  * @brief Get a buffer for zero-copy send.
@@ -536,7 +538,7 @@ CXX_C_API int coro_socket_send_owned_recv(coro_socket_t *socket, char *data, siz
  * @param min_size  Minimum size required
  * @return Buffer handle or NULL if not supported/failed
  */
-CXX_C_API mem_buffer_t *coro_socket_get_send_buffer(coro_socket_t *socket, size_t min_size);
+CORONET_C_API mem_buffer_t *coro_socket_get_send_buffer(coro_socket_t *socket, size_t min_size);
 
 /**
  * @brief Send a buffer acquired via coro_socket_get_send_buffer.
@@ -545,7 +547,7 @@ CXX_C_API mem_buffer_t *coro_socket_get_send_buffer(coro_socket_t *socket, size_
  * @param len     Length of data in buffer
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_socket_send_buffer(coro_socket_t *socket, mem_buffer_t *buffer, size_t len);
+CORONET_C_API int coro_socket_send_buffer(coro_socket_t *socket, mem_buffer_t *buffer, size_t len);
 
 /**
  * @brief Receive data from the socket.
@@ -553,7 +555,7 @@ CXX_C_API int coro_socket_send_buffer(coro_socket_t *socket, mem_buffer_t *buffe
  * If compression is enabled via `coro_socket_set_compression_level()`, this
  * decodes a complete compressed frame and returns the decompressed payload.
  */
-CXX_C_API int coro_socket_recv(coro_socket_t *socket, char **data, size_t *len);
+CORONET_C_API int coro_socket_recv(coro_socket_t *socket, char **data, size_t *len);
 
 /**
  * @brief Receive one compressed frame and return decompressed payload.
@@ -566,12 +568,12 @@ CXX_C_API int coro_socket_recv(coro_socket_t *socket, char **data, size_t *len);
  * @param len Output payload length
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_socket_recv_compressed(coro_socket_t *socket, char **data, size_t *len);
+CORONET_C_API int coro_socket_recv_compressed(coro_socket_t *socket, char **data, size_t *len);
 
 /**
  * @brief Receive a WebSocket message and report whether it was a text frame.
  */
-CXX_C_API int coro_socket_recv_ws(coro_socket_t *socket, char **data, size_t *len, int *is_text);
+CORONET_C_API int coro_socket_recv_ws(coro_socket_t *socket, char **data, size_t *len, int *is_text);
 
 /**
  * @brief Configure zstd compression behavior.
@@ -587,7 +589,7 @@ CXX_C_API int coro_socket_recv_ws(coro_socket_t *socket, char **data, size_t *le
  *        and disable automatic behavior for send/recv.
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_socket_set_compression_level(coro_socket_t *socket, int level);
+CORONET_C_API int coro_socket_set_compression_level(coro_socket_t *socket, int level);
 
 /**
  * @brief Interrupt the current or next `coro_socket_recv()` wait from any thread.
@@ -605,12 +607,12 @@ CXX_C_API int coro_socket_set_compression_level(coro_socket_t *socket, int level
  * @param status  Status code to report back to the recv call, usually `0`
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_socket_interrupt_wait(coro_socket_t *socket, int status);
+CORONET_C_API int coro_socket_interrupt_wait(coro_socket_t *socket, int status);
 
 /**
  * @brief Free a buffer returned by coro_socket_recv.
  */
-CXX_C_API void coro_socket_free_recv(void *data);
+CORONET_C_API void coro_socket_free_recv(void *data);
 
 /**
  * @brief Set operation timeout.
@@ -619,22 +621,22 @@ CXX_C_API void coro_socket_free_recv(void *data);
  * accepted sockets and bounds TLS/WebSocket server handshakes as well as later
  * socket operations.
  */
-CXX_C_API void coro_socket_set_timeout(coro_socket_t *socket, uint64_t timeout_ms);
+CORONET_C_API void coro_socket_set_timeout(coro_socket_t *socket, uint64_t timeout_ms);
 
 /**
  * @brief Get the coroutine context associated with this socket.
  */
-CXX_C_API coro_context_t *coro_socket_get_context(coro_socket_t *socket);
+CORONET_C_API coro_context_t *coro_socket_get_context(coro_socket_t *socket);
 
 /**
  * @brief Set user data pointer.
  */
-CXX_C_API void coro_socket_set_user_data(coro_socket_t *socket, void *data);
+CORONET_C_API void coro_socket_set_user_data(coro_socket_t *socket, void *data);
 
 /**
  * @brief Get user data pointer.
  */
-CXX_C_API void *coro_socket_get_user_data(coro_socket_t *socket);
+CORONET_C_API void *coro_socket_get_user_data(coro_socket_t *socket);
 
 /**
  * @brief Get the active TCP backend for this socket.
@@ -644,7 +646,7 @@ CXX_C_API void *coro_socket_get_user_data(coro_socket_t *socket);
  * @param socket Socket to query
  * @return Active backend, or AUTO for non-TCP / NULL sockets
  */
-CXX_C_API turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *socket);
+CORONET_C_API turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *socket);
 
 /**
  * @brief Get the active UDP backend for this socket.
@@ -654,19 +656,19 @@ CXX_C_API turbo_tcp_backend_t coro_socket_get_tcp_backend(const coro_socket_t *s
  * @param socket Socket to query
  * @return Active backend, or AUTO for non-UDP / NULL sockets
  */
-CXX_C_API turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *socket);
+CORONET_C_API turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *socket);
 
 /**
  * @brief Get local address of the socket.
  */
-CXX_C_API int coro_socket_get_local_address(coro_socket_t *socket, struct sockaddr_storage *addr);
+CORONET_C_API int coro_socket_get_local_address(coro_socket_t *socket, struct sockaddr_storage *addr);
 
 /**
  * @brief Get the local VSOCK CID and port for a connected or accepted socket.
  * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
  *         non-VSOCK socket; otherwise the backend query error.
  */
-CXX_C_API int coro_socket_get_local_vsock_endpoint(
+CORONET_C_API int coro_socket_get_local_vsock_endpoint(
     coro_socket_t *socket, turbo_vsock_endpoint_t *endpoint);
 
 /** Maximum canonical peer address text, including brackets, port, and trailing NUL. */
@@ -679,14 +681,14 @@ CXX_C_API int coro_socket_get_local_vsock_endpoint(
  * WS, and WSS delegate to the active stream backend. Unsupported transports
  * fail explicitly instead of returning a guessed or cached address.
  */
-CXX_C_API int coro_socket_get_peer_address(coro_socket_t *socket, struct sockaddr_storage *addr);
+CORONET_C_API int coro_socket_get_peer_address(coro_socket_t *socket, struct sockaddr_storage *addr);
 
 /**
  * @brief Get the remote VSOCK CID and port for a connected or accepted socket.
  * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
  *         non-VSOCK socket; otherwise the backend query error.
  */
-CXX_C_API int coro_socket_get_peer_vsock_endpoint(
+CORONET_C_API int coro_socket_get_peer_vsock_endpoint(
     coro_socket_t *socket, turbo_vsock_endpoint_t *endpoint);
 
 /**
@@ -697,19 +699,19 @@ CXX_C_API int coro_socket_get_peer_vsock_endpoint(
  * @return 0 on success; a transport/query error otherwise. Output is cleared
  *         on every failure.
  */
-CXX_C_API int coro_socket_get_peer_address_text(coro_socket_t *socket,
+CORONET_C_API int coro_socket_get_peer_address_text(coro_socket_t *socket,
                                                 char output[CORO_SOCKET_ADDRESS_TEXT_CAPACITY]);
 
 /**
  * @brief Send datagram to specific address (UDP).
  */
-CXX_C_API int coro_socket_sendto(coro_socket_t *socket, const char *data, size_t len,
+CORONET_C_API int coro_socket_sendto(coro_socket_t *socket, const char *data, size_t len,
                                  const struct sockaddr *addr);
 
 /**
  * @brief Receive datagram with source address (UDP).
  */
-CXX_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *len,
+CORONET_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *len,
                                    struct sockaddr_storage *addr);
 
 /**
@@ -718,31 +720,31 @@ CXX_C_API int coro_socket_recvfrom(coro_socket_t *socket, char **data, size_t *l
  * For IPv4, iface is a local address. For IPv6, iface is a decimal interface
  * index. Pass NULL or an empty string to use the default interface.
  */
-CXX_C_API int coro_socket_join_multicast(coro_socket_t *socket, const char *group,
+CORONET_C_API int coro_socket_join_multicast(coro_socket_t *socket, const char *group,
                                          const char *iface);
 
 /**
  * @brief Leave an IPv4 or IPv6 multicast group on a UDP socket or listener.
  */
-CXX_C_API int coro_socket_leave_multicast(coro_socket_t *socket, const char *group,
+CORONET_C_API int coro_socket_leave_multicast(coro_socket_t *socket, const char *group,
                                           const char *iface);
 
 /**
  * @brief Enable or disable multicast loopback on a UDP socket or UDP listener.
  */
-CXX_C_API int coro_socket_set_multicast_loop(coro_socket_t *socket, int on);
+CORONET_C_API int coro_socket_set_multicast_loop(coro_socket_t *socket, int on);
 
 /**
  * @brief Set IPv4 multicast TTL or IPv6 hop limit in [0, 255].
  */
-CXX_C_API int coro_socket_set_multicast_ttl(coro_socket_t *socket, int ttl);
+CORONET_C_API int coro_socket_set_multicast_ttl(coro_socket_t *socket, int ttl);
 
 /**
  * @brief Enable or disable IPv4 UDP broadcast on a UDP socket or listener.
  *
  * IPv6 has no broadcast and returns TURBO_ENOTSUP.
  */
-CXX_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
+CORONET_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
 
 /**
  * @brief Select persistent per-peer admission for a UDP server.
@@ -758,7 +760,7 @@ CXX_C_API int coro_socket_set_broadcast(coro_socket_t *socket, int on);
  * @return 0 on success, TURBO_EINVAL for invalid arguments,
  *         TURBO_ENOTSUP for non-UDP sockets, or TURBO_EBUSY after listen starts.
  */
-CXX_C_API int coro_socket_set_udp_sessionized(coro_socket_t *socket, int enabled);
+CORONET_C_API int coro_socket_set_udp_sessionized(coro_socket_t *socket, int enabled);
 
 /* ── Server Functions ──────────────────────────────────────── */
 
@@ -791,7 +793,7 @@ typedef void (*coro_handler_closed_fn)(void *arg);
  * @return 0 on success, TURBO_EINVAL for a NULL socket or zero limit, or
  *         TURBO_EBUSY after managed listen/admission has started.
  */
-CXX_C_API int coro_socket_set_server_admission_limit(coro_socket_t *socket, size_t limit);
+CORONET_C_API int coro_socket_set_server_admission_limit(coro_socket_t *socket, size_t limit);
 
 /** The pre-TLS admission callback needs more bytes before deciding. */
 #define CORO_SERVER_PRE_TLS_ADMISSION_INCOMPLETE 1
@@ -838,7 +840,7 @@ typedef struct coro_server_pre_tls_admission_config_s {
  * @return 0 on success, TURBO_EINVAL for an invalid configuration, or
  *         TURBO_EBUSY after managed listen/admission has started.
  */
-CXX_C_API int coro_socket_set_server_pre_tls_admission(
+CORONET_C_API int coro_socket_set_server_pre_tls_admission(
     coro_socket_t *socket,
     const coro_server_pre_tls_admission_config_t *config);
 
@@ -848,7 +850,7 @@ CXX_C_API int coro_socket_set_server_pre_tls_admission(
  * The borrowed pointer remains valid only while the managed connection handler
  * is running. Returns NULL when no policy was configured or no context exists.
  */
-CXX_C_API void *coro_socket_get_server_pre_tls_admission_context(
+CORONET_C_API void *coro_socket_get_server_pre_tls_admission_context(
     const coro_socket_t *socket);
 
 /**
@@ -871,7 +873,7 @@ CXX_C_API void *coro_socket_get_server_pre_tls_admission_context(
  * @param arg      User argument passed to handler.
  * @return 0 on success, negative error code on failure.
  */
-CXX_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int port,
+CORONET_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int port,
                                     coro_handler_fn handler, void *arg);
 
 /**
@@ -881,7 +883,7 @@ CXX_C_API int coro_socket_listen_on(coro_socket_t *socket, const char *host, int
  * The close callback runs after the server bridge has destroyed the accepted
  * socket and the transport close completion has been observed.
  */
-CXX_C_API int coro_socket_listen_on_ex(coro_socket_t *socket, const char *host, int port,
+CORONET_C_API int coro_socket_listen_on_ex(coro_socket_t *socket, const char *host, int port,
                                        coro_handler_fn handler, void *arg,
                                        coro_handler_closed_fn handler_closed,
                                        void *handler_closed_arg);
@@ -895,7 +897,7 @@ CXX_C_API int coro_socket_listen_on_ex(coro_socket_t *socket, const char *host, 
  * @return 0 on success; TURBO_EINVAL for NULL arguments; TURBO_ENOTSUP for a
  *         non-VSOCK socket; otherwise a bind, listen, or allocation error.
  */
-CXX_C_API int coro_socket_listen_vsock(
+CORONET_C_API int coro_socket_listen_vsock(
     coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint,
     coro_handler_fn handler, void *arg);
 
@@ -905,7 +907,7 @@ CXX_C_API int coro_socket_listen_vsock(
  * Parameters and errors match coro_socket_listen_vsock(). handler_closed is
  * invoked after each accepted socket finishes closing when it is non-NULL.
  */
-CXX_C_API int coro_socket_listen_vsock_ex(
+CORONET_C_API int coro_socket_listen_vsock_ex(
     coro_socket_t *socket, const turbo_vsock_endpoint_t *endpoint,
     coro_handler_fn handler, void *arg,
     coro_handler_closed_fn handler_closed, void *handler_closed_arg);
@@ -920,13 +922,13 @@ CXX_C_API int coro_socket_listen_vsock_ex(
  * @param handler  Connection handler.
  * @param arg      User argument passed to handler.
  */
-CXX_C_API int coro_socket_listen_ws(coro_socket_t *socket, const char *host, int port, int is_tls,
+CORONET_C_API int coro_socket_listen_ws(coro_socket_t *socket, const char *host, int port, int is_tls,
                                     coro_handler_fn handler, void *arg);
 
 /**
  * @brief Start a WebSocket server with an accepted-socket close completion callback.
  */
-CXX_C_API int coro_socket_listen_ws_ex(coro_socket_t *socket, const char *host, int port,
+CORONET_C_API int coro_socket_listen_ws_ex(coro_socket_t *socket, const char *host, int port,
                                        int is_tls, coro_handler_fn handler, void *arg,
                                        coro_handler_closed_fn handler_closed,
                                        void *handler_closed_arg);
@@ -945,7 +947,7 @@ CXX_C_API int coro_socket_listen_ws_ex(coro_socket_t *socket, const char *host, 
  *
  * @return 0 on success, TURBO_EINVAL for a NULL socket.
  */
-CXX_C_API int coro_socket_server_close_admission(coro_socket_t *socket);
+CORONET_C_API int coro_socket_server_close_admission(coro_socket_t *socket);
 
 /**
  * @brief Stop accepting and cancel all accepted connection tasks.
@@ -957,17 +959,17 @@ CXX_C_API int coro_socket_server_close_admission(coro_socket_t *socket);
  *
  * @return 0 on success, TURBO_EINVAL for a NULL socket.
  */
-CXX_C_API int coro_socket_server_stop(coro_socket_t *socket);
+CORONET_C_API int coro_socket_server_stop(coro_socket_t *socket);
 
 /**
  * @brief Return non-zero after the accept loop and all accepted tasks exit.
  */
-CXX_C_API int coro_socket_server_is_stopped(const coro_socket_t *socket);
+CORONET_C_API int coro_socket_server_is_stopped(const coro_socket_t *socket);
 
 /**
  * @brief Send datagram from server socket (UDP).
  */
-CXX_C_API int coro_socket_server_sendto(coro_socket_t *socket, const char *data, size_t len,
+CORONET_C_API int coro_socket_server_sendto(coro_socket_t *socket, const char *data, size_t len,
                                         const struct sockaddr *addr);
 
 #ifdef __cplusplus

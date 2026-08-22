@@ -6,6 +6,8 @@
 #ifndef TURBO_LSQUIC_H
 #define TURBO_LSQUIC_H
 
+
+#include "coronet_api.h"
 #include <stddef.h>
 
 #include "platform.h"
@@ -48,26 +50,26 @@ typedef struct turbo_lsquic_config_s {
  * lsquic_global_init() or lsquic_global_cleanup() directly while using this
  * adapter.
  */
-CXX_C_API int turbo_lsquic_create(const turbo_lsquic_config_t *config,
+CORONET_C_API int turbo_lsquic_create(const turbo_lsquic_config_t *config,
                                   turbo_lsquic_t **out_adapter);
 
 /**
  * Stop receive callbacks and destroy the engine and datagram.
  * The context passed at creation remains owned by the caller.
  */
-CXX_C_API void turbo_lsquic_destroy(turbo_lsquic_t *adapter);
+CORONET_C_API void turbo_lsquic_destroy(turbo_lsquic_t *adapter);
 
 /** Process connections immediately and reschedule the next advisory tick. */
-CXX_C_API void turbo_lsquic_process(turbo_lsquic_t *adapter);
+CORONET_C_API void turbo_lsquic_process(turbo_lsquic_t *adapter);
 
 /** Retry packets that LSQUIC could not send earlier. */
-CXX_C_API void turbo_lsquic_send_unsent(turbo_lsquic_t *adapter);
+CORONET_C_API void turbo_lsquic_send_unsent(turbo_lsquic_t *adapter);
 
 /** Borrow the underlying engine for LSQUIC connection APIs. */
-CXX_C_API lsquic_engine_t *turbo_lsquic_engine(turbo_lsquic_t *adapter);
+CORONET_C_API lsquic_engine_t *turbo_lsquic_engine(turbo_lsquic_t *adapter);
 
 /** Borrow the underlying CoroNet datagram for transport configuration. */
-CXX_C_API turbo_datagram_t *turbo_lsquic_datagram(turbo_lsquic_t *adapter);
+CORONET_C_API turbo_datagram_t *turbo_lsquic_datagram(turbo_lsquic_t *adapter);
 
 #ifdef __cplusplus
 }

@@ -38,7 +38,7 @@ static void proxy_example_task(coro_t *co, void *arg) {
   coro_context_t *ctx = coro_context_current();
   coro_socket_t *socket = NULL;
   coro_proxy_config_t proxy = CORO_PROXY_CONFIG_DEFAULT;
-  tstr_t request = NULL;
+  tstr request = NULL;
   char *response = NULL;
   size_t response_length = 0U;
 

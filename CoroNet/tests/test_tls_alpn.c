@@ -158,9 +158,9 @@ static void alpn_run_case(const char *const *server_alpn, size_t server_alpn_cou
   state.client_alpn = client_alpn;
   state.client_alpn_count = client_alpn_count;
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
-  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+  check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
 
   state.ctx = coro_context_create(NULL);
@@ -175,30 +175,30 @@ static void alpn_run_case(const char *const *server_alpn, size_t server_alpn_cou
   server_config.key_file = key_file;
   server_config.alpn_protos = server_alpn;
   server_config.alpn_proto_count = server_alpn_count;
-  check_int_eq(coro_socket_set_tls_server_config(state.server, &server_config),
+  check_equal(coro_socket_set_tls_server_config(state.server, &server_config),
                0);
-  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                      alpn_server_handler, &state), 0);
-  check_int_eq(coro_context_spawn(state.ctx, alpn_client_task, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, alpn_client_task, &state), 0);
 
   deadline = turbo_monotonic_ms() + ALPN_TEST_RUN_TIMEOUT_MS;
   while (!alpn_case_done(&state) && turbo_monotonic_ms() < deadline) {
     coro_context_run(state.ctx, TURBO_RUN_ONCE);
   }
 
-  check_int_eq(state.handler_hits, 1);
-  check_int_eq(state.client_rc, 0);
-  check_int_eq(state.handler_rc, 0);
+  check_equal(state.handler_hits, 1);
+  check_equal(state.client_rc, 0);
+  check_equal(state.handler_rc, 0);
   if (expect_negotiated) {
-    check_int_eq(state.client_query_rc, 0);
-    check_int_eq(state.server_query_rc, 0);
-    check_str_eq(state.client_negotiated, expected_proto);
-    check_str_eq(state.server_negotiated, expected_proto);
+    check_equal(state.client_query_rc, 0);
+    check_equal(state.server_query_rc, 0);
+    check_equal(state.client_negotiated, expected_proto);
+    check_equal(state.server_negotiated, expected_proto);
   } else {
-    check_int_eq(state.client_query_rc, TURBO_ENOENT);
-    check_int_eq(state.server_query_rc, TURBO_ENOENT);
-    check_str_eq(state.client_negotiated, "");
-    check_str_eq(state.server_negotiated, "");
+    check_equal(state.client_query_rc, TURBO_ENOENT);
+    check_equal(state.server_query_rc, TURBO_ENOENT);
+    check_equal(state.client_negotiated, "");
+    check_equal(state.server_negotiated, "");
   }
 
   coro_socket_destroy(state.server);
@@ -259,11 +259,11 @@ spec("Coro TLS ALPN") {
     check_not_null(tcp);
     check_not_null(tls);
 
-    check_int_eq(coro_socket_tls_get_negotiated_alpn(NULL, out, sizeof(out)),
+    check_equal(coro_socket_tls_get_negotiated_alpn(NULL, out, sizeof(out)),
                  TURBO_EINVAL);
-    check_int_eq(coro_socket_tls_get_negotiated_alpn(tcp, out, sizeof(out)),
+    check_equal(coro_socket_tls_get_negotiated_alpn(tcp, out, sizeof(out)),
                  TURBO_ENOTSUP);
-    check_int_eq(coro_socket_tls_get_negotiated_alpn(tls, out, sizeof(out)),
+    check_equal(coro_socket_tls_get_negotiated_alpn(tls, out, sizeof(out)),
                  TURBO_ENOTCONN);
 
     coro_socket_destroy(tls);
@@ -290,16 +290,16 @@ spec("Coro TLS ALPN") {
     too_long[sizeof(too_long) - 1] = '\0';
     too_long_list[0] = too_long;
 
-    check_int_eq(coro_socket_set_tls_alpn(NULL, valid, 1), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_tls_alpn(tls, valid, 0), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_tls_alpn(tls, NULL, 1), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_tls_alpn(tls, empty_name, 1), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_tls_alpn(tls, null_entry, 1), TURBO_EINVAL);
-    check_int_eq(coro_socket_set_tls_alpn(tls, too_long_list, 1),
+    check_equal(coro_socket_set_tls_alpn(NULL, valid, 1), TURBO_EINVAL);
+    check_equal(coro_socket_set_tls_alpn(tls, valid, 0), TURBO_EINVAL);
+    check_equal(coro_socket_set_tls_alpn(tls, NULL, 1), TURBO_EINVAL);
+    check_equal(coro_socket_set_tls_alpn(tls, empty_name, 1), TURBO_EINVAL);
+    check_equal(coro_socket_set_tls_alpn(tls, null_entry, 1), TURBO_EINVAL);
+    check_equal(coro_socket_set_tls_alpn(tls, too_long_list, 1),
                  TURBO_EINVAL);
-    check_int_eq(coro_socket_set_tls_alpn(tls, valid, 1), 0);
+    check_equal(coro_socket_set_tls_alpn(tls, valid, 1), 0);
 
-    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+    check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                              key_file, sizeof(key_file)), 0);
     memset(&server_config, 0, sizeof(server_config));
     server_config.size = sizeof(server_config);
@@ -307,7 +307,7 @@ spec("Coro TLS ALPN") {
     server_config.key_file = key_file;
     server_config.alpn_protos = NULL;
     server_config.alpn_proto_count = 1;
-    check_int_eq(coro_socket_set_tls_server_config(tls, &server_config),
+    check_equal(coro_socket_set_tls_server_config(tls, &server_config),
                  TURBO_EINVAL);
 
     coro_socket_destroy(tls);

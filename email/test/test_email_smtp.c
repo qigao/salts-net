@@ -70,8 +70,8 @@ spec("email_smtp") {
       check_not_null(ctx);
       client = smtp_client_create(ctx, &config);
       check_not_null(client);
-      check_int_eq(smtp_interrupt(NULL, TURBO_ESHUTDOWN), TURBO_EINVAL);
-      check_int_eq(smtp_interrupt(client, TURBO_ESHUTDOWN), TURBO_ENOTCONN);
+      check_equal(smtp_interrupt(NULL, TURBO_ESHUTDOWN), TURBO_EINVAL);
+      check_equal(smtp_interrupt(client, TURBO_ESHUTDOWN), TURBO_ENOTCONN);
       smtp_client_free(client);
       coro_context_destroy(ctx);
     }

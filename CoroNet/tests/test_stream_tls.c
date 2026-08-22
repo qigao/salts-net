@@ -288,9 +288,9 @@ spec("Stream TLS Client") {
     server.send_response = 1;
     turbo_stream_tls_reset_client_session_cache();
 
-    check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
+    check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
 
     ctx = coro_context_create(NULL);
     check(ctx != NULL);
@@ -301,7 +301,7 @@ spec("Stream TLS Client") {
     memset(&tls_config, 0, sizeof(tls_config));
     tls_config.ca_file = ca_file;
     tls_config.verify_peer = 1;
-    check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+    check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
 
     extern void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname);
     turbo_stream_tls_set_sni(s, "localhost");
@@ -316,18 +316,18 @@ spec("Stream TLS Client") {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_tls_connect, on_tls_close), 0);
+    check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_tls_connect, on_tls_close), 0);
 
     run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
-    check_int_eq(s_tls_connected, 0);
+    check_equal(s_tls_connected, 0);
 
-    check_int_eq(turbo_stream_recv_start(s, on_tls_recv), 0);
-    check_int_eq(turbo_stream_send(s, req, strlen(req)), 0);
-    check_int_eq(turbo_stream_flush(s), 0);
+    check_equal(turbo_stream_recv_start(s, on_tls_recv), 0);
+    check_equal(turbo_stream_send(s, req, strlen(req)), 0);
+    check_equal(turbo_stream_flush(s), 0);
 
     run_ctx_until_body(ctx, "\r\n\r\nhello", 3000);
 
-    check_int_eq(s_tls_connected, 0);
+    check_equal(s_tls_connected, 0);
     check(s_tls_rx_len > 0);
     check(strstr(s_tls_rx_buf, "HTTP/1.1 200 OK") != NULL);
     check(strstr(s_tls_rx_buf, "\r\n\r\nhello") != NULL);
@@ -337,9 +337,9 @@ spec("Stream TLS Client") {
 
     run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
 
-    check_int_eq(turbo_thread_join(&server.thread), 0);
+    check_equal(turbo_thread_join(&server.thread), 0);
 
-    check_int_eq(server.status, 0);
+    check_equal(server.status, 0);
     check(server.saw_request == 1);
 
     run_ctx_until_idle(ctx, 1000);
@@ -368,9 +368,9 @@ spec("Stream TLS Client") {
       server.hold_after_handshake_ms = 3000;
       turbo_stream_tls_reset_client_session_cache();
 
-      check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-      check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-      check_int_eq(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
+      check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+      check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+      check_equal(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
 
       ctx = coro_context_create(NULL);
       check_not_null(ctx);
@@ -381,7 +381,7 @@ spec("Stream TLS Client") {
       memset(&tls_config, 0, sizeof(tls_config));
       tls_config.ca_file = ca_file;
       tls_config.verify_peer = 1;
-      check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+      check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
       turbo_stream_tls_set_sni(s, "localhost");
 
       s_tls_connected = -1;
@@ -394,13 +394,13 @@ spec("Stream TLS Client") {
       addr.sin_port = htons(port);
       addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-      check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+      check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
                                              on_tls_connect, on_tls_close), 0);
       run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
-      check_int_eq(s_tls_connected, 0);
+      check_equal(s_tls_connected, 0);
 
-      check_int_eq(tls_test_wait_for_server_handshake(&server), 1);
-      check_int_eq(turbo_stream_recv_start(s, on_tls_recv), 0);
+      check_equal(tls_test_wait_for_server_handshake(&server), 1);
+      check_equal(turbo_stream_recv_start(s, on_tls_recv), 0);
       tls_test_wait_ms(50);
       turbo_stream_close(s);
       turbo_stream_destroy(s);
@@ -408,8 +408,8 @@ spec("Stream TLS Client") {
                             memory_order_release);
 
       run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
-      check_int_eq(turbo_thread_join(&server.thread), 0);
-      check_int_eq(server.status, 0);
+      check_equal(turbo_thread_join(&server.thread), 0);
+      check_equal(server.status, 0);
 
       run_ctx_until_idle(ctx, 1000);
 
@@ -441,9 +441,9 @@ spec("Stream TLS Client") {
       server.hold_after_handshake_ms = 3000;
       turbo_stream_tls_reset_client_session_cache();
 
-      check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-      check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-      check_int_eq(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
+      check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+      check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+      check_equal(turbo_thread_create(&server.thread, tls_test_server_main, &server), 0);
 
       ctx = coro_context_create(NULL);
       check_not_null(ctx);
@@ -454,7 +454,7 @@ spec("Stream TLS Client") {
       memset(&tls_config, 0, sizeof(tls_config));
       tls_config.ca_file = ca_file;
       tls_config.verify_peer = 1;
-      check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+      check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
       turbo_stream_tls_set_sni(s, "localhost");
 
       s_tls_connected = -1;
@@ -467,14 +467,14 @@ spec("Stream TLS Client") {
       addr.sin_port = htons(port);
       addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-      check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+      check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
                                              on_tls_connect, on_tls_close), 0);
       run_ctx_until_not(ctx, &s_tls_connected, -1, 3000);
-      check_int_eq(s_tls_connected, 0);
+      check_equal(s_tls_connected, 0);
 
-      check_int_eq(tls_test_wait_for_server_handshake(&server), 1);
+      check_equal(tls_test_wait_for_server_handshake(&server), 1);
       for (j = 0; j < TLS_SEND_BURST; ++j) {
-        check_int_eq(turbo_stream_send(s, s_tls_send_payload, sizeof(s_tls_send_payload)), 0);
+        check_equal(turbo_stream_send(s, s_tls_send_payload, sizeof(s_tls_send_payload)), 0);
       }
 
       turbo_stream_close(s);
@@ -483,8 +483,8 @@ spec("Stream TLS Client") {
                             memory_order_release);
 
       run_ctx_until_not(ctx, &s_tls_closed, 0, 1000);
-      check_int_eq(turbo_thread_join(&server.thread), 0);
-      check_int_eq(server.status, 0);
+      check_equal(turbo_thread_join(&server.thread), 0);
+      check_equal(server.status, 0);
 
       run_ctx_until_idle(ctx, 1000);
 

@@ -29,10 +29,10 @@ spec("mime_rfc2231") {
 
       int ret = mime_parse_rfc2231_value(value, strlen(value), &param);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(memcmp(param.charset, "utf-8", 5) == 0);
-      check_int_eq(param.charset_len, 5);
-      check_int_eq(param.language_len, 0);
+      check_equal(param.charset_len, 5);
+      check_equal(param.language_len, 0);
       check(memcmp(param.value, "%E6%B5%8B%E8%AF%95.txt", 22) == 0);
     }
 
@@ -42,10 +42,10 @@ spec("mime_rfc2231") {
 
       int ret = mime_parse_rfc2231_value(value, strlen(value), &param);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(memcmp(param.charset, "iso-8859-1", 10) == 0);
       check(memcmp(param.language, "en", 2) == 0);
-      check_int_eq(param.language_len, 2);
+      check_equal(param.language_len, 2);
     }
   }
 
@@ -58,7 +58,7 @@ spec("mime_rfc2231") {
       char *decoded = mime_decode_rfc2231(&pool_storage, value, strlen(value));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "测试.txt");
+      check_equal(decoded, "测试.txt");
 
       mem_destroy(&pool_storage);
     }
@@ -71,7 +71,7 @@ spec("mime_rfc2231") {
       char *decoded = mime_decode_rfc2231(&pool_storage, value, strlen(value));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "test file.txt");
+      check_equal(decoded, "test file.txt");
 
       mem_destroy(&pool_storage);
     }
@@ -84,7 +84,7 @@ spec("mime_rfc2231") {
       char *decoded = mime_decode_rfc2231(&pool_storage, value, strlen(value));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "plain.txt");
+      check_equal(decoded, "plain.txt");
 
       mem_destroy(&pool_storage);
     }
@@ -96,18 +96,18 @@ spec("mime_rfc2231") {
       size_t len;
 
       len = mime_rfc2231_base_name("filename*", 9, output, sizeof(output));
-      check_int_eq(len, 8);
-      check_str_eq(output, "filename");
+      check_equal(len, 8);
+      check_equal(output, "filename");
 
       len = mime_rfc2231_base_name("filename*0*", 11, output, sizeof(output));
-      check_int_eq(len, 8);
-      check_str_eq(output, "filename");
+      check_equal(len, 8);
+      check_equal(output, "filename");
     }
 
     it("should get continuation index") {
-      check_int_eq(mime_rfc2231_continuation_index("filename*0*", 11), 0);
-      check_int_eq(mime_rfc2231_continuation_index("filename*1*", 11), 1);
-      check_int_eq(mime_rfc2231_continuation_index("filename*", 9), -1);
+      check_equal(mime_rfc2231_continuation_index("filename*0*", 11), 0);
+      check_equal(mime_rfc2231_continuation_index("filename*1*", 11), 1);
+      check_equal(mime_rfc2231_continuation_index("filename*", 9), -1);
     }
   }
 
@@ -120,7 +120,7 @@ spec("mime_rfc2231") {
       char *filename = mime_get_filename_rfc2231(&pool_storage, header, strlen(header));
 
       check(filename != NULL);
-      check_str_eq(filename, "测试.txt");
+      check_equal(filename, "测试.txt");
 
       mem_destroy(&pool_storage);
     }
@@ -133,7 +133,7 @@ spec("mime_rfc2231") {
       char *filename = mime_get_filename_rfc2231(&pool_storage, header, strlen(header));
 
       check(filename != NULL);
-      check_str_eq(filename, "test.txt");
+      check_equal(filename, "test.txt");
 
       mem_destroy(&pool_storage);
     }
@@ -147,7 +147,7 @@ spec("mime_rfc2231") {
       char *filename = mime_get_filename_rfc2231(&pool_storage, header, strlen(header));
 
       check(filename != NULL);
-      check_str_eq(filename, "中文文件.pdf");
+      check_equal(filename, "中文文件.pdf");
 
       mem_destroy(&pool_storage);
     }
@@ -164,7 +164,7 @@ spec("mime_rfc2231") {
       char *filename = mime_get_filename_rfc2231(&pool_storage, header, strlen(header));
 
       check(filename != NULL);
-      check_str_eq(filename, "照片.jpg");
+      check_equal(filename, "照片.jpg");
 
       mem_destroy(&pool_storage);
     }

@@ -573,7 +573,7 @@ static int stream_iocp_submit_send(turbo_stream_t *s) {
   if (WSASend(st->socket, &st->send_wsabuf, 1, NULL, 0, &op->overlapped, NULL) == SOCKET_ERROR) {
     int err = WSAGetLastError();
     if (err != WSA_IO_PENDING) {
-      TLOG_WARN("iocp_send_submit: failed stream={:p} socket={} len={} err={}",
+      TLOG_WARNF("iocp_send_submit: failed stream={:p} socket={} len={} err={}",
                 (void *)s,
                 (unsigned long long)st->socket,
                 (unsigned long)st->send_wsabuf.len,
@@ -1067,7 +1067,7 @@ static int iocp_listen(turbo_stream_listener_t *l, int backlog) {
   while (posted < st->accept_depth) {
     int rc = stream_iocp_submit_accept(l);
     if (rc != 0) {
-      TLOG_ERROR("iocp listener startup failed: unable to post accept {:d}", rc);
+      TLOG_ERRORF("iocp listener startup failed: unable to post accept {:d}", rc);
       return rc;
     }
     posted++;

@@ -12,22 +12,22 @@ spec("mime_utils") {
   describe("encoding detection") {
     it("should parse base64 encoding") {
       mime_encoding_t enc = mime_parse_encoding("base64", 6);
-      check_int_eq(enc, MIME_ENCODING_BASE64);
+      check_equal(enc, MIME_ENCODING_BASE64);
     }
 
     it("should parse quoted-printable encoding") {
       mime_encoding_t enc = mime_parse_encoding("quoted-printable", 16);
-      check_int_eq(enc, MIME_ENCODING_QUOTED_PRINTABLE);
+      check_equal(enc, MIME_ENCODING_QUOTED_PRINTABLE);
     }
 
     it("should parse 7bit encoding") {
       mime_encoding_t enc = mime_parse_encoding("7bit", 4);
-      check_int_eq(enc, MIME_ENCODING_7BIT);
+      check_equal(enc, MIME_ENCODING_7BIT);
     }
 
     it("should be case insensitive") {
       mime_encoding_t enc = mime_parse_encoding("BASE64", 6);
-      check_int_eq(enc, MIME_ENCODING_BASE64);
+      check_equal(enc, MIME_ENCODING_BASE64);
     }
   }
 
@@ -43,9 +43,9 @@ spec("mime_utils") {
       int result = mime_decode_quoted_printable(&pool_storage, input, strlen(input),
                                                   &output, &output_len);
 
-      check_int_eq(result, 0);
-      check_str_eq(output, "Hello World!");
-      check_int_eq(output_len, 12);
+      check_equal(result, 0);
+      check_equal(output, "Hello World!");
+      check_equal(output_len, 12);
 
       mem_destroy(&pool_storage);
     }
@@ -61,8 +61,8 @@ spec("mime_utils") {
       int result = mime_decode_quoted_printable(&pool_storage, input, strlen(input),
                                                   &output, &output_len);
 
-      check_int_eq(result, 0);
-      check_str_eq(output, "LongLine");
+      check_equal(result, 0);
+      check_equal(output, "LongLine");
 
       mem_destroy(&pool_storage);
     }
@@ -75,11 +75,11 @@ spec("mime_utils") {
 
       int ret = mime_parse_content_type(ct, strlen(ct), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(memcmp(result.type, "text", 4) == 0);
-      check_int_eq(result.type_len, 4);
+      check_equal(result.type_len, 4);
       check(memcmp(result.subtype, "plain", 5) == 0);
-      check_int_eq(result.subtype_len, 5);
+      check_equal(result.subtype_len, 5);
     }
 
     it("should parse content type with charset") {
@@ -88,12 +88,12 @@ spec("mime_utils") {
 
       int ret = mime_parse_content_type(ct, strlen(ct), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(memcmp(result.type, "text", 4) == 0);
       check(memcmp(result.subtype, "html", 4) == 0);
       check(result.charset != NULL);
       check(memcmp(result.charset, "utf-8", 5) == 0);
-      check_int_eq(result.charset_len, 5);
+      check_equal(result.charset_len, 5);
     }
 
     it("should parse multipart with boundary") {
@@ -102,12 +102,12 @@ spec("mime_utils") {
 
       int ret = mime_parse_content_type(ct, strlen(ct), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(memcmp(result.type, "multipart", 9) == 0);
       check(memcmp(result.subtype, "mixed", 5) == 0);
       check(result.boundary != NULL);
       check(memcmp(result.boundary, "----Boundary123", 15) == 0);
-      check_int_eq(result.boundary_len, 15);
+      check_equal(result.boundary_len, 15);
     }
   }
 
@@ -123,8 +123,8 @@ spec("mime_utils") {
       int result = mime_decode_body(&pool_storage, input, strlen(input),
                                      MIME_ENCODING_7BIT, &output, &output_len);
 
-      check_int_eq(result, 0);
-      check_str_eq(output, "Plain text");
+      check_equal(result, 0);
+      check_equal(output, "Plain text");
 
       mem_destroy(&pool_storage);
     }
@@ -141,8 +141,8 @@ spec("mime_utils") {
                                      MIME_ENCODING_QUOTED_PRINTABLE,
                                      &output, &output_len);
 
-      check_int_eq(result, 0);
-      check_str_eq(output, "Test Message");
+      check_equal(result, 0);
+      check_equal(output, "Test Message");
 
       mem_destroy(&pool_storage);
     }

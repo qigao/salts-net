@@ -16,7 +16,7 @@ Standalone build:
 ```sh
 cd ice
 cmake -S . -B build-standalone \
-  -DCMAKE_PREFIX_PATH="/opt/turbonet;/opt/vcpkg/packages/libuv_x64-linux;/opt/vcpkg/packages/llhttp_x64-linux;/opt/vcpkg/packages/kcp_x64-linux;/opt/vcpkg/packages/quickjs-ng_x64-linux;/opt/vcpkg/packages/c-ares_x64-linux;/opt/vcpkg/packages/cjson_x64-linux;/opt/vcpkg/packages/aklomp-base64_x64-linux;/opt/vcpkg/packages/stb_x64-linux;/opt/vcpkg/packages/zstd_x64-linux;/opt/vcpkg/packages/openssl_x64-linux" \
+  -DCMAKE_PREFIX_PATH="/opt/turbonet;/opt/vcpkg/packages/libuv_x64-linux;/opt/vcpkg/packages/kcp_x64-linux;/opt/vcpkg/packages/quickjs-ng_x64-linux;/opt/vcpkg/packages/c-ares_x64-linux;/opt/vcpkg/packages/cjson_x64-linux;/opt/vcpkg/packages/aklomp-base64_x64-linux;/opt/vcpkg/packages/stb_x64-linux;/opt/vcpkg/packages/zstd_x64-linux;/opt/vcpkg/packages/openssl_x64-linux" \
   -DTurboNet_DIR=/opt/turbonet/lib/cmake/TurboNet
 cmake --build build-standalone --parallel --target test_stun stun_discovery stun_service
 ```

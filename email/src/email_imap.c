@@ -41,7 +41,7 @@ static int imap_read_line(imap_client_t *client) {
       if (client->read_buffer[i] == '\n') {
         size_t line_len = i + 1;
         if (line_len >= sizeof(client->line_buffer)) {
-          fmt(client->error_msg, sizeof(client->error_msg), "IMAP response line too large");
+          fmt_text(client->error_msg, sizeof(client->error_msg), "IMAP response line too large");
           return -1;
         }
 
@@ -66,14 +66,14 @@ static int imap_read_line(imap_client_t *client) {
         if (data) {
           coro_socket_free_recv(data);
         }
-        fmt(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP response");
+        fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP response");
         return -1;
       }
 
       free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
       if (len > free_space) {
         coro_socket_free_recv(data);
-        fmt(client->error_msg, sizeof(client->error_msg), "IMAP response buffer overflow");
+        fmt_text(client->error_msg, sizeof(client->error_msg), "IMAP response buffer overflow");
         return -1;
       }
 
@@ -111,7 +111,7 @@ static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
         if (data) {
           coro_socket_free_recv(data);
         }
-        fmt(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP literal");
+        fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP literal");
         return -1;
       }
 
@@ -122,7 +122,7 @@ static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
         total += remaining;
         if (extra > sizeof(client->read_buffer) - 1) {
           coro_socket_free_recv(data);
-          fmt(client->error_msg, sizeof(client->error_msg), "IMAP literal overflow");
+          fmt_text(client->error_msg, sizeof(client->error_msg), "IMAP literal overflow");
           return -1;
         }
         memcpy(client->read_buffer, data + remaining, extra);
@@ -144,7 +144,7 @@ static int imap_read_response(imap_client_t *client, const char *expected_tag) {
 
   // Parse response: "TAG OK/NO/BAD ..." or "* UNTAGGED ..."
   if (strlen(client->line_buffer) < 3) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Invalid IMAP response");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid IMAP response");
     return -1;
   }
 
@@ -248,7 +248,7 @@ int imap_connect(imap_client_t *client) {
   socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
   client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
   if (!client->socket) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
   }
 
@@ -275,7 +275,7 @@ int imap_connect(imap_client_t *client) {
     }
 
     if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      fmt(client->error_msg, sizeof(client->error_msg), "Failed to upgrade IMAP connection to TLS");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to upgrade IMAP connection to TLS");
       imap_disconnect(client);
       return -1;
     }
@@ -519,7 +519,7 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
   // Parse literal size: BODY[] {1234}
   char *literal_start = strstr(client->line_buffer, "{");
   if (!literal_start) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
     return NULL;
   }
 
@@ -551,7 +551,7 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
 
   if (!msg) {
     mem_destroy(&pool);
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to parse message");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to parse message");
     return NULL;
   }
 
@@ -589,7 +589,7 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
   // Parse literal size
   char *literal_start = strstr(client->line_buffer, "{");
   if (!literal_start) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
     return NULL;
   }
 
@@ -621,7 +621,7 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
 
   if (!msg) {
     mem_destroy(&pool);
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to parse message");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to parse message");
     return NULL;
   }
 

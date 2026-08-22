@@ -396,7 +396,7 @@ static char *fold_header_value(mem_pool_t *pool, const char *value,
 
 /* Append a formatted address to *result, folding at ", " boundaries.
  * field_len: byte length of "Field: " prefix (used to track column position). */
-static void append_address_list(tstr_t *result, email_message_t *msg,
+static void append_address_list(tstr *result, email_message_t *msg,
                                 mime_address_t *addr, size_t field_len) {
   /* col tracks characters on the current line since (and including) "Field: " */
   size_t col = field_len;
@@ -404,14 +404,14 @@ static void append_address_list(tstr_t *result, email_message_t *msg,
 
   while (addr) {
     /* Build address token */
-    tstr_t tok = tstr_new();
+    tstr tok = tstr_new();
     if (addr->display_name && addr->display_name[0] != '\0') {
       char *enc = mime_encode_header_if_needed(
           msg->pool, addr->display_name, strlen(addr->display_name));
       if (enc && strncmp(enc, "=?", 2) == 0) {
         tok = tstr_append_format(tok, "{} <{}>", enc, addr->email);
       } else {
-        tstr_t escaped = tstr_new();
+        tstr escaped = tstr_new();
         size_t dn_len = strlen(addr->display_name);
         for (size_t i = 0; i < dn_len; i++) {
           char c = addr->display_name[i];
@@ -465,10 +465,10 @@ static char *format_date_rfc2822(void) {
   return buf;
 }
 
-tstr_t email_message_to_string(email_message_t *msg) {
+tstr email_message_to_string(email_message_t *msg) {
   if (!msg || !msg->from) return NULL;
 
-  tstr_t result = tstr_new();
+  tstr result = tstr_new();
 
   // Generate Message-ID if not set
   if (!msg->message_id && msg->from && msg->from->domain) {

@@ -19,6 +19,8 @@
 #ifndef TURBO_ICE_H
 #define TURBO_ICE_H
 
+
+#include "ice_api.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <platform.h>
@@ -71,7 +73,7 @@ typedef enum {
 /**
  * @brief Convert ice_candidate_type_t to string.
  */
-CXX_C_API const char *ice_candidate_type_name(ice_candidate_type_t type);
+TURBONET_ICE_C_API const char *ice_candidate_type_name(ice_candidate_type_t type);
 
 /**
  * ICE candidate transport protocol
@@ -114,7 +116,7 @@ typedef enum {
 /**
  * @brief Convert ice_state_t to string.
  */
-CXX_C_API const char *ice_state_name(ice_state_t state);
+TURBONET_ICE_C_API const char *ice_state_name(ice_state_t state);
 
 /**
  * ICE gathering state
@@ -128,7 +130,7 @@ typedef enum {
 /**
  * @brief Convert ice_gathering_state_t to string.
  */
-CXX_C_API const char *ice_gathering_state_name(ice_gathering_state_t state);
+TURBONET_ICE_C_API const char *ice_gathering_state_name(ice_gathering_state_t state);
 
 /**
  * ICE candidate pair state
@@ -245,7 +247,7 @@ typedef struct {
  * @param is_controlling 1 = controlling, 0 = controlled
  * @return               0 on success, negative on error
  */
-CXX_C_API int ice_agent_set_role(turbo_ice_agent_t *agent, int is_controlling);
+TURBONET_ICE_C_API int ice_agent_set_role(turbo_ice_agent_t *agent, int is_controlling);
 
 /* ============================================================================
  * Callbacks
@@ -326,14 +328,14 @@ typedef struct {
  * @param ctx    Coroutine context (must outlive the agent)
  * @param config Agent configuration
  */
-CXX_C_API turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *config);
+TURBONET_ICE_C_API turbo_ice_agent_t *ice_agent_create(coro_context_t *ctx, const ice_config_t *config);
 
 /**
  * Destroy ICE agent
  *
  * Safe for NULL and for an agent that was never started or was already closed.
  */
-CXX_C_API void ice_agent_destroy(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API void ice_agent_destroy(turbo_ice_agent_t *agent);
 
 /**
  * Set callbacks
@@ -341,13 +343,13 @@ CXX_C_API void ice_agent_destroy(turbo_ice_agent_t *agent);
  * This remains valid after close so callback-owned context can be detached
  * before destroy.
  */
-CXX_C_API void ice_agent_set_callbacks(turbo_ice_agent_t *agent, const ice_callbacks_t *callbacks);
+TURBONET_ICE_C_API void ice_agent_set_callbacks(turbo_ice_agent_t *agent, const ice_callbacks_t *callbacks);
 
 /**
  * Get local credentials (ufrag/pwd)
  * These must be sent to remote peer via signaling
  */
-CXX_C_API void ice_agent_get_local_credentials(
+TURBONET_ICE_C_API void ice_agent_get_local_credentials(
     turbo_ice_agent_t *agent,
     char *ufrag,
     size_t ufrag_len,
@@ -358,7 +360,7 @@ CXX_C_API void ice_agent_get_local_credentials(
 /**
  * Set remote credentials (received from remote peer via signaling)
  */
-CXX_C_API int ice_agent_set_remote_credentials(
+TURBONET_ICE_C_API int ice_agent_set_remote_credentials(
     turbo_ice_agent_t *agent,
     const char *ufrag,
     const char *pwd
@@ -367,7 +369,7 @@ CXX_C_API int ice_agent_set_remote_credentials(
 /**
  * Return initialized version-1 restart options.
  */
-CXX_C_API ice_restart_options_t ice_restart_options_default(void);
+TURBONET_ICE_C_API ice_restart_options_t ice_restart_options_default(void);
 
 /**
  * Start a new ICE generation while reusing gathered local candidates.
@@ -381,7 +383,7 @@ CXX_C_API ice_restart_options_t ice_restart_options_default(void);
  *         ICE_AGENT_ERROR_INVALID_OPTIONS for an unsupported options layout;
  *         ICE_AGENT_ERROR_BUSY while gathering/checks are active.
  */
-CXX_C_API int ice_agent_restart(
+TURBONET_ICE_C_API int ice_agent_restart(
     turbo_ice_agent_t *agent,
     const ice_restart_options_t *options
 );
@@ -389,7 +391,7 @@ CXX_C_API int ice_agent_restart(
 /**
  * Start gathering local candidates
  */
-CXX_C_API int ice_agent_gather_candidates(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API int ice_agent_gather_candidates(turbo_ice_agent_t *agent);
 
 /**
  * Add remote candidate (received from remote peer via signaling)
@@ -397,7 +399,7 @@ CXX_C_API int ice_agent_gather_candidates(turbo_ice_agent_t *agent);
  * @param candidate_str SDP-format candidate string
  *        e.g., "candidate:1 1 UDP 2130706431 192.168.1.1 54321 typ host"
  */
-CXX_C_API int ice_agent_add_remote_candidate(
+TURBONET_ICE_C_API int ice_agent_add_remote_candidate(
     turbo_ice_agent_t *agent,
     const char *candidate_str
 );
@@ -405,13 +407,13 @@ CXX_C_API int ice_agent_add_remote_candidate(
 /**
  * Signal end of remote candidates
  */
-CXX_C_API void ice_agent_end_of_candidates(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API void ice_agent_end_of_candidates(turbo_ice_agent_t *agent);
 
 /**
  * Start connectivity checks
  * Called after gathering is complete and remote candidates are added
  */
-CXX_C_API int ice_agent_start_checks(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API int ice_agent_start_checks(turbo_ice_agent_t *agent);
 
 /**
  * Service receive I/O for the selected candidate pair once.
@@ -420,14 +422,14 @@ CXX_C_API int ice_agent_start_checks(turbo_ice_agent_t *agent);
  * call this after the agent reaches CONNECTED/COMPLETED so application data
  * on the selected pair continues to flow.
  */
-CXX_C_API void ice_agent_poll_selected_pair(turbo_ice_agent_t *agent, uint64_t timeout_ms);
+TURBONET_ICE_C_API void ice_agent_poll_selected_pair(turbo_ice_agent_t *agent, uint64_t timeout_ms);
 
 /**
  * Send data via selected candidate pair
  *
  * @return 0 on success, negative on error
  */
-CXX_C_API int ice_agent_send(
+TURBONET_ICE_C_API int ice_agent_send(
     turbo_ice_agent_t *agent,
     const void *data,
     size_t len
@@ -436,12 +438,12 @@ CXX_C_API int ice_agent_send(
 /**
  * Get current state
  */
-CXX_C_API ice_state_t ice_agent_get_state(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API ice_state_t ice_agent_get_state(turbo_ice_agent_t *agent);
 
 /**
  * Get internal context
  */
-CXX_C_API coro_context_t *ice_agent_get_context(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API coro_context_t *ice_agent_get_context(turbo_ice_agent_t *agent);
 
 
 /**
@@ -449,12 +451,12 @@ CXX_C_API coro_context_t *ice_agent_get_context(turbo_ice_agent_t *agent);
  */
 
 
-CXX_C_API ice_gathering_state_t ice_agent_get_gathering_state(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API ice_gathering_state_t ice_agent_get_gathering_state(turbo_ice_agent_t *agent);
 
 /**
  * Get selected candidate pair (after CONNECTED/COMPLETED state)
  */
-CXX_C_API int ice_agent_get_selected_pair(
+TURBONET_ICE_C_API int ice_agent_get_selected_pair(
     turbo_ice_agent_t *agent,
     ice_candidate_t *local_out,
     ice_candidate_t *remote_out
@@ -463,12 +465,12 @@ CXX_C_API int ice_agent_get_selected_pair(
 /**
  * Get number of local candidates
  */
-CXX_C_API int ice_agent_get_local_candidate_count(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API int ice_agent_get_local_candidate_count(turbo_ice_agent_t *agent);
 
 /**
  * Get local candidate by index
  */
-CXX_C_API int ice_agent_get_local_candidate(
+TURBONET_ICE_C_API int ice_agent_get_local_candidate(
     turbo_ice_agent_t *agent,
     int index,
     ice_candidate_t *candidate_out
@@ -481,17 +483,17 @@ CXX_C_API int ice_agent_get_local_candidate(
 /**
  * Parse SDP candidate string into ice_candidate_t
  */
-CXX_C_API int ice_candidate_parse(const char *sdp_str, ice_candidate_t *candidate);
+TURBONET_ICE_C_API int ice_candidate_parse(const char *sdp_str, ice_candidate_t *candidate);
 
 /**
  * Format ice_candidate_t as SDP string
  */
-CXX_C_API int ice_candidate_to_sdp(const ice_candidate_t *candidate, char *buf, size_t buf_len);
+TURBONET_ICE_C_API int ice_candidate_to_sdp(const ice_candidate_t *candidate, char *buf, size_t buf_len);
 
 /**
  * Calculate candidate priority (RFC 8445)
  */
-CXX_C_API uint32_t ice_calculate_priority(
+TURBONET_ICE_C_API uint32_t ice_calculate_priority(
     ice_candidate_type_t type,
     int local_preference,
     int component_id
@@ -500,7 +502,7 @@ CXX_C_API uint32_t ice_calculate_priority(
 /**
  * Set allow loopback option
  */
-CXX_C_API void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow);
+TURBONET_ICE_C_API void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow);
 
 /**
  * Close an ICE agent and stop any active check/data loop.
@@ -508,14 +510,14 @@ CXX_C_API void ice_agent_set_allow_loopback(turbo_ice_agent_t *agent, int allow)
  * Safe for NULL, an agent that has not started, and repeated calls. Closing is
  * terminal; create a new agent for another ICE session.
  */
-CXX_C_API void ice_agent_close(turbo_ice_agent_t *agent);
+TURBONET_ICE_C_API void ice_agent_close(turbo_ice_agent_t *agent);
 
 
 /**
  * Get default ICE configuration
  */
 
-CXX_C_API ice_config_t ice_default_config(void);
+TURBONET_ICE_C_API ice_config_t ice_default_config(void);
 
 #ifdef __cplusplus
 }

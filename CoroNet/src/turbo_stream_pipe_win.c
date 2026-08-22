@@ -648,7 +648,7 @@ static void listener_fail_tick(void *arg1, void *arg2) {
     return;
   }
 
-  TLOG_ERROR("pipe listener accept failed: {}", reason ? reason : "unknown error");
+  TLOG_ERRORF("pipe listener accept failed: {}", reason ? reason : "unknown error");
   turbo_stream_listener_close(listener);
 }
 

@@ -1,6 +1,8 @@
 #ifndef TURBO_KCP_H
 #define TURBO_KCP_H
 
+
+#include "coronet_api.h"
 #include "turbo_callbacks.h"
 #include "turbo_datagram.h"
 #include <stdint.h>
@@ -46,14 +48,14 @@ typedef struct turbo_kcp_config_s {
  * @param ctx The coroutine context.
  * @return turbo_kcp_t* 
  */
-CXX_C_API turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx);
+CORONET_C_API turbo_kcp_t* turbo_kcp_create(coro_context_t* ctx);
 
 /**
  * @brief Destroy a KCP client context.
  * 
  * @param kcp The KCP context.
  */
-CXX_C_API void turbo_kcp_destroy(turbo_kcp_t* kcp);
+CORONET_C_API void turbo_kcp_destroy(turbo_kcp_t* kcp);
 
 /**
  * @brief Bind a KCP context to a local address (server mode).
@@ -64,13 +66,13 @@ CXX_C_API void turbo_kcp_destroy(turbo_kcp_t* kcp);
  * @param on_recv Receive callback.
  * @return int 0 on success.
  */
-CXX_C_API int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
+CORONET_C_API int turbo_kcp_bind(turbo_kcp_t* kcp, const char* host, int port,
                              turbo_recv_cb on_recv);
 
 /**
  * @brief Enable or disable SO_REUSEPORT for future bind calls on this KCP handle.
  */
-CXX_C_API void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
+CORONET_C_API void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
 
 /**
  * @brief Fill the authenticated KCP transport config with current defaults.
@@ -79,14 +81,14 @@ CXX_C_API void turbo_kcp_set_reuse_port(turbo_kcp_t* kcp, int enable);
  * wire protocol always applies AEAD records and Reed-Solomon FEC; it has no raw
  * KCP or unauthenticated fallback.
  */
-CXX_C_API void turbo_kcp_config_default(turbo_kcp_config_t* config);
+CORONET_C_API void turbo_kcp_config_default(turbo_kcp_config_t* config);
 /** Wipe the pre-shared key and all copied configuration bytes. */
-CXX_C_API void turbo_kcp_config_wipe(turbo_kcp_config_t* config);
+CORONET_C_API void turbo_kcp_config_wipe(turbo_kcp_config_t* config);
 
 /**
  * @brief Return non-zero for the current Reed-Solomon backend.
  */
-CXX_C_API int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
+CORONET_C_API int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
 
 /**
  * @brief Configure authenticated KCP, AEAD records, and Reed-Solomon FEC.
@@ -94,12 +96,12 @@ CXX_C_API int turbo_kcp_fec_backend_available(turbo_kcp_fec_backend_t backend);
  * This must be called with a non-zero PSK before bind/connect. Both peers must
  * use the same FEC dimensions. NONE and partially configured values fail.
  */
-CXX_C_API int turbo_kcp_set_config(turbo_kcp_t* kcp, const turbo_kcp_config_t* config);
+CORONET_C_API int turbo_kcp_set_config(turbo_kcp_t* kcp, const turbo_kcp_config_t* config);
 
 /**
  * @brief Read the current authenticated KCP transport config.
  */
-CXX_C_API int turbo_kcp_get_config(turbo_kcp_t* kcp, turbo_kcp_config_t* config);
+CORONET_C_API int turbo_kcp_get_config(turbo_kcp_t* kcp, turbo_kcp_config_t* config);
 
 /**
  * @brief Connect to a remote KCP server.
@@ -111,7 +113,7 @@ CXX_C_API int turbo_kcp_get_config(turbo_kcp_t* kcp, turbo_kcp_config_t* config)
  * @param on_recv Receive callback.
  * @return int 0 on success.
  */
-CXX_C_API int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
+CORONET_C_API int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
                                 turbo_connect_cb on_connect, turbo_recv_cb on_recv);
 
 /**
@@ -122,29 +124,29 @@ CXX_C_API int turbo_kcp_connect(turbo_kcp_t* kcp, const char* host, int port,
  * @param len The length of the data.
  * @return int 0 on success.
  */
-CXX_C_API int turbo_kcp_send(turbo_kcp_t* kcp, const char* data, size_t len);
+CORONET_C_API int turbo_kcp_send(turbo_kcp_t* kcp, const char* data, size_t len);
 
 /**
  * @brief Close the KCP connection.
  * 
  * @param kcp The KCP context.
  */
-CXX_C_API void turbo_kcp_close(turbo_kcp_t* kcp);
+CORONET_C_API void turbo_kcp_close(turbo_kcp_t* kcp);
 
 /**
  * @brief Set user data for the KCP context.
  */
-CXX_C_API void turbo_kcp_set_user_data(turbo_kcp_t* kcp, void* user_data);
+CORONET_C_API void turbo_kcp_set_user_data(turbo_kcp_t* kcp, void* user_data);
 
 /**
  * @brief Get user data for the KCP context.
  */
-CXX_C_API void* turbo_kcp_get_user_data(turbo_kcp_t* kcp);
+CORONET_C_API void* turbo_kcp_get_user_data(turbo_kcp_t* kcp);
 
 /**
  * @brief Get the underlying UDP datagram handle.
  */
-CXX_C_API turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
+CORONET_C_API turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
 
 /**
  * @brief Reset the locked peer address on a server-side KCP socket.
@@ -155,7 +157,7 @@ CXX_C_API turbo_datagram_t* turbo_kcp_get_datagram(turbo_kcp_t* kcp);
  *
  * @param kcp The KCP context (must be server-side / bound, not connected).
  */
-CXX_C_API void turbo_kcp_reset_peer(turbo_kcp_t* kcp);
+CORONET_C_API void turbo_kcp_reset_peer(turbo_kcp_t* kcp);
 
 #ifdef __cplusplus
 }

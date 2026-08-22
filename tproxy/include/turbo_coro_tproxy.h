@@ -1,6 +1,8 @@
 #ifndef coro_TPROXY_H
 #define coro_TPROXY_H
 
+
+#include "turbo_tproxy_api.h"
 #include "platform.h"
 #include <CoroNet.h>
 #include <CoroNet/turbo_coro_thread_pool.h>
@@ -75,12 +77,12 @@ typedef struct coro_tproxy_s coro_tproxy_t;
 /**
  * @brief Starts a coroutine-based transparent/multiprotocol proxy server.
  */
-CXX_C_API coro_tproxy_t *coro_tproxy_start(coro_context_t *ctx, const coro_tproxy_config_t *config);
+TURBONET_TPROXY_C_API coro_tproxy_t *coro_tproxy_start(coro_context_t *ctx, const coro_tproxy_config_t *config);
 
 /**
  * @brief Stops and destroys the proxy server.
  */
-CXX_C_API void coro_tproxy_destroy(coro_tproxy_t *proxy);
+TURBONET_TPROXY_C_API void coro_tproxy_destroy(coro_tproxy_t *proxy);
 
 /**
  * @brief Loads proxy configuration from a JSON file.
@@ -88,12 +90,12 @@ CXX_C_API void coro_tproxy_destroy(coro_tproxy_t *proxy);
  * @param config Pointer to the config struct to fill.
  * @return 0 on success, negative on error.
  */
-CXX_C_API int coro_tproxy_config_load(const char *path, coro_tproxy_config_t *config);
+TURBONET_TPROXY_C_API int coro_tproxy_config_load(const char *path, coro_tproxy_config_t *config);
 
-CXX_C_API int coro_rule_group_update_member(coro_rule_engine_t *engine, const char *group_name,
+TURBONET_TPROXY_C_API int coro_rule_group_update_member(coro_rule_engine_t *engine, const char *group_name,
                                             const char *member, bool alive, uint64_t latency_ms);
 
-CXX_C_API void coro_rule_engine_set_health_cb(coro_rule_engine_t *engine, turbo_group_health_cb cb,
+TURBONET_TPROXY_C_API void coro_rule_engine_set_health_cb(coro_rule_engine_t *engine, turbo_group_health_cb cb,
                                               void *user_data);
 
 #ifdef __cplusplus

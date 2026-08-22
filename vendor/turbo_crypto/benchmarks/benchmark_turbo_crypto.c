@@ -21,12 +21,12 @@ spec("turbo crypto benchmark") {
     benchmark_bytes("SHA-256 1 MiB", 100, sizeof(benchmark_input)) {
       rc = turbo_crypto_sha256(benchmark_input, sizeof(benchmark_input), digest);
     }
-    check_int_eq(rc, TURBO_CRYPTO_OK);
+    check_equal(rc, TURBO_CRYPTO_OK);
 
     benchmark_bytes("MD5 1 MiB", 100, sizeof(benchmark_input)) {
       rc = turbo_crypto_md5(benchmark_input, sizeof(benchmark_input), digest);
     }
-    check_int_eq(rc, TURBO_CRYPTO_OK);
+    check_equal(rc, TURBO_CRYPTO_OK);
   }
 
   bench("SigV4-sized HMAC throughput") {
@@ -39,7 +39,7 @@ spec("turbo crypto benchmark") {
       rc = turbo_crypto_hmac_sha256(key, sizeof(key), message, sizeof(message),
                                     digest);
     }
-    check_int_eq(rc, TURBO_CRYPTO_OK);
+    check_equal(rc, TURBO_CRYPTO_OK);
   }
 
   bench("password KDF throughput") {
@@ -52,6 +52,6 @@ spec("turbo crypto benchmark") {
           "benchmark-password", 18, salt, sizeof(salt), 100000,
           derived_key, sizeof(derived_key));
     }
-    check_int_eq(rc, TURBO_CRYPTO_OK);
+    check_equal(rc, TURBO_CRYPTO_OK);
   }
 }

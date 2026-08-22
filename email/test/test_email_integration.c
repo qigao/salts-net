@@ -350,7 +350,7 @@ spec("email_integration") {
       result.ctx = ctx;
 
       rc = coro_context_spawn(ctx, smtp4dev_roundtrip_coro, &result);
-      check_int_eq(rc, 0);
+      check_equal(rc, 0);
 
       coro_context_run(ctx, TURBO_RUN_DEFAULT);
       coro_context_destroy(ctx);

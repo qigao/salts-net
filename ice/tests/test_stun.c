@@ -11,15 +11,15 @@ spec("stun") {
     it("should generate unique transaction IDs") {
         stun_transaction_id_t id1, id2;
 
-        check_int_eq(stun_generate_transaction_id(&id1), 0);
-        check_int_eq(stun_generate_transaction_id(&id2), 0);
+        check_equal(stun_generate_transaction_id(&id1), 0);
+        check_equal(stun_generate_transaction_id(&id2), 0);
 
         /* IDs should be different across calls */
         check(memcmp(id1.id, id2.id, STUN_TRANSACTION_ID_LEN) != 0);
     }
 
     it("should have correct transaction ID length") {
-        check_int_eq(STUN_TRANSACTION_ID_LEN, 12);
+        check_equal(STUN_TRANSACTION_ID_LEN, 12);
     }
   }
 
@@ -33,31 +33,31 @@ spec("stun") {
         size_t len = stun_build_binding_request(buffer, &txn_id);
 
         /* Should be exactly 20 bytes for a header-only request */
-        check_size_eq(len, STUN_HEADER_SIZE);
+        check_equal(len, STUN_HEADER_SIZE);
 
         /* Message type: Binding Request (0x0001) */
-        check_int_eq(buffer[0], 0x00);
-        check_int_eq(buffer[1], 0x01);
+        check_equal(buffer[0], 0x00);
+        check_equal(buffer[1], 0x01);
 
         /* Message length: 0 */
-        check_int_eq(buffer[2], 0x00);
-        check_int_eq(buffer[3], 0x00);
+        check_equal(buffer[2], 0x00);
+        check_equal(buffer[3], 0x00);
 
         /* Magic cookie: 0x2112A442 */
-        check_int_eq(buffer[4], 0x21);
-        check_int_eq(buffer[5], 0x12);
-        check_int_eq(buffer[6], 0xA4);
-        check_int_eq(buffer[7], 0x42);
+        check_equal(buffer[4], 0x21);
+        check_equal(buffer[5], 0x12);
+        check_equal(buffer[6], 0xA4);
+        check_equal(buffer[7], 0x42);
 
         /* Transaction ID should match input */
         for (int i = 0; i < STUN_TRANSACTION_ID_LEN; i++) {
-            check_int_eq(buffer[8 + i], 0x42);
+            check_equal(buffer[8 + i], 0x42);
         }
     }
 
     it("should respect message constants") {
-        check_int_eq(STUN_HEADER_SIZE, 20);
-        check_long_eq(STUN_MAGIC_COOKIE, 0x2112A442);
+        check_equal(STUN_HEADER_SIZE, 20);
+        check_equal(STUN_MAGIC_COOKIE, 0x2112A442);
     }
 
     it("should build a valid binding response with XOR-MAPPED-ADDRESS") {
@@ -69,15 +69,15 @@ spec("stun") {
 
         size_t len = stun_build_binding_response(buffer, &txn_id, "203.0.113.9", 45678);
 
-        check_size_eq(len, 32);
+        check_equal(len, 32);
         check(stun_is_stun_message(buffer, len));
-        check_int_eq(buffer[0], 0x01);
-        check_int_eq(buffer[1], 0x01);
+        check_equal(buffer[0], 0x01);
+        check_equal(buffer[1], 0x01);
 
-        check_int_eq(stun_parse_binding_response(buffer, len, &txn_id, &mapped), 0);
-        check_int_eq(mapped.family, STUN_ADDR_FAMILY_IPV4);
-        check_int_eq(mapped.port, 45678);
-        check_str_eq(mapped.ip_str, "203.0.113.9");
+        check_equal(stun_parse_binding_response(buffer, len, &txn_id, &mapped), 0);
+        check_equal(mapped.family, STUN_ADDR_FAMILY_IPV4);
+        check_equal(mapped.port, 45678);
+        check_equal(mapped.ip_str, "203.0.113.9");
     }
   }
 
@@ -163,10 +163,10 @@ spec("stun") {
         stun_mapped_address_t mapped;
         int rc = stun_parse_binding_response(response, sizeof(response), &txn, &mapped);
 
-        check_int_eq(rc, 0);
-        check_int_eq(mapped.family, STUN_ADDR_FAMILY_IPV4);
-        check_int_eq(mapped.port, 54321);
-        check_str_eq(mapped.ip_str, "203.0.113.1");
+        check_equal(rc, 0);
+        check_equal(mapped.family, STUN_ADDR_FAMILY_IPV4);
+        check_equal(mapped.port, 54321);
+        check_equal(mapped.ip_str, "203.0.113.1");
     }
 
     it("should handle transaction ID mismatch") {
@@ -178,7 +178,7 @@ spec("stun") {
 
         stun_mapped_address_t mapped;
         int rc = stun_parse_binding_response(response, 20, &expected, &mapped);
-        check_int_eq(rc, -6); /* Transaction ID mismatch */
+        check_equal(rc, -6); /* Transaction ID mismatch */
     }
   }
 
@@ -219,7 +219,7 @@ spec("stun") {
                                          1000, 1, 1, 0);
 
         int valid = stun_validate_message_integrity(buffer, (size_t)len, "secret");
-        check_int_eq(valid, 0);
+        check_equal(valid, 0);
 
         int invalid = stun_validate_message_integrity(buffer, (size_t)len, "wrong");
         check(invalid != 0);
@@ -241,10 +241,10 @@ spec("stun") {
         int rc = stun_parse_ice_request(buffer, STUN_MAX_MESSAGE_SIZE, username,
                                         &priority, &use_candidate);
 
-        check_int_eq(rc, 0);
-        check_str_eq(username, "remote:local");
-        check_int_eq(priority, 888);
-        check_int_eq(use_candidate, 1);
+        check_equal(rc, 0);
+        check_equal(username, "remote:local");
+        check_equal(priority, 888);
+        check_equal(use_candidate, 1);
     }
 
     it("should reject ICE requests without PRIORITY") {
@@ -277,13 +277,13 @@ spec("stun") {
         };
 
         int err = stun_get_error_code(buffer, sizeof(buffer));
-        check_int_eq(err, 401);
+        check_equal(err, 401);
     }
 
     it("should return 0 if no error code found") {
         uint8_t buffer[20] = {0, 1, 0, 0, 0x21, 0x12, 0xA4, 0x42};
         int err = stun_get_error_code(buffer, 20);
-        check_int_eq(err, 0);
+        check_equal(err, 0);
     }
   }
 }

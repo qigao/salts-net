@@ -1514,11 +1514,11 @@ int turbo_stream_wss_get_verified_peer_certificate_sha256_internal(
       st->tcp, output, output_len);
 }
 
-CXX_C_API void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host) {
+void turbo_stream_ws_set_path_host(turbo_stream_t *s, const char *path, const char *host) {
   turbo_stream_ws_set_path_host_protocol(s, path, host, NULL);
 }
 
-CXX_C_API void turbo_stream_ws_set_path_host_protocol(turbo_stream_t *s, const char *path,
+void turbo_stream_ws_set_path_host_protocol(turbo_stream_t *s, const char *path,
                                                       const char *host, const char *protocol) {
   if (!s || (s->kind != TURBO_STREAM_WS && s->kind != TURBO_STREAM_WSS)) return;
   ws_state_t *st = (ws_state_t *)s->backend_data;

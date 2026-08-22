@@ -158,19 +158,19 @@ spec("mime_mhtml") {
       mem_init(&pool, 4096);
       doc = mime_mhtml_document_create(&pool);
       check_not_null(doc);
-      check_int_eq(mime_mhtml_set_html(doc, "<p>page</p>", 11, "utf-8"), 0);
-      check_int_eq(mime_mhtml_add_resource(doc, "application/octet-stream", "item.bin", NULL,
+      check_equal(mime_mhtml_set_html(doc, "<p>page</p>", 11, "utf-8"), 0);
+      check_equal(mime_mhtml_add_resource(doc, "application/octet-stream", "item.bin", NULL,
                                            (const char *)resource, sizeof(resource), 1),
                    0);
 
       serialized = mime_mhtml_serialize(doc, &serialized_len);
       check_not_null(serialized);
-      check_uint_eq(serialized_len, strlen(serialized));
-      check_str_contains(serialized, "MIME-Version: 1.0\r\n");
-      check_str_contains(serialized, "Content-Type: multipart/related;");
-      check_str_contains(serialized, "Content-Transfer-Encoding: 8bit\r\n");
-      check_str_contains(serialized, "Content-Location: item.bin\r\n");
-      check_str_contains(serialized, "AAH+/w==\r\n");
+      check_equal(serialized_len, strlen(serialized));
+      check_contains(serialized, "MIME-Version: 1.0\r\n");
+      check_contains(serialized, "Content-Type: multipart/related;");
+      check_contains(serialized, "Content-Transfer-Encoding: 8bit\r\n");
+      check_contains(serialized, "Content-Location: item.bin\r\n");
+      check_contains(serialized, "AAH+/w==\r\n");
       free(serialized);
       mime_mhtml_document_free(doc);
       mem_destroy(&pool);

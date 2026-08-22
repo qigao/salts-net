@@ -16,7 +16,7 @@ set(HEADERS include/snmp_types.h include/snmp_parser.h include/snmp_builder.h
 # Library
 add_library(${TARGET_NAME} SHARED ${SOURCES} ${HEADERS})
 add_library(TurboNet::SNMP ALIAS ${TARGET_NAME})
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+cmake_config_api(${TARGET_NAME} TURBONET_SNMP_C_API)
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                         $<INSTALL_INTERFACE:include>)

@@ -9,6 +9,8 @@
 #ifndef X509_GENERATE_H
 #define X509_GENERATE_H
 
+
+#include "asn1_api.h"
 #include "platform.h"
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,7 +28,7 @@
  * @param private_key Output: Ed25519 private key (32 bytes)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_generate_ed25519_keypair(uint8_t public_key[32], uint8_t private_key[32]);
+TURBONET_ASN1_C_API int x509_generate_ed25519_keypair(uint8_t public_key[32], uint8_t private_key[32]);
 
 /**
  * Generate self-signed X.509 certificate with Ed25519
@@ -38,7 +40,7 @@ CXX_C_API int x509_generate_ed25519_keypair(uint8_t public_key[32], uint8_t priv
  * @param cert_len Output: Certificate length
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_generate_self_signed_ed25519(
+TURBONET_ASN1_C_API int x509_generate_self_signed_ed25519(
     const char *common_name,
     uint32_t valid_days,
     const uint8_t public_key[32],
@@ -55,7 +57,7 @@ CXX_C_API int x509_generate_self_signed_ed25519(
  * @param private_key Output: Ed25519 private key (32 bytes, for DTLS)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_generate_webrtc_cert(
+TURBONET_ASN1_C_API int x509_generate_webrtc_cert(
     const char *common_name,
     uint32_t valid_days,
     uint8_t **cert_der,
@@ -74,7 +76,7 @@ CXX_C_API int x509_generate_webrtc_cert(
  * @param fingerprint Output: SHA-256 hash (32 bytes)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_cert_fingerprint_sha256(
+TURBONET_ASN1_C_API int x509_cert_fingerprint_sha256(
     const uint8_t *cert_der,
     size_t cert_len,
     uint8_t fingerprint[32]
@@ -87,7 +89,7 @@ CXX_C_API int x509_cert_fingerprint_sha256(
  * @param fingerprint_str Output: "AB:CD:EF:..." (96 bytes buffer)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_cert_fingerprint_string(
+TURBONET_ASN1_C_API int x509_cert_fingerprint_string(
     const uint8_t *cert_der,
     size_t cert_len,
     char fingerprint_str[96]
@@ -105,7 +107,7 @@ CXX_C_API int x509_cert_fingerprint_string(
  * @param pem_len Output: PEM string length (including null terminator)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_cert_to_pem(
+TURBONET_ASN1_C_API int x509_cert_to_pem(
     const uint8_t *cert_der,
     size_t cert_len,
     char **cert_pem,
@@ -119,7 +121,7 @@ CXX_C_API int x509_cert_to_pem(
  * @param pem_len Output: PEM string length (including null terminator)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_privkey_to_pem(
+TURBONET_ASN1_C_API int x509_privkey_to_pem(
     const uint8_t private_key[32],
     char **key_pem,
     size_t *pem_len
@@ -136,7 +138,7 @@ CXX_C_API int x509_privkey_to_pem(
  * @param key_len Output: Private key PEM length
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_generate_tls_cert_pem(
+TURBONET_ASN1_C_API int x509_generate_tls_cert_pem(
     const char *common_name,
     uint32_t valid_days,
     char **cert_pem,
@@ -156,7 +158,7 @@ CXX_C_API int x509_generate_tls_cert_pem(
  * @param key_len Output: Private key PEM length
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_generate_tls_cert_pem_ecdsa(
+TURBONET_ASN1_C_API int x509_generate_tls_cert_pem_ecdsa(
     const char *common_name,
     uint32_t valid_days,
     char **cert_pem,

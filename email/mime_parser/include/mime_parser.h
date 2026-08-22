@@ -111,26 +111,26 @@ struct mime_parser_s {
 /**
  * Initialize parser with settings and memory pool
  */
-CXX_C_API void mime_parser_init(mime_parser_t *parser,
+void mime_parser_init(mime_parser_t *parser,
                                  const mime_settings_t *settings,
                                  mem_pool_t *pool);
 
 /**
  * Parse MIME data (can be called multiple times for streaming)
  */
-CXX_C_API mime_errno_t mime_parse(mime_parser_t *parser,
+mime_errno_t mime_parse(mime_parser_t *parser,
                                    const char *data,
                                    size_t len);
 
 /**
  * Reset parser for reuse
  */
-CXX_C_API void mime_parser_reset(mime_parser_t *parser);
+void mime_parser_reset(mime_parser_t *parser);
 
 /**
  * Get error message for error code
  */
-CXX_C_API const char *mime_errno_name(mime_errno_t err);
+const char *mime_errno_name(mime_errno_t err);
 
 /* ── Helper API ────────────────────────────────────────────────────── */
 
@@ -140,20 +140,20 @@ CXX_C_API const char *mime_errno_name(mime_errno_t err);
  * Returns pointer to boundary string (not null-terminated), sets *len
  * Returns NULL if no boundary found
  */
-CXX_C_API const char *mime_extract_boundary(const char *content_type,
+const char *mime_extract_boundary(const char *content_type,
                                              size_t content_type_len,
                                              size_t *boundary_len);
 
 /**
  * Check if content type is multipart
  */
-CXX_C_API int mime_is_multipart(const char *content_type, size_t len);
+int mime_is_multipart(const char *content_type, size_t len);
 
 /**
  * Find boundary in data buffer
  * Returns offset of boundary start, or -1 if not found
  */
-CXX_C_API int mime_find_boundary(const char *data, size_t len,
+int mime_find_boundary(const char *data, size_t len,
                                   const char *boundary, size_t boundary_len);
 
 #ifdef __cplusplus

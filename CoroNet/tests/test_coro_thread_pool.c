@@ -100,13 +100,13 @@ spec("coro_thread_pool") {
             turbo_cond_init(&audit.cond);
 
             turbo_sleep_ms(100);
-            check_int_eq(coro_thread_pool_spawn(pool, wake_coro, &audit), 0);
+            check_equal(coro_thread_pool_spawn(pool, wake_coro, &audit), 0);
 
             turbo_mutex_lock(&audit.mutex);
             for (int i = 0; i < 50 && !audit.ran; ++i) {
                 turbo_cond_timedwait(&audit.cond, &audit.mutex, 20ULL * 1000ULL * 1000ULL);
             }
-            check_int_eq(audit.ran, 1);
+            check_equal(audit.ran, 1);
             turbo_mutex_unlock(&audit.mutex);
 
             coro_thread_pool_destroy(pool);

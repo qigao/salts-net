@@ -1,6 +1,8 @@
 #ifndef LDAP_BUILDER_H
 #define LDAP_BUILDER_H
 
+
+#include "ldap_api.h"
 #include "platform.h"
 #include "ldap_types.h"
 #include "ldap_protocol.h"
@@ -19,7 +21,7 @@ extern "C" {
 #define LDAP_BUILD_ERROR_FILTER  -4
 
 // BindRequest (Simple Authentication)
-CXX_C_API int ldap_build_bind_request(
+TURBONET_LDAP_C_API int ldap_build_bind_request(
     int message_id,
     int version,              // Usually 3
     const char *dn,           // Distinguished Name (can be empty for anonymous)
@@ -29,14 +31,14 @@ CXX_C_API int ldap_build_bind_request(
 );
 
 // UnbindRequest
-CXX_C_API int ldap_build_unbind_request(
+TURBONET_LDAP_C_API int ldap_build_unbind_request(
     int message_id,
     uint8_t *out,
     size_t *out_len
 );
 
 // SearchRequest
-CXX_C_API int ldap_build_search_request(
+TURBONET_LDAP_C_API int ldap_build_search_request(
     int message_id,
     const char *base_dn,
     int scope,                // LDAP_SCOPE_BASE, LDAP_SCOPE_ONELEVEL, LDAP_SCOPE_SUBTREE
@@ -51,7 +53,7 @@ CXX_C_API int ldap_build_search_request(
 );
 
 // AddRequest
-CXX_C_API int ldap_build_add_request(
+TURBONET_LDAP_C_API int ldap_build_add_request(
     int message_id,
     const char *dn,
     const ldap_attribute_t *attrs,
@@ -61,7 +63,7 @@ CXX_C_API int ldap_build_add_request(
 );
 
 // DeleteRequest
-CXX_C_API int ldap_build_delete_request(
+TURBONET_LDAP_C_API int ldap_build_delete_request(
     int message_id,
     const char *dn,
     uint8_t *out,
@@ -69,7 +71,7 @@ CXX_C_API int ldap_build_delete_request(
 );
 
 // ModifyRequest
-CXX_C_API int ldap_build_modify_request(
+TURBONET_LDAP_C_API int ldap_build_modify_request(
     int message_id,
     const char *dn,
     const ldap_modification_t *mods,
@@ -79,7 +81,7 @@ CXX_C_API int ldap_build_modify_request(
 );
 
 // ModifyDNRequest (Rename)
-CXX_C_API int ldap_build_modifydn_request(
+TURBONET_LDAP_C_API int ldap_build_modifydn_request(
     int message_id,
     const char *dn,
     const char *new_rdn,
@@ -90,7 +92,7 @@ CXX_C_API int ldap_build_modifydn_request(
 );
 
 // CompareRequest
-CXX_C_API int ldap_build_compare_request(
+TURBONET_LDAP_C_API int ldap_build_compare_request(
     int message_id,
     const char *dn,
     const char *attribute,
@@ -101,7 +103,7 @@ CXX_C_API int ldap_build_compare_request(
 );
 
 // AbandonRequest
-CXX_C_API int ldap_build_abandon_request(
+TURBONET_LDAP_C_API int ldap_build_abandon_request(
     int message_id,
     int abandon_id,
     uint8_t *out,

@@ -570,12 +570,12 @@ static void tls_server_run_case(
   state.explicit_mtls = explicit_mtls;
 
   /* Reserve an ephemeral port, then close the probe so CoroNet can bind it. */
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
 
   /* Write cert material to temp files and point env vars at them. */
-  check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+  check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+  check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
   state.ca_file = ca_file;
   state.cert_file = cert_file;
@@ -585,15 +585,15 @@ static void tls_server_run_case(
 #ifdef _WIN32
     if (use_process_env_only) {
     /* Process-level env (SetEnvironmentVariableA) — separate Win32 code path. */
-    check_int_eq(tls_test_set_process_env_only(ca_file, cert_file, key_file), 0);
+    check_equal(tls_test_set_process_env_only(ca_file, cert_file, key_file), 0);
     } else {
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_ca_file_env(ca_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
     }
 #else
     (void)use_process_env_only;
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_ca_file_env(ca_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 #endif
   }
 
@@ -614,40 +614,40 @@ static void tls_server_run_case(
     server_config.key_file = key_file;
     server_config.ca_file = ca_file;
     server_config.client_auth = TURBO_TLS_CLIENT_AUTH_REQUIRED;
-    check_int_eq(coro_socket_set_tls_server_config(state.server, &server_config), 0);
+    check_equal(coro_socket_set_tls_server_config(state.server, &server_config), 0);
   }
-  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                      tls_server_banner_handler, &state), 0);
-  check_int_eq(coro_context_spawn(state.ctx, tls_server_client_task, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, tls_server_client_task, &state), 0);
 
   /* Drain until both sides have finished or we time out. */
   tls_server_run_until(state.ctx, 5000, tls_server_case_done, NULL);
 
   /* Assertions. */
-  check_int_eq(g_tls_server_handler_hits, 1);
-  check_int_eq(g_tls_server_handler_rc,   0);
-  check_int_eq(state.server_binding_rc, 0);
+  check_equal(g_tls_server_handler_hits, 1);
+  check_equal(g_tls_server_handler_rc,   0);
+  check_equal(state.server_binding_rc, 0);
   if (explicit_mtls) {
-    check_int_eq(state.server_peer_rc, 0);
-    check_int_eq(state.client_peer_rc, 0);
-    check_int_eq((int)strlen(state.server_peer),
+    check_equal(state.server_peer_rc, 0);
+    check_equal(state.client_peer_rc, 0);
+    check_equal((int)strlen(state.server_peer),
                  CORO_TLS_PEER_CERT_SHA256_CAPACITY - 1);
     check(strncmp(state.server_peer, "sha256:", 7) == 0);
-    check_str_eq(state.server_peer, state.client_peer);
+    check_equal(state.server_peer, state.client_peer);
     check(state.missing_client_certificate_rc != 0);
   } else {
-    check_int_eq(state.server_peer_rc, TURBO_EPERM);
+    check_equal(state.server_peer_rc, TURBO_EPERM);
   }
   if (disable_client_verify) {
     uint8_t zero[CORO_TLS_CHANNEL_BINDING_SIZE] = {0};
-    check_int_eq(g_tls_server_client_rc, TURBO_EPERM);
-    check_int_eq(state.client_binding_rc, TURBO_EPERM);
-    check_mem_eq(state.client_binding, zero, sizeof(zero));
+    check_equal(g_tls_server_client_rc, TURBO_EPERM);
+    check_equal(state.client_binding_rc, TURBO_EPERM);
+    check_equal(state.client_binding, zero, sizeof(zero));
   } else {
-    check_int_eq(g_tls_server_client_rc, 0);
-    check_str_eq(g_tls_server_client_buf, "server-ready");
-    check_int_eq(state.client_binding_rc, 0);
-    check_mem_eq(state.server_binding, state.client_binding,
+    check_equal(g_tls_server_client_rc, 0);
+    check_equal(g_tls_server_client_buf, "server-ready");
+    check_equal(state.client_binding_rc, 0);
+    check_equal(state.server_binding, state.client_binding,
                  CORO_TLS_CHANNEL_BINDING_SIZE);
     if (output) {
       memcpy(output, state.client_binding, CORO_TLS_CHANNEL_BINDING_SIZE);
@@ -694,35 +694,35 @@ static void tls_server_run_close_case(int pending_recv) {
 
   memset(g_tls_close_send_payload, 't', sizeof(g_tls_close_send_payload));
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
-  check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+  check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+  check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
-  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+  check_equal(tls_test_set_ca_file_env(ca_file), 0);
+  check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
   state.ctx = coro_context_create(NULL);
   check_not_null(state.ctx);
 
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
   check_not_null(state.server);
-  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                      tls_close_idle_handler, &state), 0);
 
   if (pending_recv) {
-    check_int_eq(coro_context_spawn(state.ctx, tls_close_client_recv_task, &state), 0);
-    check_int_eq(coro_context_spawn(state.ctx, tls_close_client_destroy_task, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, tls_close_client_recv_task, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, tls_close_client_destroy_task, &state), 0);
   } else {
-    check_int_eq(coro_context_spawn(state.ctx, tls_close_client_send_task, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, tls_close_client_send_task, &state), 0);
   }
 
   tls_server_run_until(state.ctx, 5000, tls_close_case_done, &state);
 
-  check_int_eq(state.handler_hits, 1);
-  check_int_eq(state.handler_rc, 0);
+  check_equal(state.handler_hits, 1);
+  check_equal(state.handler_rc, 0);
   if (pending_recv) {
-    check_int_eq(state.client_rc, TURBO_ECANCELED);
+    check_equal(state.client_rc, TURBO_ECANCELED);
   } else {
     check(state.client_rc == 0 ||
           state.client_rc == TURBO_ECANCELED ||
@@ -742,8 +742,8 @@ static void tls_server_run_close_case(int pending_recv) {
   }
 
   tls_close_run_until_idle(state.ctx, 1000);
-  check_int_eq(coro_context_coro_count(state.ctx), 0);
-  check_int_eq(coro_context_alive(state.ctx), 0);
+  check_equal(coro_context_coro_count(state.ctx), 0);
+  check_equal(coro_context_alive(state.ctx), 0);
   coro_context_destroy(state.ctx);
   tls_test_clear_server_env();
   tls_test_clear_ca_env();
@@ -763,29 +763,29 @@ static void tls_server_run_tiny_write_case(void) {
   state.client_rc = TURBO_EBUSY;
   state.handler_rc = TURBO_EBUSY;
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
-  check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+  check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+  check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
-  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+  check_equal(tls_test_set_ca_file_env(ca_file), 0);
+  check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
   state.ctx = coro_context_create(NULL);
   check_not_null(state.ctx);
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TLS);
   check_not_null(state.server);
-  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                      tls_tiny_write_handler, &state), 0);
-  check_int_eq(coro_context_spawn(state.ctx, tls_tiny_write_client_task, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, tls_tiny_write_client_task, &state), 0);
 
   tls_server_run_until(state.ctx, 10000, tls_tiny_write_case_done, &state);
 
-  check_int_eq(state.connected, 1);
-  check_int_eq(state.sends_completed, TLS_TINY_WRITE_COUNT);
-  check_int_eq(state.client_rc, 0);
-  check_int_eq(state.handler_rc, 0);
-  check_int_eq((int)state.received, TLS_TINY_WRITE_COUNT);
+  check_equal(state.connected, 1);
+  check_equal(state.sends_completed, TLS_TINY_WRITE_COUNT);
+  check_equal(state.client_rc, 0);
+  check_equal(state.handler_rc, 0);
+  check_equal((int)state.received, TLS_TINY_WRITE_COUNT);
 
   coro_socket_destroy(state.server);
   tls_close_run_until_idle(state.ctx, 1000);
@@ -809,13 +809,13 @@ static void tls_server_run_pre_admission_case(void) {
   memset(&state, 0, sizeof(state));
   state.client_rc = TURBO_EBUSY;
   state.handler_rc = TURBO_EBUSY;
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
-  check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-  check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+  check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+  check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                            key_file, sizeof(key_file)), 0);
-  check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-  check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+  check_equal(tls_test_set_ca_file_env(ca_file), 0);
+  check_equal(tls_test_set_server_env(cert_file, key_file), 0);
 
   state.ctx = coro_context_create(NULL);
   check_not_null(state.ctx);
@@ -827,19 +827,19 @@ static void tls_server_run_pre_admission_case(void) {
   admission.callback = tls_pre_admission_callback;
   admission.user_data = &state;
   admission.release = tls_pre_admission_release;
-  check_int_eq(coro_socket_set_server_pre_tls_admission(state.server, &admission), 0);
-  check_int_eq(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_set_server_pre_tls_admission(state.server, &admission), 0);
+  check_equal(coro_socket_listen_on(state.server, "127.0.0.1", state.port,
                                      tls_pre_admission_handler, &state), 0);
-  check_int_eq(coro_context_spawn(state.ctx, tls_pre_admission_client_task, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, tls_pre_admission_client_task, &state), 0);
 
   tls_server_run_until(state.ctx, 5000, tls_pre_admission_case_done, &state);
 
   check(state.callback_calls >= 3);
-  check_int_eq(state.handler_hits, 1);
-  check_int_eq(state.context_valid, 1);
-  check_int_eq(state.handler_rc, 0);
-  check_int_eq(state.client_rc, 0);
-  check_int_eq(state.release_hits, 1);
+  check_equal(state.handler_hits, 1);
+  check_equal(state.context_valid, 1);
+  check_equal(state.handler_rc, 0);
+  check_equal(state.client_rc, 0);
+  check_equal(state.release_hits, 1);
 
   coro_socket_destroy(state.server);
   tls_close_run_until_idle(state.ctx, 1000);
@@ -857,12 +857,12 @@ spec("Coro TLS Server") {
 #ifndef _WIN32
   before_all() {
     signal(SIGPIPE, SIG_IGN);
-    check_int_eq(turbo_stream_tls_set_protocol_mode(
+    check_equal(turbo_stream_tls_set_protocol_mode(
                      TURBO_TLS_PROTOCOL_TLS13_ONLY), 0);
   }
 #else
   before_all() {
-    check_int_eq(turbo_stream_tls_set_protocol_mode(
+    check_equal(turbo_stream_tls_set_protocol_mode(
                      TURBO_TLS_PROTOCOL_TLS13_ONLY), 0);
   }
 #endif
@@ -905,19 +905,19 @@ spec("Coro TLS Server") {
     check_not_null(tls);
 
     memset(output, 0xa5, sizeof(output));
-    check_int_eq(coro_socket_tls_export_channel_binding(NULL, output),
+    check_equal(coro_socket_tls_export_channel_binding(NULL, output),
                  TURBO_EINVAL);
-    check_mem_eq(output, zero, sizeof(output));
+    check_equal(output, zero, sizeof(output));
 
     memset(output, 0xa5, sizeof(output));
-    check_int_eq(coro_socket_tls_export_channel_binding(plain, output),
+    check_equal(coro_socket_tls_export_channel_binding(plain, output),
                  TURBO_ENOTSUP);
-    check_mem_eq(output, zero, sizeof(output));
+    check_equal(output, zero, sizeof(output));
 
     memset(output, 0xa5, sizeof(output));
-    check_int_eq(coro_socket_tls_export_channel_binding(tls, output),
+    check_equal(coro_socket_tls_export_channel_binding(tls, output),
                  TURBO_ENOTCONN);
-    check_mem_eq(output, zero, sizeof(output));
+    check_equal(output, zero, sizeof(output));
 
     coro_socket_destroy(tls);
     coro_socket_destroy(plain);

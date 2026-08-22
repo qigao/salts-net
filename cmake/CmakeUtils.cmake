@@ -1,5 +1,40 @@
 # TurboNet CMake Utilities
 
+function(cmake_config_api target_name api_macro)
+  if(NOT TARGET ${target_name})
+    message(FATAL_ERROR "cmake_config_api target does not exist: ${target_name}")
+  endif()
+
+  get_target_property(target_type ${target_name} TYPE)
+  if(NOT target_type STREQUAL "SHARED_LIBRARY")
+    message(FATAL_ERROR
+            "cmake_config_api requires a shared library: ${target_name}")
+  endif()
+
+  set_target_properties(
+    ${target_name}
+    PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS OFF
+               C_VISIBILITY_PRESET hidden
+               CXX_VISIBILITY_PRESET hidden
+               VISIBILITY_INLINES_HIDDEN YES)
+  target_compile_definitions(
+    ${target_name}
+    PRIVATE "$<$<PLATFORM_ID:Windows>:${api_macro}=__declspec(dllexport)>")
+endfunction()
+
+function(cmake_copy_runtime_dlls target_name)
+  if(WIN32)
+    add_custom_command(
+      TARGET ${target_name}
+      POST_BUILD
+      COMMAND
+        ${CMAKE_COMMAND}
+        "-DRUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:${target_name}>,@@>"
+        "-DRUNTIME_DESTINATION=$<TARGET_FILE_DIR:${target_name}>" -P
+        "${PROJECT_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake")
+  endif()
+endfunction()
+
 function(cmake_config_target target_name)
   set(options NO_INSTALL)
   set(oneValueArgs FOLDER VERSION SOVERSION EXPORT_NAME ALIAS)
@@ -189,6 +224,8 @@ function(cmake_add_test)
       target_include_directories(${name} PRIVATE ${ARG_INCLUDES})
       add_test(NAME ${name} COMMAND ${name})
 
+      cmake_copy_runtime_dlls(${name})
+
       if(ARG_FOLDER)
         set_target_properties(${name} PROPERTIES FOLDER ${ARG_FOLDER})
       endif()
@@ -211,6 +248,8 @@ function(cmake_add_benchmark)
       target_link_libraries(${name} PRIVATE ${ARG_LIBS})
       target_compile_definitions(${name} PRIVATE ${ARG_DEFS})
       target_include_directories(${name} PRIVATE ${ARG_INCLUDES})
+
+      cmake_copy_runtime_dlls(${name})
 
       if(ARG_FOLDER)
         set_target_properties(${name} PROPERTIES FOLDER ${ARG_FOLDER})

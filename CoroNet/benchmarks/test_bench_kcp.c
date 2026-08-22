@@ -210,7 +210,7 @@ spec("kcp secure fec loss benchmark") {
                 "dropped_frames=%zu recovered_data=%zu rejected=%zu\n",
                 losses[i], rc, result.delivered, result.dropped_frames,
                 result.dropped_data, result.rejected);
-      check_int_eq(rc, TURBO_OK);
+      check_equal(rc, TURBO_OK);
       messages_per_second =
           (double)result.delivered * 1000000000.0 / (double)result.elapsed_ns;
       mib_per_second = messages_per_second * KCP_BENCH_PAYLOAD_SIZE / (1024.0 * 1024.0);

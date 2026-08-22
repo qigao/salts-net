@@ -1370,19 +1370,19 @@ static void tls_log_handshake_failure(tls_state_t *st, int ssl_rc) {
   host = st->hostname[0] ? st->hostname : "(unset)";
 
   if (verify_rc != X509_V_OK) {
-    TLOG_ERROR("TLS handshake failed for {}: verify={} ({})",
+    TLOG_ERRORF("TLS handshake failed for {}: verify={} ({})",
                host, verify_rc, X509_verify_cert_error_string(verify_rc));
     return;
   }
 
   if (openssl_err != 0) {
     ERR_error_string_n(openssl_err, openssl_buf, sizeof(openssl_buf));
-    TLOG_ERROR("TLS handshake failed for {}: ssl_error={} openssl={}",
+    TLOG_ERRORF("TLS handshake failed for {}: ssl_error={} openssl={}",
                host, ssl_err, openssl_buf);
     return;
   }
 
-  TLOG_ERROR("TLS handshake failed for {}: ssl_error={} (no OpenSSL detail)",
+  TLOG_ERRORF("TLS handshake failed for {}: ssl_error={} (no OpenSSL detail)",
              host, ssl_err);
 }
 
@@ -2632,7 +2632,7 @@ const turbo_stream_backend_ops_t turbo_stream_tls_ops = {
   .listener_close = tls_listener_close,
 };
 
-CXX_C_API void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname) {
+void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname) {
   if (!s || s->kind != TURBO_STREAM_TLS) return;
   tls_state_t *st = (tls_state_t *)s->backend_data;
   if (!st || !hostname) return;
@@ -2640,7 +2640,7 @@ CXX_C_API void turbo_stream_tls_set_sni(turbo_stream_t *s, const char *hostname)
   st->hostname[sizeof(st->hostname) - 1] = '\0';
 }
 
-CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode) {
+int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode) {
   int rc;
 
   if (mode != TURBO_TLS_PROTOCOL_DEFAULT && mode != TURBO_TLS_PROTOCOL_TLS13_ONLY) {
@@ -2673,26 +2673,26 @@ CXX_C_API int turbo_stream_tls_set_protocol_mode(turbo_tls_protocol_mode_t mode)
   return 0;
 }
 
-CXX_C_API turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void) {
+turbo_tls_protocol_mode_t turbo_stream_tls_get_protocol_mode(void) {
   return (turbo_tls_protocol_mode_t)atomic_load_explicit(&s_tls_protocol_mode,
                                                         memory_order_acquire);
 }
 
-CXX_C_API void turbo_stream_tls_reset_client_session_cache(void) {
+void turbo_stream_tls_reset_client_session_cache(void) {
   tls_global_lock();
   tls_reset_client_session_cache_internal();
   tls_global_unlock();
 }
 
-CXX_C_API void turbo_stream_tls_thread_cleanup(void) {
+void turbo_stream_tls_thread_cleanup(void) {
   ERR_clear_error();
 }
 
-CXX_C_API void turbo_stream_tls_global_cleanup(void) {
+void turbo_stream_tls_global_cleanup(void) {
   tls_global_cleanup();
 }
 
-CXX_C_API void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics) {
+void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics) {
   if (!metrics) {
     return;
   }
@@ -2767,7 +2767,7 @@ CXX_C_API void turbo_stream_tls_get_metrics(turbo_tls_metrics_t *metrics) {
       (uint64_t)tls_metric_load(&s_tls_metrics.server_handshake_pumps);
 }
 
-CXX_C_API void turbo_stream_tls_reset_metrics(void) {
+void turbo_stream_tls_reset_metrics(void) {
   atomic_store_explicit(&s_tls_metrics.client_handshakes_started, 0, memory_order_relaxed);
   atomic_store_explicit(&s_tls_metrics.client_handshakes_completed, 0, memory_order_relaxed);
   atomic_store_explicit(&s_tls_metrics.client_session_cache_attempts, 0, memory_order_relaxed);

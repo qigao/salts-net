@@ -58,37 +58,37 @@ typedef enum {
  * Create S/MIME context
  * Must be freed with mime_smime_ctx_free
  */
-CXX_C_API mime_smime_ctx_t *mime_smime_ctx_create(void);
+mime_smime_ctx_t *mime_smime_ctx_create(void);
 
 /**
  * Free S/MIME context
  */
-CXX_C_API void mime_smime_ctx_free(mime_smime_ctx_t *ctx);
+void mime_smime_ctx_free(mime_smime_ctx_t *ctx);
 
 /**
  * Load certificate from PEM file
  * Returns 0 on success, error code on failure
  */
-CXX_C_API int mime_smime_load_cert(mime_smime_ctx_t *ctx, const char *cert_path);
+int mime_smime_load_cert(mime_smime_ctx_t *ctx, const char *cert_path);
 
 /**
  * Load certificate from PEM string
  */
-CXX_C_API int mime_smime_load_cert_mem(mime_smime_ctx_t *ctx,
+int mime_smime_load_cert_mem(mime_smime_ctx_t *ctx,
                                         const char *cert_pem, size_t len);
 
 /**
  * Load private key from PEM file
  * Returns 0 on success, error code on failure
  */
-CXX_C_API int mime_smime_load_key(mime_smime_ctx_t *ctx,
+int mime_smime_load_key(mime_smime_ctx_t *ctx,
                                    const char *key_path,
                                    const char *password);
 
 /**
  * Load private key from PEM string
  */
-CXX_C_API int mime_smime_load_key_mem(mime_smime_ctx_t *ctx,
+int mime_smime_load_key_mem(mime_smime_ctx_t *ctx,
                                        const char *key_pem, size_t len,
                                        const char *password);
 
@@ -98,7 +98,7 @@ CXX_C_API int mime_smime_load_key_mem(mime_smime_ctx_t *ctx,
  * Encrypt MIME message
  * Returns encrypted PKCS7 data (caller must free)
  */
-CXX_C_API char *mime_smime_encrypt(mime_smime_ctx_t *ctx,
+char *mime_smime_encrypt(mime_smime_ctx_t *ctx,
                                     const char *message, size_t message_len,
                                     size_t *output_len,
                                     mime_smime_error_t *error);
@@ -107,7 +107,7 @@ CXX_C_API char *mime_smime_encrypt(mime_smime_ctx_t *ctx,
  * Decrypt S/MIME message
  * Returns decrypted message (caller must free)
  */
-CXX_C_API char *mime_smime_decrypt(mime_smime_ctx_t *ctx,
+char *mime_smime_decrypt(mime_smime_ctx_t *ctx,
                                     const char *encrypted, size_t encrypted_len,
                                     size_t *output_len,
                                     mime_smime_error_t *error);
@@ -118,7 +118,7 @@ CXX_C_API char *mime_smime_decrypt(mime_smime_ctx_t *ctx,
  * Sign MIME message
  * Returns signed PKCS7 data (caller must free)
  */
-CXX_C_API char *mime_smime_sign(mime_smime_ctx_t *ctx,
+char *mime_smime_sign(mime_smime_ctx_t *ctx,
                                  const char *message, size_t message_len,
                                  size_t *output_len,
                                  mime_smime_error_t *error);
@@ -128,7 +128,7 @@ CXX_C_API char *mime_smime_sign(mime_smime_ctx_t *ctx,
  * Returns 0 if valid, error code if invalid
  * If valid and output is not NULL, returns signed content
  */
-CXX_C_API int mime_smime_verify(mime_smime_ctx_t *ctx,
+int mime_smime_verify(mime_smime_ctx_t *ctx,
                                  const char *signed_data, size_t signed_len,
                                  char **output, size_t *output_len);
 
@@ -138,19 +138,19 @@ CXX_C_API int mime_smime_verify(mime_smime_ctx_t *ctx,
  * Check if message is S/MIME encrypted
  * Looks for application/pkcs7-mime with smime-type=enveloped-data
  */
-CXX_C_API int mime_is_smime_encrypted(const char *content_type, size_t len);
+int mime_is_smime_encrypted(const char *content_type, size_t len);
 
 /**
  * Check if message is S/MIME signed
  * Looks for application/pkcs7-mime with smime-type=signed-data
  * or multipart/signed with protocol=application/pkcs7-signature
  */
-CXX_C_API int mime_is_smime_signed(const char *content_type, size_t len);
+int mime_is_smime_signed(const char *content_type, size_t len);
 
 /**
  * Get last OpenSSL error message
  */
-CXX_C_API const char *mime_smime_get_error(mime_smime_ctx_t *ctx);
+const char *mime_smime_get_error(mime_smime_ctx_t *ctx);
 
 #ifdef __cplusplus
 }

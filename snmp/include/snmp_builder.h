@@ -6,6 +6,8 @@
 #ifndef SNMP_BUILDER_H
 #define SNMP_BUILDER_H
 
+
+#include "snmp_api.h"
 #include "platform.h"
 #include "snmp_types.h"
 #include <stdint.h>
@@ -39,7 +41,7 @@
  *       SNMP_VERSION_2C, "public", 1234, oids, 2, packet, &packet_len
  *   );
  */
-CXX_C_API int snmp_build_get_request(
+TURBONET_SNMP_C_API int snmp_build_get_request(
     snmp_version_t version,
     const char *community,
     int32_t request_id,
@@ -52,7 +54,7 @@ CXX_C_API int snmp_build_get_request(
 /**
  * Build SNMP GetNextRequest message (for MIB walking)
  */
-CXX_C_API int snmp_build_get_next_request(
+TURBONET_SNMP_C_API int snmp_build_get_next_request(
     snmp_version_t version,
     const char *community,
     int32_t request_id,
@@ -65,7 +67,7 @@ CXX_C_API int snmp_build_get_next_request(
 /**
  * Build SNMP SetRequest message
  */
-CXX_C_API int snmp_build_set_request(
+TURBONET_SNMP_C_API int snmp_build_set_request(
     snmp_version_t version,
     const char *community,
     int32_t request_id,
@@ -81,7 +83,7 @@ CXX_C_API int snmp_build_set_request(
  * @param non_repeaters Number of non-repeating variables
  * @param max_repetitions Maximum repetitions for repeating variables
  */
-CXX_C_API int snmp_build_get_bulk_request(
+TURBONET_SNMP_C_API int snmp_build_get_bulk_request(
     const char *community,
     int32_t request_id,
     int32_t non_repeaters,
@@ -101,23 +103,23 @@ CXX_C_API int snmp_build_get_bulk_request(
  *
  * NOTE: Caller must free oid->components when done
  */
-CXX_C_API int snmp_oid_from_string(const char *oid_str, snmp_oid_t *oid);
+TURBONET_SNMP_C_API int snmp_oid_from_string(const char *oid_str, snmp_oid_t *oid);
 
 /**
  * Helper: Convert OID to string
  */
-CXX_C_API int snmp_oid_to_string(const snmp_oid_t *oid, char *buf, size_t buf_len);
+TURBONET_SNMP_C_API int snmp_oid_to_string(const snmp_oid_t *oid, char *buf, size_t buf_len);
 
 /**
  * Helper: Compare two OIDs
  * @return 0 if equal, <0 if oid1 < oid2, >0 if oid1 > oid2
  */
-CXX_C_API int snmp_oid_compare(const snmp_oid_t *oid1, const snmp_oid_t *oid2);
+TURBONET_SNMP_C_API int snmp_oid_compare(const snmp_oid_t *oid1, const snmp_oid_t *oid2);
 
 /**
  * Helper: Free OID components
  */
-CXX_C_API void snmp_oid_free(snmp_oid_t *oid);
+TURBONET_SNMP_C_API void snmp_oid_free(snmp_oid_t *oid);
 
 /**
  * Build SNMPv3 GetRequest message with USM security
@@ -132,7 +134,7 @@ CXX_C_API void snmp_oid_free(snmp_oid_t *oid);
  * @param out_len [in] Buffer size, [out] Encoded length
  * @return SNMP_BUILD_OK on success, negative error code on failure
  */
-CXX_C_API int snmp_build_v3_get_request(
+TURBONET_SNMP_C_API int snmp_build_v3_get_request(
     int32_t request_id,
     const snmp_oid_t *oids,
     size_t oid_count,

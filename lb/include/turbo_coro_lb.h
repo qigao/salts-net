@@ -12,6 +12,8 @@
 #ifndef coro_LB_H
 #define coro_LB_H
 
+
+#include "turbo_lb_api.h"
 #include "platform.h"
 #include <CoroNet/turbo_coro_context.h>
 #include <CoroNet/turbo_coro_thread_pool.h>
@@ -116,18 +118,18 @@ typedef struct {
 
 /* ── API ──────────────────────────────────────────────────── */
 
-CXX_C_API coro_lb_t *
+TURBONET_LB_C_API coro_lb_t *
 coro_lb_create(coro_context_t *ctx,
                      const coro_lb_config_t *config);
 
-CXX_C_API int coro_lb_listen(coro_lb_t *lb, const char *host, int port);
+TURBONET_LB_C_API int coro_lb_listen(coro_lb_t *lb, const char *host, int port);
 
-CXX_C_API int coro_lb_accept_workers(coro_lb_t *lb,
+TURBONET_LB_C_API int coro_lb_accept_workers(coro_lb_t *lb,
                                             const char *host, int port);
 
-CXX_C_API void coro_lb_stop(coro_lb_t *lb);
+TURBONET_LB_C_API void coro_lb_stop(coro_lb_t *lb);
 
-CXX_C_API void coro_lb_destroy(coro_lb_t *lb);
+TURBONET_LB_C_API void coro_lb_destroy(coro_lb_t *lb);
 
 #ifdef __cplusplus
 }

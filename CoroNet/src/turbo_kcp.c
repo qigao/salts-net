@@ -147,7 +147,7 @@ static void kcp_final_free_task(void* arg1, void* arg2) {
     turbo_timer_destroy(k->update_timer);
     k->update_timer = NULL;
   }
-  TLOG_DEBUG("KCP final free: {}", (void*)k);
+  TLOG_DEBUGF("KCP final free: {}", (void*)k);
   free(k);
   coro_context_release_external(ctx);
 }

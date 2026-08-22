@@ -9,8 +9,11 @@
 #ifndef coro_CONTEXT_H
 #define coro_CONTEXT_H
 
+
+#include "coronet_api.h"
 #include "platform.h"
 #include "turbo_backend.h"
+#include "turbo_error.h"
 #include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -39,15 +42,15 @@ struct coro_object_pool_config_s;
 typedef struct turbo_loop_s turbo_loop_t;
 
 /** Native loop basic lifecycle APIs (called internally by coro_context.c) */
-CXX_C_API turbo_loop_t *turbo_loop_create(void);
-CXX_C_API void turbo_loop_destroy(turbo_loop_t *loop);
-CXX_C_API void turbo_loop_stop(turbo_loop_t *loop);
-CXX_C_API void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block);
-CXX_C_API int turbo_loop_alive(turbo_loop_t *loop);
-CXX_C_API uint64_t turbo_loop_now(turbo_loop_t *loop);
-CXX_C_API void turbo_loop_ref(turbo_loop_t *loop);
-CXX_C_API void turbo_loop_unref(turbo_loop_t *loop);
-CXX_C_API void turbo_loop_wake(turbo_loop_t *loop);
+CORONET_C_API turbo_loop_t *turbo_loop_create(void);
+CORONET_C_API void turbo_loop_destroy(turbo_loop_t *loop);
+CORONET_C_API void turbo_loop_stop(turbo_loop_t *loop);
+CORONET_C_API void turbo_loop_poll(turbo_loop_t *loop, int max_ms, int block);
+CORONET_C_API int turbo_loop_alive(turbo_loop_t *loop);
+CORONET_C_API uint64_t turbo_loop_now(turbo_loop_t *loop);
+CORONET_C_API void turbo_loop_ref(turbo_loop_t *loop);
+CORONET_C_API void turbo_loop_unref(turbo_loop_t *loop);
+CORONET_C_API void turbo_loop_wake(turbo_loop_t *loop);
 
 /**
  * @brief Return the backend loop object wrapped by this context.
@@ -59,7 +62,7 @@ CXX_C_API void turbo_loop_wake(turbo_loop_t *loop);
  * @param ctx Context to query
  * @return Opaque native/backend loop pointer, or NULL for NULL context
  */
-CXX_C_API void *coro_context_native_loop(const coro_context_t *ctx);
+CORONET_C_API void *coro_context_native_loop(const coro_context_t *ctx);
 
 /**
  * @brief Create an event-loop context.
@@ -73,7 +76,7 @@ CXX_C_API void *coro_context_native_loop(const coro_context_t *ctx);
  *
  * @return Context handle or NULL on failure
  */
-CXX_C_API coro_context_t *coro_context_create(void *loop);
+CORONET_C_API coro_context_t *coro_context_create(void *loop);
 
 /**
  * @brief Create an event-loop context with an explicitly sized coroutine pool.
@@ -87,7 +90,7 @@ CXX_C_API coro_context_t *coro_context_create(void *loop);
  * @param pool_config Coroutine pool capacity and stack configuration, or NULL.
  * @return Context handle or NULL when configuration or allocation fails.
  */
-CXX_C_API coro_context_t *
+CORONET_C_API coro_context_t *
 coro_context_create_ex(void *loop, const struct coro_object_pool_config_s *pool_config);
 
 /**
@@ -99,7 +102,7 @@ coro_context_create_ex(void *loop, const struct coro_object_pool_config_s *pool_
  *
  * @param ctx  Context to destroy (NULL-safe)
  */
-CXX_C_API void coro_context_destroy(coro_context_t *ctx);
+CORONET_C_API void coro_context_destroy(coro_context_t *ctx);
 
 /**
  * Keep a context alive while an external asynchronous producer may post work.
@@ -107,10 +110,10 @@ CXX_C_API void coro_context_destroy(coro_context_t *ctx);
  * coro_context_release_external(). The caller must release the reference
  * before destroying its producer.
  */
-CXX_C_API void coro_context_acquire_external(coro_context_t *ctx);
+CORONET_C_API void coro_context_acquire_external(coro_context_t *ctx);
 
 /** Release one external-producer reference acquired for this context. */
-CXX_C_API void coro_context_release_external(coro_context_t *ctx);
+CORONET_C_API void coro_context_release_external(coro_context_t *ctx);
 
 /**
  * @brief Controls how coro_context_run() drives the event loop.
@@ -140,7 +143,7 @@ typedef enum turbo_run_mode_e {
  * @param mode  Execution mode (see turbo_run_mode_t)
  * @return 0 when the loop is idle, non-zero if active handles remain
  */
-CXX_C_API int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode);
+CORONET_C_API int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode);
 
 /**
  * @brief Stop the event loop.
@@ -150,7 +153,7 @@ CXX_C_API int coro_context_run(coro_context_t *ctx, turbo_run_mode_t mode);
  *
  * @param ctx  Context to stop
  */
-CXX_C_API void coro_context_stop(coro_context_t *ctx);
+CORONET_C_API void coro_context_stop(coro_context_t *ctx);
 
 /**
  * @brief Set whether the context should remain alive when idle.
@@ -164,7 +167,7 @@ CXX_C_API void coro_context_stop(coro_context_t *ctx);
  * @param ctx         Context to modify
  * @param persistent  1 for persistent (keeps loop alive), 0 for transient
  */
-CXX_C_API void coro_context_set_persistent(coro_context_t *ctx, int persistent);
+CORONET_C_API void coro_context_set_persistent(coro_context_t *ctx, int persistent);
 
 /**
  * @brief Set the preferred TCP backend for coroutine sockets created by this context.
@@ -176,7 +179,7 @@ CXX_C_API void coro_context_set_persistent(coro_context_t *ctx, int persistent);
  * @param backend  Preferred backend
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backend_t backend);
+CORONET_C_API int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backend_t backend);
 
 /**
  * @brief Get the preferred TCP backend for future coroutine TCP sockets.
@@ -184,7 +187,7 @@ CXX_C_API int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backen
  * @param ctx Context to query
  * @return Preferred backend, or AUTO for NULL
  */
-CXX_C_API turbo_tcp_backend_t coro_context_get_tcp_backend(const coro_context_t *ctx);
+CORONET_C_API turbo_tcp_backend_t coro_context_get_tcp_backend(const coro_context_t *ctx);
 
 /**
  * @brief Set the preferred UDP backend for coroutine sockets created by this context.
@@ -196,7 +199,7 @@ CXX_C_API turbo_tcp_backend_t coro_context_get_tcp_backend(const coro_context_t 
  * @param backend  Preferred backend
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backend);
+CORONET_C_API int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backend);
 
 /**
  * @brief Get the preferred UDP backend for future coroutine UDP sockets.
@@ -204,7 +207,7 @@ CXX_C_API int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backen
  * @param ctx Context to query
  * @return Preferred backend, or AUTO for NULL
  */
-CXX_C_API turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx);
+CORONET_C_API turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t *ctx);
 
 /**
  * @brief Set the receive-buffer capacity used by streams created after this call.
@@ -217,10 +220,10 @@ CXX_C_API turbo_udp_backend_t coro_context_get_udp_backend(const coro_context_t 
  * @param bytes Non-zero capacity of each receive buffer.
  * @return TURBO_OK or TURBO_EINVAL.
  */
-CXX_C_API int coro_context_set_stream_recv_buffer_size(coro_context_t *ctx, size_t bytes);
+CORONET_C_API int coro_context_set_stream_recv_buffer_size(coro_context_t *ctx, size_t bytes);
 
 /** @return Configured per-buffer capacity, or the default for a NULL context. */
-CXX_C_API size_t coro_context_get_stream_recv_buffer_size(const coro_context_t *ctx);
+CORONET_C_API size_t coro_context_get_stream_recv_buffer_size(const coro_context_t *ctx);
 
 /**
  * @brief Get the last synchronous API error recorded on this context.
@@ -231,7 +234,7 @@ CXX_C_API size_t coro_context_get_stream_recv_buffer_size(const coro_context_t *
  * @param ctx Context to query
  * @return 0 if no error is recorded, or the last negative TURBO/system error
  */
-CXX_C_API int coro_context_get_last_error(const coro_context_t *ctx);
+CORONET_C_API int coro_context_get_last_error(const coro_context_t *ctx);
 
 // =============================================================================
 // Query
@@ -242,14 +245,14 @@ CXX_C_API int coro_context_get_last_error(const coro_context_t *ctx);
  * @param ctx  Context to query
  * @return 1 if alive (has work to do), 0 if idle
  */
-CXX_C_API int coro_context_alive(coro_context_t *ctx);
+CORONET_C_API int coro_context_alive(coro_context_t *ctx);
 
 /**
  * @brief Get the number of active coroutines in this context.
  * @param ctx  Context to query
  * @return Count of alive coroutines
  */
-CXX_C_API int coro_context_coro_count(coro_context_t *ctx);
+CORONET_C_API int coro_context_coro_count(coro_context_t *ctx);
 
 /**
  * @brief Get the cached event-loop timestamp (milliseconds).
@@ -260,7 +263,7 @@ CXX_C_API int coro_context_coro_count(coro_context_t *ctx);
  * @param ctx  Context to query
  * @return Monotonic time in milliseconds
  */
-CXX_C_API uint64_t coro_context_now(coro_context_t *ctx);
+CORONET_C_API uint64_t coro_context_now(coro_context_t *ctx);
 
 /** Callback type for coro_post(). */
 typedef void (*coro_post_fn)(void *arg1, void *arg2);
@@ -277,14 +280,7 @@ typedef void (*coro_post_fn)(void *arg1, void *arg2);
  * @param arg2 Second opaque argument
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2);
-
-/**
- * @brief Return a human-readable error string for an error code.
- * @param err  Error code (TURBO_* or backend-compatible)
- * @return Static string describing the error
- */
-CXX_C_API const char *turbo_strerror(int err);
+CORONET_C_API int coro_post(coro_context_t *ctx, coro_post_fn fn, void *arg1, void *arg2);
 
 /**
  * @brief Get the current thread's event-loop context.
@@ -294,7 +290,7 @@ CXX_C_API const char *turbo_strerror(int err);
  *
  * @return Current context or NULL if no context is active on this thread.
  */
-CXX_C_API coro_context_t *coro_context_current(void);
+CORONET_C_API coro_context_t *coro_context_current(void);
 
 // =============================================================================
 // Managed Coroutines (Auto-cleanup)
@@ -322,7 +318,7 @@ typedef void (*coro_fn)(coro_t *co, void *arg);
  * @param arg  Argument passed to fn
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_context_spawn(coro_context_t *ctx, coro_fn fn, void *arg);
+CORONET_C_API int coro_context_spawn(coro_context_t *ctx, coro_fn fn, void *arg);
 
 // =============================================================================
 // Lazy Tasks (Deferred Execution)
@@ -347,7 +343,7 @@ typedef struct coro_task_s coro_task_t;
  * @param arg  Argument passed to fn
  * @return Task handle or NULL on failure
  */
-CXX_C_API coro_task_t *coro_task_create(coro_context_t *ctx,
+CORONET_C_API coro_task_t *coro_task_create(coro_context_t *ctx,
                                                      coro_fn fn,
                                                      void *arg);
 
@@ -360,7 +356,7 @@ CXX_C_API coro_task_t *coro_task_create(coro_context_t *ctx,
  * @param task  Task to start
  * @return 0 on success, TURBO_EINVAL if already started/cancelled
  */
-CXX_C_API int coro_task_start(coro_task_t *task);
+CORONET_C_API int coro_task_start(coro_task_t *task);
 
 /**
  * @brief Cancel a lazy task.
@@ -371,7 +367,7 @@ CXX_C_API int coro_task_start(coro_task_t *task);
  * @param task  Task to cancel
  * @return 0 on success, TURBO_EINVAL if already started
  */
-CXX_C_API int coro_task_cancel(coro_task_t *task);
+CORONET_C_API int coro_task_cancel(coro_task_t *task);
 
 /**
  * @brief Check if a task has completed.
@@ -379,7 +375,7 @@ CXX_C_API int coro_task_cancel(coro_task_t *task);
  * @param task  Task to check
  * @return 1 if completed, 0 if still running or not started
  */
-CXX_C_API int coro_task_is_done(coro_task_t *task);
+CORONET_C_API int coro_task_is_done(coro_task_t *task);
 
 /**
  * @brief Manually destroy a task.
@@ -391,7 +387,7 @@ CXX_C_API int coro_task_is_done(coro_task_t *task);
  *
  * @param task  Task to destroy (NULL-safe)
  */
-CXX_C_API void coro_task_destroy(coro_task_t *task);
+CORONET_C_API void coro_task_destroy(coro_task_t *task);
 
 // =============================================================================
 // Task Combinators (Composition)
@@ -424,7 +420,7 @@ CXX_C_API void coro_task_destroy(coro_task_t *task);
  * @param count  Number of tasks (0 = no-op, returns 0)
  * @return 0 on success, negative error code on failure
  */
-CXX_C_API int coro_when_all(coro_context_t *ctx,
+CORONET_C_API int coro_when_all(coro_context_t *ctx,
                                    coro_task_t **tasks,
                                    int count);
 
@@ -462,7 +458,7 @@ CXX_C_API int coro_when_all(coro_context_t *ctx,
  * @param count  Number of tasks (must be > 0)
  * @return Index of first completed task (0..count-1), or negative error code
  */
-CXX_C_API int coro_when_any(coro_context_t *ctx,
+CORONET_C_API int coro_when_any(coro_context_t *ctx,
                                    coro_task_t **tasks,
                                    int count);
 
@@ -471,22 +467,22 @@ CXX_C_API int coro_when_any(coro_context_t *ctx,
 // =============================================================================
 
 /** Create a reusable wait bound to @p ctx. One handle supports one active waiter. */
-CXX_C_API coro_wait_t *coro_wait_create(coro_context_t *ctx);
+CORONET_C_API coro_wait_t *coro_wait_create(coro_context_t *ctx);
 
 /** Destroy an idle wait. Returns TURBO_EBUSY while a wait is active. */
-CXX_C_API int coro_wait_destroy(coro_wait_t *wait);
+CORONET_C_API int coro_wait_destroy(coro_wait_t *wait);
 
 /**
  * Suspend the current coroutine without blocking the event loop.
  * Returns TURBO_OK after @p ms, or the status passed to coro_wait_interrupt().
  */
-CXX_C_API int coro_wait_for(coro_wait_t *wait, uint64_t ms);
+CORONET_C_API int coro_wait_for(coro_wait_t *wait, uint64_t ms);
 
 /**
  * Interrupt an active wait from any thread. Exactly one timer or interrupt
  * completion resumes the waiter. @p status must be a non-zero Turbo error.
  */
-CXX_C_API int coro_wait_interrupt(coro_wait_t *wait, int status);
+CORONET_C_API int coro_wait_interrupt(coro_wait_t *wait, int status);
 
 /**
  * @brief Sleep for specified milliseconds (coroutine-aware).
@@ -503,13 +499,11 @@ CXX_C_API int coro_wait_interrupt(coro_wait_t *wait, int status);
  * @param ctx  Event-loop context
  * @param ms   Milliseconds to sleep (0 = yield to scheduler)
  */
-CXX_C_API void coro_sleep(coro_context_t *ctx, uint64_t ms);
+CORONET_C_API void coro_sleep(coro_context_t *ctx, uint64_t ms);
 
 /* ── Error codes ──────────────────────────────────────────────
  * Defined in turbo_error.h — included here for convenience.
  * ──────────────────────────────────────────────────────────── */
-#include "turbo_error.h"
-
 // =============================================================================
 // Memory Pool
 // =============================================================================
@@ -524,10 +518,10 @@ CXX_C_API void coro_sleep(coro_context_t *ctx, uint64_t ms);
  *
  * @return Pointer to the global memory pool (never NULL)
  */
-CXX_C_API void* coro_get_memory_pool(void);
-CXX_C_API void* coro_context_get_arena(coro_context_t *ctx);
-CXX_C_API void coro_context_native_ref(coro_context_t *ctx);
-CXX_C_API void coro_context_native_unref(coro_context_t *ctx);
+CORONET_C_API void* coro_get_memory_pool(void);
+CORONET_C_API void* coro_context_get_arena(coro_context_t *ctx);
+CORONET_C_API void coro_context_native_ref(coro_context_t *ctx);
+CORONET_C_API void coro_context_native_unref(coro_context_t *ctx);
 
 #ifdef __cplusplus
 }

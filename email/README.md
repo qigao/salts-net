@@ -279,7 +279,7 @@ int email_message_enable_signing(email_message_t *msg, const char *cert_path,
 int email_message_enable_encryption(email_message_t *msg, const char *recipient_cert_path);
 
 // Serialization
-tstr_t email_message_to_string(email_message_t *msg);
+tstr email_message_to_string(email_message_t *msg);
 email_message_t *email_message_parse(mem_pool_t *pool, const char *raw_message, size_t len);
 ```
 

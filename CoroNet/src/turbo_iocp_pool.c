@@ -126,7 +126,7 @@ iocp_pool_t *iocp_pool_create(coro_context_t *ctx, int num_workers) {
     }
   }
 
-  TLOG_DEBUG("iocp_pool: created with {:d} workers", num_workers);
+  TLOG_DEBUGF("iocp_pool: created with {:d} workers", num_workers);
   return pool;
 }
 

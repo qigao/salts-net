@@ -1,7 +1,4 @@
-# WebSocket Parser - Hand-written parsers for CoroNet
-
-# Find llhttp for handshake parsing
-find_package(llhttp CONFIG REQUIRED)
+# WebSocket Parser - bounded RFC 6455 framing and compatibility handshake parser
 
 # Create parser library using source .c files directly
 add_library(websocket_parser STATIC websocket_frame_parser.c
@@ -10,10 +7,6 @@ add_library(websocket_parser STATIC websocket_frame_parser.c
 # Include current source directory for headers
 target_include_directories(
   websocket_parser PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>)
-
-# Link llhttp for HTTP handshake parsing
-target_link_libraries(websocket_parser PRIVATE llhttp::llhttp_static
-                                               TurboUtils::Core)
 
 # Export include directories for parent scope
 set(WEBSOCKET_PARSER_INCLUDE_DIRS

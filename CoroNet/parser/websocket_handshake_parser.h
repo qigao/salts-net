@@ -117,10 +117,10 @@ typedef struct {
   char *upgrade;          // Upgrade header
   char *connection;       // Connection header
 
-  // Internal llhttp state (opaque pointers)
-  void *http_parser;   // llhttp_t*
-  void *http_context;  // llhttp_context_t*
-  void *http_settings; // llhttp_settings_t*
+  /* Reserved ABI slots retained for source and binary layout compatibility. */
+  void *http_parser;
+  void *http_context;
+  void *http_settings;
 } websocket_handshake_parser_t;
 
 /**

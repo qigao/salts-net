@@ -26,7 +26,7 @@ spec("websocket_protocol") {
       uint8_t expected[20] = {0xa9, 0x99, 0x3e, 0x36, 0x47, 0x06, 0x81, 0x6a, 0xba, 0x3e,
                               0x25, 0x71, 0x78, 0x50, 0xc2, 0x6c, 0x9c, 0xd0, 0xd8, 0x9d};
 
-      check_mem_eq(hash, expected, 20);
+      check_equal(hash, expected, 20);
     }
 
     it("should hash empty string correctly") {
@@ -41,7 +41,7 @@ spec("websocket_protocol") {
       uint8_t expected[20] = {0xda, 0x39, 0xa3, 0xee, 0x5e, 0x6b, 0x4b, 0x0d, 0x32, 0x55,
                               0xbf, 0xef, 0x95, 0x60, 0x18, 0x90, 0xaf, 0xd8, 0x07, 0x09};
 
-      check_mem_eq(hash, expected, 20);
+      check_equal(hash, expected, 20);
     }
   }
 
@@ -52,20 +52,20 @@ spec("websocket_protocol") {
 
       // Encode
       int result = tn_base64_encode((const uint8_t *)input, strlen(input), &encoded);
-      check_int_eq(result, 0);
+      check_equal(result, 0);
       check_not_null(encoded);
 
       // Expected: "SGVsbG8sIFdlYlNvY2tldCE="
-      check_str_eq(encoded, "SGVsbG8sIFdlYlNvY2tldCE=");
+      check_equal(encoded, "SGVsbG8sIFdlYlNvY2tldCE=");
 
       // Decode
       uint8_t *decoded = NULL;
       size_t decoded_len = 0;
       result = tn_base64_decode(encoded, &decoded, &decoded_len);
-      check_int_eq(result, 0);
+      check_equal(result, 0);
       check_not_null(decoded);
-      check_size_eq(decoded_len, strlen(input));
-      check_mem_eq(decoded, input, decoded_len);
+      check_equal(decoded_len, strlen(input));
+      check_equal(decoded, input, decoded_len);
 
       free(encoded);
       free(decoded);
@@ -74,9 +74,9 @@ spec("websocket_protocol") {
     it("should encode empty data correctly") {
       char *encoded = NULL;
       int result = tn_base64_encode((const uint8_t *)"", 0, &encoded);
-      check_int_eq(result, 0);
+      check_equal(result, 0);
       check_not_null(encoded);
-      check_str_eq(encoded, "");
+      check_equal(encoded, "");
       free(encoded);
     }
   }
@@ -86,16 +86,16 @@ spec("websocket_protocol") {
       // Valid UTF-8
       const char *valid = "Hello, 世界!";
       int result = validate_utf8((const uint8_t *)valid, strlen(valid));
-      check_int_eq(result, 0); // 0 = success
+      check_equal(result, 0); // 0 = success
 
       // Valid UTF-8 (ASCII only)
       result = validate_utf8((const uint8_t *)"Hello", 5);
-      check_int_eq(result, 0); // 0 = success
+      check_equal(result, 0); // 0 = success
 
       // Invalid UTF-8 (incomplete sequence)
       const uint8_t invalid[] = {0xC0, 0x80}; // Overlong encoding
       result = validate_utf8(invalid, 2);
-      check_int_eq(result, -1); // -1 = error
+      check_equal(result, -1); // -1 = error
     }
   }
 
@@ -111,12 +111,12 @@ spec("websocket_protocol") {
       // Expected unmasked data
       uint8_t expected[] = {0x01 ^ 0x37, 0x02 ^ 0xfa, 0x03 ^ 0x21, 0x04 ^ 0x3d, 0x05 ^ 0x37};
 
-      check_mem_eq(payload, expected, payload_len);
+      check_equal(payload, expected, payload_len);
 
       // Unmask again should restore original (XOR is reversible)
       ws_frame_unmask(payload, payload_len, masking_key);
       uint8_t original[] = {0x01, 0x02, 0x03, 0x04, 0x05};
-      check_mem_eq(payload, original, payload_len);
+      check_equal(payload, original, payload_len);
     }
   }
 
@@ -133,11 +133,11 @@ spec("websocket_protocol") {
       ws_frame_t parsed;
       ws_parse_result_t result = ws_frame_parse(frame, sizeof(frame), &parsed);
 
-      check_int_eq(result, WS_PARSE_OK);
-      check_int_eq(parsed.fin, 1);
-      check_int_eq(parsed.opcode, WS_OPCODE_TEXT);
-      check_int_eq(parsed.masked, 1);
-      check_size_eq(parsed.payload_len, 5);
+      check_equal(result, WS_PARSE_OK);
+      check_equal(parsed.fin, 1);
+      check_equal(parsed.opcode, WS_OPCODE_TEXT);
+      check_equal(parsed.masked, 1);
+      check_equal(parsed.payload_len, 5);
       check_not_null(parsed.payload);
     }
 
@@ -151,11 +151,11 @@ spec("websocket_protocol") {
       ws_frame_t parsed;
       ws_parse_result_t result = ws_frame_parse(frame, sizeof(frame), &parsed);
 
-      check_int_eq(result, WS_PARSE_OK);
-      check_int_eq(parsed.fin, 1);
-      check_int_eq(parsed.opcode, WS_OPCODE_CLOSE);
-      check_int_eq(parsed.masked, 0);
-      check_size_eq(parsed.payload_len, 0);
+      check_equal(result, WS_PARSE_OK);
+      check_equal(parsed.fin, 1);
+      check_equal(parsed.opcode, WS_OPCODE_CLOSE);
+      check_equal(parsed.masked, 0);
+      check_equal(parsed.payload_len, 0);
 
       // Validate it's a control frame
       check(ws_is_control(parsed.opcode));
@@ -170,11 +170,11 @@ spec("websocket_protocol") {
       ws_frame_t parsed;
       ws_parse_result_t result = ws_frame_parse(frame, sizeof(frame), &parsed);
 
-      check_int_eq(result, WS_PARSE_OK);
-      check_int_eq(parsed.fin, 1);
-      check_int_eq(parsed.opcode, WS_OPCODE_PING);
-      check_int_eq(parsed.masked, 0);
-      check_size_eq(parsed.payload_len, 4);
+      check_equal(result, WS_PARSE_OK);
+      check_equal(parsed.fin, 1);
+      check_equal(parsed.opcode, WS_OPCODE_PING);
+      check_equal(parsed.masked, 0);
+      check_equal(parsed.payload_len, 4);
 
       // Validate it's a control frame
       check(ws_is_control(WS_OPCODE_PING));
@@ -188,7 +188,7 @@ spec("websocket_protocol") {
       ws_parse_result_t result = ws_frame_parse(frame, sizeof(frame), &parsed);
 
       // Should return NEED_MORE for incomplete header
-      check_int_eq(result, WS_PARSE_NEED_MORE);
+      check_equal(result, WS_PARSE_NEED_MORE);
     }
 
     it("should peek frame size correctly") {
@@ -203,31 +203,31 @@ spec("websocket_protocol") {
       size_t needed;
       ws_parse_result_t result = ws_frame_peek_size(frame, sizeof(frame), &needed);
 
-      check_int_eq(result, WS_PARSE_OK);
-      check_size_eq(needed, 11); // 2 + 4 (mask) + 5 (payload)
+      check_equal(result, WS_PARSE_OK);
+      check_equal(needed, 11); // 2 + 4 (mask) + 5 (payload)
     }
 
     it("should calculate header length correctly") {
       // Small payload, no mask
-      check_size_eq(ws_frame_header_len(0, 0), 2);
-      check_size_eq(ws_frame_header_len(125, 0), 2);
+      check_equal(ws_frame_header_len(0, 0), 2);
+      check_equal(ws_frame_header_len(125, 0), 2);
 
       // Small payload, masked
-      check_size_eq(ws_frame_header_len(0, 1), 6);
-      check_size_eq(ws_frame_header_len(125, 1), 6);
+      check_equal(ws_frame_header_len(0, 1), 6);
+      check_equal(ws_frame_header_len(125, 1), 6);
 
       // 16-bit length, no mask
-      check_size_eq(ws_frame_header_len(126, 0), 4);
-      check_size_eq(ws_frame_header_len(65535, 0), 4);
+      check_equal(ws_frame_header_len(126, 0), 4);
+      check_equal(ws_frame_header_len(65535, 0), 4);
 
       // 16-bit length, masked
-      check_size_eq(ws_frame_header_len(126, 1), 8);
+      check_equal(ws_frame_header_len(126, 1), 8);
 
       // 64-bit length, no mask
-      check_size_eq(ws_frame_header_len(65536, 0), 10);
+      check_equal(ws_frame_header_len(65536, 0), 10);
 
       // 64-bit length, masked
-      check_size_eq(ws_frame_header_len(65536, 1), 14);
+      check_equal(ws_frame_header_len(65536, 1), 14);
     }
   }
 }

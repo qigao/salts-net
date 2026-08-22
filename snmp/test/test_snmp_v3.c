@@ -18,8 +18,8 @@ spec("snmp_v3") {
 
         int result = usm_password_to_key(password, SNMP_AUTH_MD5, key, &key_len);
 
-        check_int_eq(result, USM_OK);
-        check_size_eq(key_len, 16);
+        check_equal(result, USM_OK);
+        check_equal(key_len, 16);
     }
 
     it("should derive SHA1 key from password correctly") {
@@ -29,8 +29,8 @@ spec("snmp_v3") {
 
         int result = usm_password_to_key(password, SNMP_AUTH_SHA1, key, &key_len);
 
-        check_int_eq(result, USM_OK);
-        check_size_eq(key_len, 20);
+        check_equal(result, USM_OK);
+        check_equal(key_len, 20);
     }
   }
 
@@ -59,8 +59,8 @@ spec("snmp_v3") {
             localized_key, &localized_key_len
         );
 
-        check_int_eq(result, USM_OK);
-        check_size_eq(localized_key_len, 16);
+        check_equal(result, USM_OK);
+        check_equal(localized_key_len, 16);
 
         /* Verify localized key is different from master key */
         check(memcmp(master_key, localized_key, 16) != 0);
@@ -85,7 +85,7 @@ spec("snmp_v3") {
             auth_params
         );
 
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
 
         /* Verify HMAC */
         result = usm_verify_auth(
@@ -95,7 +95,7 @@ spec("snmp_v3") {
             auth_params
         );
 
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
 
         /* Verify with corrupted message fails */
         message[0] = 'X';
@@ -106,7 +106,7 @@ spec("snmp_v3") {
             auth_params
         );
 
-        check_int_eq(result, USM_ERROR_AUTH_FAILED);
+        check_equal(result, USM_ERROR_AUTH_FAILED);
     }
   }
 
@@ -134,7 +134,7 @@ spec("snmp_v3") {
             &ciphertext_len
         );
 
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
         check(ciphertext_len > 0);
 
         /* Decrypt */
@@ -152,9 +152,9 @@ spec("snmp_v3") {
             &decrypted_len
         );
 
-        check_int_eq(result, USM_OK);
-        check_size_eq(decrypted_len, sizeof(plaintext) - 1);
-        check_mem_eq(decrypted, plaintext, decrypted_len);
+        check_equal(result, USM_OK);
+        check_equal(decrypted_len, sizeof(plaintext) - 1);
+        check_equal(decrypted, plaintext, decrypted_len);
     }
 
     it("should successfully encrypt and decrypt using AES-128-CFB") {
@@ -180,8 +180,8 @@ spec("snmp_v3") {
             &ciphertext_len
         );
 
-        check_int_eq(result, USM_OK);
-        check_size_eq(ciphertext_len, sizeof(plaintext) - 1);  /* CFB mode, no padding */
+        check_equal(result, USM_OK);
+        check_equal(ciphertext_len, sizeof(plaintext) - 1);  /* CFB mode, no padding */
 
         /* Decrypt */
         uint8_t decrypted[128];
@@ -198,9 +198,9 @@ spec("snmp_v3") {
             &decrypted_len
         );
 
-        check_int_eq(result, USM_OK);
-        check_size_eq(decrypted_len, sizeof(plaintext) - 1);
-        check_mem_eq(decrypted, plaintext, decrypted_len);
+        check_equal(result, USM_OK);
+        check_equal(decrypted_len, sizeof(plaintext) - 1);
+        check_equal(decrypted, plaintext, decrypted_len);
     }
   }
 
@@ -221,23 +221,23 @@ spec("snmp_v3") {
         size_t encoded_len = sizeof(encoded);
 
         int result = usm_encode_security_params(&params, encoded, &encoded_len);
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
         check(encoded_len > 0);
 
         /* Decode with memory pool */
         MemoryPool *pool = pool_create(1024);
         snmp_usm_params_t decoded;
         result = usm_decode_security_params(encoded, encoded_len, &decoded, pool);
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
 
         /* Verify */
-        check_size_eq(decoded.engine_id_len, params.engine_id_len);
-        check_mem_eq(decoded.authoritative_engine_id, engine_id, sizeof(engine_id));
-        check_int_eq(decoded.engine_boots, 100);
-        check_int_eq(decoded.engine_time, 12345);
-        check_str_eq(decoded.user_name, "testuser");
-        check_mem_eq(decoded.auth_params, params.auth_params, 12);
-        check_mem_eq(decoded.priv_params, params.priv_params, 8);
+        check_equal(decoded.engine_id_len, params.engine_id_len);
+        check_equal(decoded.authoritative_engine_id, engine_id, sizeof(engine_id));
+        check_equal(decoded.engine_boots, 100);
+        check_equal(decoded.engine_time, 12345);
+        check_equal(decoded.user_name, "testuser");
+        check_equal(decoded.auth_params, params.auth_params, 12);
+        check_equal(decoded.priv_params, params.priv_params, 8);
 
         pool_destroy(pool);
     }
@@ -249,14 +249,14 @@ spec("snmp_v3") {
         uint32_t boots, time_val;
         usm_engine_time_get(&state, &boots, &time_val);
 
-        check_int_eq(boots, 1);
-        check_int_eq(time_val, 0);  /* Just initialized */
+        check_equal(boots, 1);
+        check_equal(time_val, 0);  /* Just initialized */
 
         /* Update with remote time */
         usm_engine_time_update(&state, 5, 1000);
 
         usm_engine_time_get(&state, &boots, &time_val);
-        check_int_eq(boots, 5);
+        check_equal(boots, 5);
         check(time_val >= 1000);
     }
 
@@ -267,19 +267,19 @@ spec("snmp_v3") {
 
         /* Same boots, within window (+50 seconds) */
         int result = usm_verify_time_window(&local_state, 100, 1050);
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
 
         /* Same boots, outside window (+200 seconds) */
         result = usm_verify_time_window(&local_state, 100, 1200);
-        check_int_eq(result, USM_ERROR_AUTH_FAILED);
+        check_equal(result, USM_ERROR_AUTH_FAILED);
 
         /* Old boots */
         result = usm_verify_time_window(&local_state, 99, 1000);
-        check_int_eq(result, USM_ERROR_AUTH_FAILED);
+        check_equal(result, USM_ERROR_AUTH_FAILED);
 
         /* Future boots (we're behind) - should accept */
         result = usm_verify_time_window(&local_state, 101, 500);
-        check_int_eq(result, USM_OK);
+        check_equal(result, USM_OK);
     }
 
     it("should successfully create a USM user from credentials") {
@@ -297,12 +297,12 @@ spec("snmp_v3") {
             &user
         );
 
-        check_int_eq(result, USM_OK);
-        check_str_eq(user.user_name, "myuser");
-        check_int_eq(user.auth_protocol, SNMP_AUTH_MD5);
-        check_int_eq(user.priv_protocol, SNMP_PRIV_DES);
-        check_size_eq(user.auth_key_len, 16);  /* MD5 */
-        check_size_eq(user.priv_key_len, 16);
+        check_equal(result, USM_OK);
+        check_equal(user.user_name, "myuser");
+        check_equal(user.auth_protocol, SNMP_AUTH_MD5);
+        check_equal(user.priv_protocol, SNMP_PRIV_DES);
+        check_equal(user.auth_key_len, 16);  /* MD5 */
+        check_equal(user.priv_key_len, 16);
 
         free(user.user_name);
     }
@@ -320,7 +320,7 @@ spec("snmp_v3") {
         usm_compute_auth(test_msg, 5, test_key, test_key_len, SNMP_AUTH_SHA1, auth1);
         usm_compute_auth(test_msg, 5, test_key, test_key_len, SNMP_AUTH_SHA1, auth2);
 
-        check_mem_eq(auth1, auth2, 12);  // Should be deterministic
+        check_equal(auth1, auth2, 12);  // Should be deterministic
 
         snmp_oid_t oid;
         snmp_oid_from_string("1.3.6.1.2.1.1.1.0", &oid);
@@ -346,11 +346,11 @@ spec("snmp_v3") {
             &out_len
         );
 
-        check_int_eq(result, SNMP_BUILD_OK);
+        check_equal(result, SNMP_BUILD_OK);
         check(out_len > 0);
 
         /* Verify it starts with SEQUENCE tag and version 3 */
-        check_int_eq(out[0], 0x30);  /* SEQUENCE */
+        check_equal(out[0], 0x30);  /* SEQUENCE */
 
         snmp_oid_free(&oid);
     }
@@ -394,7 +394,7 @@ spec("snmp_v3") {
             &request_len
         );
 
-        check_int_eq(result, SNMP_BUILD_OK);
+        check_equal(result, SNMP_BUILD_OK);
         check(request_len > 100);
 
         /* Parse back */
@@ -403,9 +403,9 @@ spec("snmp_v3") {
 
         result = snmp_parse_v3(request, request_len, &response, &user, pool);
 
-        check_size_eq((size_t)result, request_len);
-        check_int_eq(response.version, SNMP_VERSION_3);
-        check_int_eq(response.v3_header.msg_id, 99999);
+        check_equal((size_t)result, request_len);
+        check_equal(response.version, SNMP_VERSION_3);
+        check_equal(response.v3_header.msg_id, 99999);
 
         pool_destroy(pool);
         snmp_oid_free(&oid);

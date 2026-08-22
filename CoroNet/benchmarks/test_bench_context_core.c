@@ -337,19 +337,19 @@ spec("coronet context core benchmark") {
       rc = run_lazy_task_batch(ctx, BENCH_LAZY_TASK_SMALL);
       g_context_bench_sink = rc;
     }
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
 
     benchmark("create_cancel_destroy_512", 30, BENCH_LAZY_TASK_MEDIUM) {
       rc = run_lazy_task_batch(ctx, BENCH_LAZY_TASK_MEDIUM);
       g_context_bench_sink = rc;
     }
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
 
     benchmark("create_cancel_destroy_4096", 10, BENCH_LAZY_TASK_LARGE) {
       rc = run_lazy_task_batch(ctx, BENCH_LAZY_TASK_LARGE);
       g_context_bench_sink = rc;
     }
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
 
     coro_context_destroy(ctx);
   }
@@ -362,7 +362,7 @@ spec("coronet context core benchmark") {
     check_not_null(ctx);
     atomic_init(&callback_count, 0);
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
+    check_equal(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
 
     benchmark_titles("benchmark", "posts", "posts", "avg/post(us)", NULL, "min_batch(us)",
                      "max_batch(us)", "posts/s", NULL, NULL);
@@ -376,12 +376,12 @@ spec("coronet context core benchmark") {
       if (rc == TURBO_OK) rc = wait_for_atomic_value(&callback_count, BENCH_POST_BATCH);
       g_context_bench_sink = atomic_load_explicit(&callback_count, memory_order_relaxed);
     }
-    check_int_eq(rc, TURBO_OK);
-    check_int_eq(atomic_load_explicit(&callback_count, memory_order_acquire), BENCH_POST_BATCH);
+    check_equal(rc, TURBO_OK);
+    check_equal(atomic_load_explicit(&callback_count, memory_order_acquire), BENCH_POST_BATCH);
 
     coro_context_set_persistent(ctx, 0);
     coro_context_stop(ctx);
-    check_int_eq(turbo_thread_join(&context_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&context_thread), TURBO_OK);
     turbo_thread_destroy(&context_thread);
     coro_context_destroy(ctx);
   }
@@ -405,12 +405,12 @@ spec("coronet context core benchmark") {
     atomic_init(&error, TURBO_OK);
     atomic_init(&stop, 0);
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
+    check_equal(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
 
     for (int i = 0; i < BENCH_POST_PRODUCERS; ++i) {
       producer_states[i] =
           (post_producer_state_t){ctx, &callback_count, &epoch, &producer_done, &error, &stop};
-      check_int_eq(turbo_thread_create(&producers[i], post_producer, &producer_states[i]),
+      check_equal(turbo_thread_create(&producers[i], post_producer, &producer_states[i]),
                    TURBO_OK);
     }
 
@@ -428,19 +428,19 @@ spec("coronet context core benchmark") {
       if (rc == TURBO_OK) rc = wait_for_atomic_value(&callback_count, BENCH_POST_BATCH);
       g_context_bench_sink = atomic_load_explicit(&callback_count, memory_order_relaxed);
     }
-    check_int_eq(rc, TURBO_OK);
-    check_int_eq(atomic_load_explicit(&callback_count, memory_order_acquire), BENCH_POST_BATCH);
+    check_equal(rc, TURBO_OK);
+    check_equal(atomic_load_explicit(&callback_count, memory_order_acquire), BENCH_POST_BATCH);
 
     atomic_store_explicit(&stop, 1, memory_order_release);
     atomic_fetch_add_explicit(&epoch, 1, memory_order_release);
     for (int i = 0; i < BENCH_POST_PRODUCERS; ++i) {
-      check_int_eq(turbo_thread_join(&producers[i]), TURBO_OK);
+      check_equal(turbo_thread_join(&producers[i]), TURBO_OK);
       turbo_thread_destroy(&producers[i]);
     }
 
     coro_context_set_persistent(ctx, 0);
     coro_context_stop(ctx);
-    check_int_eq(turbo_thread_join(&context_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&context_thread), TURBO_OK);
     turbo_thread_destroy(&context_thread);
     coro_context_destroy(ctx);
   }
@@ -457,7 +457,7 @@ spec("coronet context core benchmark") {
     atomic_init(&consumed, 0);
     atomic_init(&stop, 0);
     consumer_state = (spsc_consumer_state_t){&ring, &consumed, &stop};
-    check_int_eq(turbo_thread_create(&consumer_thread, spsc_consumer, &consumer_state), TURBO_OK);
+    check_equal(turbo_thread_create(&consumer_thread, spsc_consumer, &consumer_state), TURBO_OK);
 
     benchmark_titles("benchmark", "items", "items", "avg/item(us)", NULL, "min_batch(us)",
                      "max_batch(us)", "items/s", NULL, NULL);
@@ -476,11 +476,11 @@ spec("coronet context core benchmark") {
       rc = wait_for_atomic_value(&consumed, BENCH_POST_BATCH);
       g_context_bench_sink = atomic_load_explicit(&consumed, memory_order_relaxed);
     }
-    check_int_eq(rc, TURBO_OK);
-    check_int_eq(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
+    check_equal(rc, TURBO_OK);
+    check_equal(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
 
     atomic_store_explicit(&stop, 1, memory_order_release);
-    check_int_eq(turbo_thread_join(&consumer_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&consumer_thread), TURBO_OK);
     turbo_thread_destroy(&consumer_thread);
   }
 
@@ -508,11 +508,11 @@ spec("coronet context core benchmark") {
     }
 
     consumer_state = (spsc_fan_in_consumer_state_t){rings, &consumed, &error, &stop};
-    check_int_eq(turbo_thread_create(&consumer_thread, spsc_fan_in_consumer, &consumer_state),
+    check_equal(turbo_thread_create(&consumer_thread, spsc_fan_in_consumer, &consumer_state),
                  TURBO_OK);
     for (int i = 0; i < BENCH_POST_PRODUCERS; ++i) {
       producer_states[i] = (spsc_lane_producer_state_t){&rings[i], &epoch, &producer_done, &stop};
-      check_int_eq(turbo_thread_create(&producers[i], spsc_lane_producer, &producer_states[i]),
+      check_equal(turbo_thread_create(&producers[i], spsc_lane_producer, &producer_states[i]),
                    TURBO_OK);
     }
 
@@ -530,16 +530,16 @@ spec("coronet context core benchmark") {
       if (rc == TURBO_OK) rc = wait_for_atomic_value(&consumed, BENCH_POST_BATCH);
       g_context_bench_sink = atomic_load_explicit(&consumed, memory_order_relaxed);
     }
-    check_int_eq(rc, TURBO_OK);
-    check_int_eq(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
+    check_equal(rc, TURBO_OK);
+    check_equal(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
 
     atomic_store_explicit(&stop, 1, memory_order_release);
     atomic_fetch_add_explicit(&epoch, 1, memory_order_release);
     for (int i = 0; i < BENCH_POST_PRODUCERS; ++i) {
-      check_int_eq(turbo_thread_join(&producers[i]), TURBO_OK);
+      check_equal(turbo_thread_join(&producers[i]), TURBO_OK);
       turbo_thread_destroy(&producers[i]);
     }
-    check_int_eq(turbo_thread_join(&consumer_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&consumer_thread), TURBO_OK);
     turbo_thread_destroy(&consumer_thread);
   }
 
@@ -568,7 +568,7 @@ spec("coronet context core benchmark") {
     consumer_state.next_sequence = disruptor_consumer_register(queue, &consumer_state.consumer);
     consumer_state.consumed = &consumed;
     consumer_state.stop = &stop;
-    check_int_eq(turbo_thread_create(&consumer_thread, disruptor_consumer, &consumer_state),
+    check_equal(turbo_thread_create(&consumer_thread, disruptor_consumer, &consumer_state),
                  TURBO_OK);
 
     benchmark_titles("benchmark", "items", "items", "avg/item(us)", NULL, "min_batch(us)",
@@ -583,13 +583,13 @@ spec("coronet context core benchmark") {
       if (rc == TURBO_OK) rc = wait_for_atomic_value(&consumed, BENCH_POST_BATCH);
       g_context_bench_sink = atomic_load_explicit(&consumed, memory_order_relaxed);
     }
-    check_int_eq(rc, TURBO_OK);
-    check_int_eq(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
+    check_equal(rc, TURBO_OK);
+    check_equal(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
 
     for (int i = 0; i < BENCH_POST_PRODUCERS; ++i) {
       producer_states[i] =
           (disruptor_producer_state_t){queue, &epoch, &producer_done, &error, &stop};
-      check_int_eq(turbo_thread_create(&producers[i], disruptor_producer, &producer_states[i]),
+      check_equal(turbo_thread_create(&producers[i], disruptor_producer, &producer_states[i]),
                    TURBO_OK);
     }
 
@@ -604,16 +604,16 @@ spec("coronet context core benchmark") {
       if (rc == TURBO_OK) rc = wait_for_atomic_value(&consumed, BENCH_POST_BATCH);
       g_context_bench_sink = atomic_load_explicit(&consumed, memory_order_relaxed);
     }
-    check_int_eq(rc, TURBO_OK);
-    check_int_eq(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
+    check_equal(rc, TURBO_OK);
+    check_equal(atomic_load_explicit(&consumed, memory_order_acquire), BENCH_POST_BATCH);
 
     atomic_store_explicit(&stop, 1, memory_order_release);
     atomic_fetch_add_explicit(&epoch, 1, memory_order_release);
     for (int i = 0; i < BENCH_POST_PRODUCERS; ++i) {
-      check_int_eq(turbo_thread_join(&producers[i]), TURBO_OK);
+      check_equal(turbo_thread_join(&producers[i]), TURBO_OK);
       turbo_thread_destroy(&producers[i]);
     }
-    check_int_eq(turbo_thread_join(&consumer_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&consumer_thread), TURBO_OK);
     turbo_thread_destroy(&consumer_thread);
     disruptor_consumer_unregister(queue, &consumer_state.consumer);
     disruptor_destroy(queue);
@@ -628,7 +628,7 @@ spec("coronet context core benchmark") {
     atomic_init(&state.started_ns, 0);
     atomic_init(&state.completed, 0);
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
+    check_equal(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
 
     for (int i = 0; i < BENCH_WAKE_SAMPLES; ++i) {
       /* Let the persistent context return to its blocking poll so this measures
@@ -649,11 +649,11 @@ spec("coronet context core benchmark") {
              (unsigned long long)percentile_nearest_rank(state.samples_ns, BENCH_WAKE_SAMPLES, 99),
              (unsigned long long)state.samples_ns[BENCH_WAKE_SAMPLES - 1]);
     }
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
 
     coro_context_set_persistent(ctx, 0);
     coro_context_stop(ctx);
-    check_int_eq(turbo_thread_join(&context_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&context_thread), TURBO_OK);
     turbo_thread_destroy(&context_thread);
     coro_context_destroy(ctx);
   }
@@ -665,10 +665,10 @@ spec("coronet context core benchmark") {
     atomic_init(&callback_count, 0);
 
     for (int i = 0; i < 16; ++i) {
-      check_int_eq(coro_post(ctx, count_post, (void *)&callback_count, NULL), TURBO_OK);
+      check_equal(coro_post(ctx, count_post, (void *)&callback_count, NULL), TURBO_OK);
     }
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(atomic_load_explicit(&callback_count, memory_order_acquire), 16);
+    check_equal(atomic_load_explicit(&callback_count, memory_order_acquire), 16);
     coro_context_destroy(ctx);
   }
 }

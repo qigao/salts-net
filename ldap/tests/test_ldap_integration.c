@@ -70,7 +70,7 @@ spec("ldap_integration") {
         /* Use bind to test connection (connect is called internally) */
         ldap_result_data_t result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &result);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
 
         printf("  Connected and bound to %s\n", FORUMSYS_URL);
         ldap_result_free(&result);
@@ -90,8 +90,8 @@ spec("ldap_integration") {
         ldap_result_data_t result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &result);
 
-        check_int_eq(rc, 0);
-        check_int_eq(result.result_code, LDAP_SUCCESS);
+        check_equal(rc, 0);
+        check_equal(result.result_code, LDAP_SUCCESS);
 
         printf("  Bind successful: %s\n", FORUMSYS_BIND_DN);
 
@@ -112,7 +112,7 @@ spec("ldap_integration") {
 
         /* Should fail with auth error or LDAP invalidCredentials */
         if (rc == 0) {
-            check_int_eq(result.result_code, LDAP_INVALID_CREDENTIALS);
+            check_equal(result.result_code, LDAP_INVALID_CREDENTIALS);
             printf("  Got expected invalidCredentials (49)\n");
         } else {
             printf("  Got expected auth error: %s\n", ldap_err2string(rc));
@@ -158,7 +158,7 @@ spec("ldap_integration") {
         /* Bind first */
         ldap_result_data_t bind_result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         ldap_result_free(&bind_result);
 
         /* Search base object */
@@ -175,9 +175,9 @@ spec("ldap_integration") {
         ldap_result_data_t search_result = {0};
         rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-        check_int_eq(rc, 0);
-        check_int_eq(search_result.result_code, LDAP_SUCCESS);
-        check_int_eq(entry_count, 1);  /* Base scope should return 1 entry */
+        check_equal(rc, 0);
+        check_equal(search_result.result_code, LDAP_SUCCESS);
+        check_equal(entry_count, 1);  /* Base scope should return 1 entry */
 
         printf("  Base search returned %d entry\n", entry_count);
 
@@ -196,7 +196,7 @@ spec("ldap_integration") {
         /* Bind first */
         ldap_result_data_t bind_result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         ldap_result_free(&bind_result);
 
         /* Search subtree for persons */
@@ -213,7 +213,7 @@ spec("ldap_integration") {
         ldap_result_data_t search_result = {0};
         rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         /* Accept success or sizeLimitExceeded (server may limit results) */
         check(search_result.result_code == LDAP_SUCCESS ||
               search_result.result_code == LDAP_SIZELIMIT_EXCEEDED);
@@ -237,7 +237,7 @@ spec("ldap_integration") {
         /* Bind first */
         ldap_result_data_t bind_result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         ldap_result_free(&bind_result);
 
         /* Search for specific user */
@@ -254,8 +254,8 @@ spec("ldap_integration") {
         ldap_result_data_t search_result = {0};
         rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-        check_int_eq(rc, 0);
-        check_int_eq(search_result.result_code, LDAP_SUCCESS);
+        check_equal(rc, 0);
+        check_equal(search_result.result_code, LDAP_SUCCESS);
 
         printf("  Filter search (uid=einstein) returned %d entries\n", entry_count);
 
@@ -274,7 +274,7 @@ spec("ldap_integration") {
         /* Bind first */
         ldap_result_data_t bind_result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         ldap_result_free(&bind_result);
 
         /* Search with specific attributes */
@@ -293,7 +293,7 @@ spec("ldap_integration") {
         ldap_result_data_t search_result = {0};
         rc = ldap_client_search(client, &params, search_callback, NULL, &search_result);
 
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         /* Accept success or sizeLimitExceeded (server may limit results) */
         check(search_result.result_code == LDAP_SUCCESS ||
               search_result.result_code == LDAP_SIZELIMIT_EXCEEDED);
@@ -318,12 +318,12 @@ spec("ldap_integration") {
         /* Bind */
         ldap_result_data_t bind_result = {0};
         int rc = ldap_client_simple_bind(client, FORUMSYS_BIND_DN, FORUMSYS_PASSWORD, &bind_result);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
         ldap_result_free(&bind_result);
 
         /* Unbind */
         rc = ldap_client_unbind(client);
-        check_int_eq(rc, 0);
+        check_equal(rc, 0);
 
         printf("  Unbind successful\n");
 

@@ -126,11 +126,11 @@ spec("coro_wait") {
     check_not_null(ctx);
     check_not_null(wait);
     coro_wait_test_state_init(&state, ctx, wait, CORO_WAIT_DEADLINE_MS);
-    check_int_eq(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
     pump_rc = coro_wait_run_until_complete(ctx, &state, CORO_WAIT_PUMP_TIMEOUT_MS);
-    check_int_eq(pump_rc, TURBO_OK);
+    check_equal(pump_rc, TURBO_OK);
     if (pump_rc == TURBO_OK) {
-      check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_OK);
+      check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_OK);
       check_true(state.wait_finished_ns >= state.wait_started_ns);
       if (state.wait_finished_ns >= state.wait_started_ns) {
         uint64_t elapsed_ns = state.wait_finished_ns - state.wait_started_ns;
@@ -138,7 +138,7 @@ spec("coro_wait") {
         check_true(elapsed_ns <= CORO_WAIT_MAX_ELAPSED_NS);
       }
     }
-    check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+    check_equal(coro_wait_destroy(wait), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -149,15 +149,15 @@ spec("coro_wait") {
     check_not_null(ctx);
     check_not_null(wait);
     coro_wait_test_state_init(&state, ctx, wait, CORO_WAIT_LONG_DELAY_MS);
-    check_int_eq(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
-    check_int_eq(coro_context_spawn(ctx, coro_wait_companion_task, &state), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, coro_wait_companion_task, &state), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(atomic_load_explicit(&state.companion_ran, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_EALREADY);
-    check_int_eq(coro_wait_interrupt(wait, TURBO_ECANCELED), TURBO_OK);
-    check_int_eq(coro_wait_run_until_complete(ctx, &state, CORO_WAIT_PUMP_TIMEOUT_MS), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
-    check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+    check_equal(atomic_load_explicit(&state.companion_ran, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_EALREADY);
+    check_equal(coro_wait_interrupt(wait, TURBO_ECANCELED), TURBO_OK);
+    check_equal(coro_wait_run_until_complete(ctx, &state, CORO_WAIT_PUMP_TIMEOUT_MS), TURBO_OK);
+    check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
+    check_equal(coro_wait_destroy(wait), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -171,21 +171,21 @@ spec("coro_wait") {
     check_not_null(ctx);
     check_not_null(wait);
     coro_wait_test_state_init(&state, ctx, wait, CORO_WAIT_LONG_DELAY_MS);
-    check_int_eq(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
-    check_int_eq(turbo_thread_create(&thread, coro_wait_context_thread, &state), TURBO_OK);
-    check_int_eq(coro_wait_until_entered(&state, CORO_WAIT_INTERRUPT_DEADLINE_NS), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
+    check_equal(turbo_thread_create(&thread, coro_wait_context_thread, &state), TURBO_OK);
+    check_equal(coro_wait_until_entered(&state, CORO_WAIT_INTERRUPT_DEADLINE_NS), TURBO_OK);
     started = turbo_hrtime();
     do {
       interrupt_rc = coro_wait_interrupt(wait, TURBO_ESHUTDOWN);
       if (interrupt_rc == TURBO_EALREADY) turbo_thread_yield();
     } while (interrupt_rc == TURBO_EALREADY &&
              turbo_hrtime() - started < CORO_WAIT_INTERRUPT_DEADLINE_NS);
-    check_int_eq(interrupt_rc, TURBO_OK);
-    check_int_eq(coro_wait_interrupt(wait, TURBO_ECANCELED), TURBO_EALREADY);
+    check_equal(interrupt_rc, TURBO_OK);
+    check_equal(coro_wait_interrupt(wait, TURBO_ECANCELED), TURBO_EALREADY);
     (void)turbo_thread_join(&thread);
-    check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ESHUTDOWN);
+    check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ESHUTDOWN);
     check_true(turbo_hrtime() - started < CORO_WAIT_INTERRUPT_DEADLINE_NS);
-    check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+    check_equal(coro_wait_destroy(wait), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -200,19 +200,19 @@ spec("coro_wait") {
       check_not_null(ctx);
       check_not_null(wait);
       coro_wait_test_state_init(&state, ctx, wait, CORO_WAIT_RACE_DELAY_MS);
-      check_int_eq(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
-      check_int_eq(turbo_thread_create(&thread, coro_wait_context_thread, &state), TURBO_OK);
-      check_int_eq(coro_wait_until_entered(&state, CORO_WAIT_INTERRUPT_DEADLINE_NS), TURBO_OK);
+      check_equal(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
+      check_equal(turbo_thread_create(&thread, coro_wait_context_thread, &state), TURBO_OK);
+      check_equal(coro_wait_until_entered(&state, CORO_WAIT_INTERRUPT_DEADLINE_NS), TURBO_OK);
       coro_wait_yield_for(turbo_ms_to_ns(1));
       interrupt_rc = coro_wait_interrupt(wait, TURBO_ECANCELED);
       check_true(interrupt_rc == TURBO_OK || interrupt_rc == TURBO_EALREADY);
-      check_int_eq(turbo_thread_join(&thread), TURBO_OK);
+      check_equal(turbo_thread_join(&thread), TURBO_OK);
       if (interrupt_rc == TURBO_OK) {
-        check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
+        check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
       } else {
-        check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_OK);
+        check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_OK);
       }
-      check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+      check_equal(coro_wait_destroy(wait), TURBO_OK);
       coro_context_destroy(ctx);
     }
   }
@@ -224,13 +224,13 @@ spec("coro_wait") {
     check_not_null(ctx);
     check_not_null(wait);
     coro_wait_test_state_init(&state, ctx, wait, CORO_WAIT_LONG_DELAY_MS);
-    check_int_eq(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(coro_wait_destroy(wait), TURBO_EBUSY);
-    check_int_eq(coro_wait_interrupt(wait, TURBO_ECANCELED), TURBO_OK);
-    check_int_eq(coro_wait_run_until_complete(ctx, &state, CORO_WAIT_PUMP_TIMEOUT_MS), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
-    check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+    check_equal(coro_wait_destroy(wait), TURBO_EBUSY);
+    check_equal(coro_wait_interrupt(wait, TURBO_ECANCELED), TURBO_OK);
+    check_equal(coro_wait_run_until_complete(ctx, &state, CORO_WAIT_PUMP_TIMEOUT_MS), TURBO_OK);
+    check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
+    check_equal(coro_wait_destroy(wait), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -241,12 +241,12 @@ spec("coro_wait") {
     check_not_null(ctx);
     check_not_null(wait);
     coro_wait_test_state_init(&state, ctx, wait, CORO_WAIT_LONG_DELAY_MS);
-    check_int_eq(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, coro_wait_test_task, &state), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(coro_post(ctx, coro_wait_interrupt_and_stop, &state, NULL), TURBO_OK);
+    check_equal(coro_post(ctx, coro_wait_interrupt_and_stop, &state, NULL), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_DEFAULT);
-    check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ESHUTDOWN);
-    check_int_eq(coro_wait_destroy(wait), TURBO_OK);
+    check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ESHUTDOWN);
+    check_equal(coro_wait_destroy(wait), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -258,10 +258,10 @@ spec("coro_wait") {
     atomic_init(&state.companion_ran, 0);
 
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(coro_post(ctx, coro_wait_stop_persistent_context, &state, NULL), TURBO_OK);
+    check_equal(coro_post(ctx, coro_wait_stop_persistent_context, &state, NULL), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-    check_int_eq(atomic_load_explicit(&state.companion_ran, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&state.companion_ran, memory_order_acquire), 1);
     coro_context_destroy(ctx);
   }
 }

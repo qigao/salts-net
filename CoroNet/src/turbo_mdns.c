@@ -353,16 +353,16 @@ static void get_local_info(char *hostname, size_t hostname_len, char *ip, size_t
 // =============================================================================
 
 static int mdns_name_contains_service(const char *name, const char *service_type) {
-  return tstr_v_contains(tstr_v_from_cstr(name), tstr_v_from_cstr(service_type));
+  return vstr_contains(vstr_from_cstr(name), vstr_from_cstr(service_type));
 }
 
 static void mdns_extract_instance_name(char *full_name, const char *service_type,
                                        char *instance, size_t instance_size) {
-  tstr_v full_v    = tstr_v_from_cstr(full_name);
-  tstr_v service_v = tstr_v_from_cstr(service_type);
-  size_t service_pos = tstr_v_find(full_v, service_v);
+  vstr full_v    = vstr_from_cstr(full_name);
+  vstr service_v = vstr_from_cstr(service_type);
+  size_t service_pos = vstr_find(full_v, service_v);
 
-  if (service_pos == TSTR_V_NPOS || service_pos == 0) {
+  if (service_pos == VSTR_NPOS || service_pos == 0) {
     instance[0] = '\0';
     return;
   }
@@ -412,7 +412,7 @@ static void mdns_handle_ptr_record(mdns_ctx_t *ctx, mdns_service_t *services,
   mdns_service_t *service;
   int target_index;
   decode_name(packet, len, offset, ptr_target, sizeof(ptr_target));
-  TLOG_DEBUG("  PTR points to: {}", ptr_target);
+  TLOG_DEBUGF("  PTR points to: {}", ptr_target);
 
   target_index = mdns_find_target_service(ctx, name);
   if (target_index < 0) return;
@@ -424,7 +424,7 @@ static void mdns_handle_ptr_record(mdns_ctx_t *ctx, mdns_service_t *services,
   service = mdns_get_found_service(services, service_count, instance,
                                    ctx->target_services[target_index]);
   if (!service) return;
-  TLOG_DEBUG("  -> Found service instance: {}", service->instance);
+  TLOG_DEBUGF("  -> Found service instance: {}", service->instance);
 }
 
 static void mdns_handle_srv_record(mdns_ctx_t *ctx, mdns_service_t *services,
@@ -437,7 +437,7 @@ static void mdns_handle_srv_record(mdns_ctx_t *ctx, mdns_service_t *services,
   if (offset + 6 > len) return;
 
   decode_name(packet, len, offset + 6, hostname, sizeof(hostname));
-  TLOG_DEBUG("  SRV: Port={}, Target={}", mdns_read_u16(packet + offset + 4), hostname);
+  TLOG_DEBUGF("  SRV: Port={}, Target={}", mdns_read_u16(packet + offset + 4), hostname);
 
   target_index = mdns_find_target_service(ctx, name);
   if (target_index < 0) return;
@@ -453,7 +453,7 @@ static void mdns_handle_srv_record(mdns_ctx_t *ctx, mdns_service_t *services,
   service->port = mdns_read_u16(packet + offset + 4);
   fmt(service->hostname, sizeof(service->hostname), "{}", hostname);
   service->ttl = 120;
-  TLOG_DEBUG("  -> Found SRV record for: {}:{}", hostname, service->port);
+  TLOG_DEBUGF("  -> Found SRV record for: {}:{}", hostname, service->port);
 }
 
 static void mdns_handle_a_record(mdns_ctx_t *ctx, mdns_service_t *services,
@@ -465,27 +465,27 @@ static void mdns_handle_a_record(mdns_ctx_t *ctx, mdns_service_t *services,
   fmt(ip_str, sizeof(ip_str), "{}.{}.{}.{}",
                  packet[offset], packet[offset+1],
                  packet[offset+2], packet[offset+3]);
-  TLOG_DEBUG("  A record: {} -> {}", name, ip_str);
+  TLOG_DEBUGF("  A record: {} -> {}", name, ip_str);
 
   for (i = 0; i < service_count; i++) {
     if (services[i].hostname[0] != '\0' &&
-        tstr_v_contains(tstr_v_from_cstr(name), tstr_v_from_cstr(services[i].hostname))) {
+        vstr_contains(vstr_from_cstr(name), vstr_from_cstr(services[i].hostname))) {
       fmt(services[i].ip, sizeof(services[i].ip), "{}", ip_str);
       services[i].ttl = 120;
-      TLOG_DEBUG("  -> Found A record for {}: {}", services[i].instance, ip_str);
+      TLOG_DEBUGF("  -> Found A record for {}: {}", services[i].instance, ip_str);
     }
   }
 }
 
 static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
-  if (len < 12) { TLOG_DEBUG("Packet too short: {} bytes", len); return; }
+  if (len < 12) { TLOG_DEBUGF("Packet too short: {} bytes", len); return; }
 
   uint16_t questions  = mdns_read_u16(packet + 4);
   uint16_t answers    = mdns_read_u16(packet + 6);
   uint16_t authority  = mdns_read_u16(packet + 8);
   uint16_t additional = mdns_read_u16(packet + 10);
 
-  TLOG_DEBUG("DNS Header: Questions={}, Answers={}, Authority={}, Additional={}",
+  TLOG_DEBUGF("DNS Header: Questions={}, Answers={}, Authority={}, Additional={}",
              questions, answers, authority, additional);
 
   size_t offset = 12;
@@ -509,7 +509,7 @@ static void parse_response(mdns_ctx_t *ctx, const uint8_t *packet, size_t len) {
 
     uint16_t type  = mdns_read_u16(packet + name_end);
     uint16_t rdlen = mdns_read_u16(packet + name_end + 8);
-    TLOG_DEBUG("Record {}: Name='{}', Type={}, RDLen={}", i, name, type, rdlen);
+    TLOG_DEBUGF("Record {}: Name='{}', Type={}, RDLen={}", i, name, type, rdlen);
 
     offset = name_end + 10;
     if (offset + rdlen > len) break;
@@ -540,7 +540,7 @@ static int on_mdns_recv(void *handle, const mem_slice_t *slice, void *peer) {
   if (!ctx) return 0;
   if (!slice) {
     int status = (dg->status != 0) ? dg->status : TURBO_EOF;
-    TLOG_ERROR("mdns: recv failed: {:s}", turbo_strerror(status));
+    TLOG_ERRORF("mdns: recv failed: {:s}", turbo_strerror(status));
     ctx->discover_callback = NULL;
     ctx->discover_userdata = NULL;
     mdns_clear_discovery_targets(ctx);
@@ -553,7 +553,7 @@ static int on_mdns_recv(void *handle, const mem_slice_t *slice, void *peer) {
   }
   if (slice->length == 0) return 0;
 
-  TLOG_DEBUG("Received {} bytes from network", slice->length);
+  TLOG_DEBUGF("Received {} bytes from network", slice->length);
 
   if (ctx->discover_callback && ctx->target_service_count > 0)
     parse_response(ctx, (const uint8_t *)slice->data, slice->length);
@@ -575,7 +575,7 @@ static int on_mdns_recv(void *handle, const mem_slice_t *slice, void *peer) {
         if (query_offset == 0 || query_offset + 4 > slice->length) break;
 
         uint16_t qtype = mdns_read_u16(pkt + query_offset);
-        TLOG_DEBUG("Query for: {} (type {})", query_name, qtype);
+        TLOG_DEBUGF("Query for: {} (type {})", query_name, qtype);
         for (i = 0; i < ctx->published_count; i++) {
           if (mdns_service_matches_query(&ctx->published_services[i], query_name, qtype)) {
             should_respond[i] = 1;

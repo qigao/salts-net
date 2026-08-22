@@ -394,7 +394,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_SINGLE_EXCHANGES,
                                     BACKEND_BENCH_SMALL_PAYLOAD,
                                     BACKEND_BENCH_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("epoll persistent TCP 16 connections 1 KiB") {
@@ -404,7 +404,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_MEDIUM_EXCHANGES,
                                     BACKEND_BENCH_STANDARD_PAYLOAD,
                                     BACKEND_BENCH_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("epoll persistent TCP 1 connection 64 KiB") {
@@ -413,7 +413,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_LARGE_EXCHANGES,
                                     BACKEND_BENCH_LARGE_PAYLOAD,
                                     BACKEND_BENCH_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("epoll persistent TCP 64 connections 1 KiB") {
@@ -423,7 +423,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_SCALE_EXCHANGES,
                                     BACKEND_BENCH_STANDARD_PAYLOAD,
                                     BACKEND_BENCH_SCALE_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("io_uring persistent TCP 1 connection 64 bytes") {
@@ -432,7 +432,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_SINGLE_EXCHANGES,
                                     BACKEND_BENCH_SMALL_PAYLOAD,
                                     BACKEND_BENCH_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("io_uring persistent TCP 16 connections 1 KiB") {
@@ -442,7 +442,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_MEDIUM_EXCHANGES,
                                     BACKEND_BENCH_STANDARD_PAYLOAD,
                                     BACKEND_BENCH_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("io_uring persistent TCP 1 connection 64 KiB") {
@@ -451,7 +451,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_LARGE_EXCHANGES,
                                     BACKEND_BENCH_LARGE_PAYLOAD,
                                     BACKEND_BENCH_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 
   bench("io_uring persistent TCP 64 connections 1 KiB") {
@@ -461,7 +461,7 @@ spec("coronet_tcp_backend_bench") {
                                     BACKEND_BENCH_SCALE_EXCHANGES,
                                     BACKEND_BENCH_STANDARD_PAYLOAD,
                                     BACKEND_BENCH_SCALE_ITERATIONS);
-    check_int_eq(rc, TURBO_OK);
+    check_equal(rc, TURBO_OK);
   }
 #else
   it_skip("requires Linux epoll and io_uring") {

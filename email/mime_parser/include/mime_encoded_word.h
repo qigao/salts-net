@@ -46,20 +46,20 @@ typedef struct {
  * Check if string starts with encoded-word pattern: =?
  * Returns 1 if yes, 0 if no
  */
-CXX_C_API int mime_is_encoded_word(const char *str, size_t len);
+int mime_is_encoded_word(const char *str, size_t len);
 
 /**
  * Parse single encoded-word
  * Returns length of parsed encoded-word, or 0 if invalid
  */
-CXX_C_API size_t mime_parse_encoded_word(const char *str, size_t len,
+size_t mime_parse_encoded_word(const char *str, size_t len,
                                           mime_encoded_word_t *result);
 
 /**
  * Decode single encoded-word to pool-allocated string
  * Returns decoded string or NULL on error
  */
-CXX_C_API char *mime_decode_encoded_word(mem_pool_t *pool,
+char *mime_decode_encoded_word(mem_pool_t *pool,
                                           const mime_encoded_word_t *ew);
 
 /**
@@ -72,7 +72,7 @@ CXX_C_API char *mime_decode_encoded_word(mem_pool_t *pool,
  *
  * Returns decoded string or NULL on error
  */
-CXX_C_API char *mime_decode_header(mem_pool_t *pool,
+char *mime_decode_header(mem_pool_t *pool,
                                     const char *header_value,
                                     size_t len);
 
@@ -80,7 +80,7 @@ CXX_C_API char *mime_decode_header(mem_pool_t *pool,
  * Decode header with automatic buffer sizing
  * Convenience wrapper around mime_decode_header
  */
-CXX_C_API char *mime_decode_header_auto(mem_pool_t *pool,
+char *mime_decode_header_auto(mem_pool_t *pool,
                                          const char *header_value);
 
 /* ── Encoding functions (send-side) ────────────────────────────────── */
@@ -93,7 +93,7 @@ CXX_C_API char *mime_decode_header_auto(mem_pool_t *pool,
  * The output is one or more space-separated =?UTF-8?B?...?= words, each
  * within the 75-character encoded-word length limit (RFC 2047 §2).
  */
-CXX_C_API char *mime_encode_header_if_needed(mem_pool_t *pool,
+char *mime_encode_header_if_needed(mem_pool_t *pool,
                                               const char *value, size_t len);
 
 /**
@@ -101,7 +101,7 @@ CXX_C_API char *mime_encode_header_if_needed(mem_pool_t *pool,
  * inserts "\r\n" after every 76 characters.
  * Returns a pool-allocated string; the trailing "\r\n" is NOT appended.
  */
-CXX_C_API char *mime_base64_fold(mem_pool_t *pool,
+char *mime_base64_fold(mem_pool_t *pool,
                                   const char *b64, size_t b64_len);
 
 #ifdef __cplusplus

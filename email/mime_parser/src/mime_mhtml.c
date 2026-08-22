@@ -363,7 +363,7 @@ mime_mhtml_resource_t *mime_mhtml_find_by_cid(mime_mhtml_document_t *doc, const 
 char *mime_mhtml_serialize(mime_mhtml_document_t *doc, size_t *output_len) {
   static const size_t MIME_BASE64_LINE_LENGTH = 76u;
   mime_mhtml_resource_t *res;
-  tstr_t result;
+  tstr result;
   char *output;
 
   if (!doc || !output_len || !doc->boundary || !doc->html_content) return NULL;

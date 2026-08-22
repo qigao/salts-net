@@ -9,6 +9,8 @@
 #ifndef X509_CERT_H
 #define X509_CERT_H
 
+
+#include "asn1_api.h"
 #include "platform.h"
 #include "asn1_der_compat.h"
 #include <stdint.h>
@@ -165,17 +167,17 @@ typedef struct {
  * @param cert Output certificate (must free with x509_cert_free)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int x509_cert_parse(const uint8_t *der, size_t der_len, x509_cert_t **cert);
+TURBONET_ASN1_C_API int x509_cert_parse(const uint8_t *der, size_t der_len, x509_cert_t **cert);
 
 /**
  * Free X.509 certificate and all resources
  */
-CXX_C_API void x509_cert_free(x509_cert_t *cert);
+TURBONET_ASN1_C_API void x509_cert_free(x509_cert_t *cert);
 
 /**
  * Free X.509 name
  */
-CXX_C_API void x509_name_free(x509_name_t *name);
+TURBONET_ASN1_C_API void x509_name_free(x509_name_t *name);
 
 /* ============================================================================
  * Certificate Validation Helpers
@@ -185,34 +187,34 @@ CXX_C_API void x509_name_free(x509_name_t *name);
  * Check if certificate is currently valid (time-wise)
  * @return true if current time is within validity period
  */
-CXX_C_API bool x509_cert_is_valid_now(const x509_cert_t *cert);
+TURBONET_ASN1_C_API bool x509_cert_is_valid_now(const x509_cert_t *cert);
 
 /**
  * Check if certificate is valid at a specific time
  */
-CXX_C_API bool x509_cert_is_valid_at(const x509_cert_t *cert, time_t t);
+TURBONET_ASN1_C_API bool x509_cert_is_valid_at(const x509_cert_t *cert, time_t t);
 
 /**
  * Get certificate subject common name (CN)
  * @return CN string or NULL if not present
  */
-CXX_C_API const char *x509_cert_get_subject_cn(const x509_cert_t *cert);
+TURBONET_ASN1_C_API const char *x509_cert_get_subject_cn(const x509_cert_t *cert);
 
 /**
  * Get certificate issuer common name (CN)
  */
-CXX_C_API const char *x509_cert_get_issuer_cn(const x509_cert_t *cert);
+TURBONET_ASN1_C_API const char *x509_cert_get_issuer_cn(const x509_cert_t *cert);
 
 /**
  * Check if certificate is self-signed
  * @return true if issuer == subject
  */
-CXX_C_API bool x509_cert_is_self_signed(const x509_cert_t *cert);
+TURBONET_ASN1_C_API bool x509_cert_is_self_signed(const x509_cert_t *cert);
 
 /**
  * Get public key type
  */
-CXX_C_API x509_pubkey_type_t x509_cert_get_pubkey_type(const x509_cert_t *cert);
+TURBONET_ASN1_C_API x509_pubkey_type_t x509_cert_get_pubkey_type(const x509_cert_t *cert);
 
 /* ============================================================================
  * OID Constants (Common X.509 OIDs)

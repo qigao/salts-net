@@ -32,7 +32,7 @@ spec("mime_rfc2822") {
       char *email = mime_extract_email(&pool_storage, addr, strlen(addr));
 
       check(email != NULL);
-      check_str_eq(email, "user@example.com");
+      check_equal(email, "user@example.com");
 
       mem_destroy(&pool_storage);
     }
@@ -45,7 +45,7 @@ spec("mime_rfc2822") {
       char *email = mime_extract_email(&pool_storage, addr, strlen(addr));
 
       check(email != NULL);
-      check_str_eq(email, "user@example.com");
+      check_equal(email, "user@example.com");
 
       mem_destroy(&pool_storage);
     }
@@ -58,7 +58,7 @@ spec("mime_rfc2822") {
       char *email = mime_extract_email(&pool_storage, addr, strlen(addr));
 
       check(email != NULL);
-      check_str_eq(email, "user@example.com");
+      check_equal(email, "user@example.com");
 
       mem_destroy(&pool_storage);
     }
@@ -73,7 +73,7 @@ spec("mime_rfc2822") {
       char *name = mime_extract_display_name(&pool_storage, addr, strlen(addr));
 
       check(name != NULL);
-      check_str_eq(name, "John Doe");
+      check_equal(name, "John Doe");
 
       mem_destroy(&pool_storage);
     }
@@ -86,7 +86,7 @@ spec("mime_rfc2822") {
       char *name = mime_extract_display_name(&pool_storage, addr, strlen(addr));
 
       check(name != NULL);
-      check_str_eq(name, "John Doe");
+      check_equal(name, "John Doe");
 
       mem_destroy(&pool_storage);
     }
@@ -111,7 +111,7 @@ spec("mime_rfc2822") {
       char *name = mime_extract_display_name(&pool_storage, addr, strlen(addr));
 
       check(name != NULL);
-      check_str_eq(name, "张三");
+      check_equal(name, "张三");
 
       mem_destroy(&pool_storage);
     }
@@ -126,9 +126,9 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address(&pool_storage, addr, strlen(addr));
 
       check(parsed != NULL);
-      check_str_eq(parsed->email, "user@example.com");
-      check_str_eq(parsed->local_part, "user");
-      check_str_eq(parsed->domain, "example.com");
+      check_equal(parsed->email, "user@example.com");
+      check_equal(parsed->local_part, "user");
+      check_equal(parsed->domain, "example.com");
       check(parsed->display_name == NULL);
 
       mem_destroy(&pool_storage);
@@ -142,10 +142,10 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address(&pool_storage, addr, strlen(addr));
 
       check(parsed != NULL);
-      check_str_eq(parsed->email, "john@example.com");
-      check_str_eq(parsed->display_name, "John Doe");
-      check_str_eq(parsed->local_part, "john");
-      check_str_eq(parsed->domain, "example.com");
+      check_equal(parsed->email, "john@example.com");
+      check_equal(parsed->display_name, "John Doe");
+      check_equal(parsed->local_part, "john");
+      check_equal(parsed->domain, "example.com");
 
       mem_destroy(&pool_storage);
     }
@@ -160,8 +160,8 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address_list(&pool_storage, list, strlen(list));
 
       check(parsed != NULL);
-      check_int_eq(mime_address_list_count(parsed), 1);
-      check_str_eq(parsed->email, "user@example.com");
+      check_equal(mime_address_list_count(parsed), 1);
+      check_equal(parsed->email, "user@example.com");
 
       mem_destroy(&pool_storage);
     }
@@ -174,16 +174,16 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address_list(&pool_storage, list, strlen(list));
 
       check(parsed != NULL);
-      check_int_eq(mime_address_list_count(parsed), 3);
+      check_equal(mime_address_list_count(parsed), 3);
 
       mime_address_t *first = mime_address_list_get(parsed, 0);
-      check_str_eq(first->email, "alice@example.com");
+      check_equal(first->email, "alice@example.com");
 
       mime_address_t *second = mime_address_list_get(parsed, 1);
-      check_str_eq(second->email, "bob@example.com");
+      check_equal(second->email, "bob@example.com");
 
       mime_address_t *third = mime_address_list_get(parsed, 2);
-      check_str_eq(third->email, "charlie@example.com");
+      check_equal(third->email, "charlie@example.com");
 
       mem_destroy(&pool_storage);
     }
@@ -196,18 +196,18 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address_list(&pool_storage, list, strlen(list));
 
       check(parsed != NULL);
-      check_int_eq(mime_address_list_count(parsed), 3);
+      check_equal(mime_address_list_count(parsed), 3);
 
       mime_address_t *first = mime_address_list_get(parsed, 0);
-      check_str_eq(first->email, "alice@example.com");
-      check_str_eq(first->display_name, "Alice");
+      check_equal(first->email, "alice@example.com");
+      check_equal(first->display_name, "Alice");
 
       mime_address_t *second = mime_address_list_get(parsed, 1);
-      check_str_eq(second->email, "bob@example.com");
+      check_equal(second->email, "bob@example.com");
 
       mime_address_t *third = mime_address_list_get(parsed, 2);
-      check_str_eq(third->email, "charlie@example.com");
-      check_str_eq(third->display_name, "Charlie");
+      check_equal(third->email, "charlie@example.com");
+      check_equal(third->display_name, "Charlie");
 
       mem_destroy(&pool_storage);
     }
@@ -222,8 +222,8 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address(&pool_storage, addr, strlen(addr));
 
       check(parsed != NULL);
-      check_str_eq(parsed->email, "john.doe@gmail.com");
-      check_str_eq(parsed->display_name, "John Doe");
+      check_equal(parsed->email, "john.doe@gmail.com");
+      check_equal(parsed->display_name, "John Doe");
 
       mem_destroy(&pool_storage);
     }
@@ -236,8 +236,8 @@ spec("mime_rfc2822") {
       mime_address_t *parsed = mime_parse_address(&pool_storage, addr, strlen(addr));
 
       check(parsed != NULL);
-      check_str_eq(parsed->email, "john.doe@outlook.com");
-      check_str_eq(parsed->display_name, "Doe, John");
+      check_equal(parsed->email, "john.doe@outlook.com");
+      check_equal(parsed->display_name, "Doe, John");
 
       mem_destroy(&pool_storage);
     }

@@ -45,32 +45,32 @@ spec("dns_core") {
     struct sockaddr_storage addr;
     int addr_len = 0;
 
-    check_int_eq(turbo_dns_resolve(NULL, "127.0.0.1", 8080, &addr, &addr_len), 0);
-    check_int_eq(addr.ss_family, AF_INET);
-    check_int_eq(addr_len, (int)sizeof(struct sockaddr_in));
-    check_int_eq(ntohs(((struct sockaddr_in *)&addr)->sin_port), 8080);
+    check_equal(turbo_dns_resolve(NULL, "127.0.0.1", 8080, &addr, &addr_len), 0);
+    check_equal(addr.ss_family, AF_INET);
+    check_equal(addr_len, (int)sizeof(struct sockaddr_in));
+    check_equal(ntohs(((struct sockaddr_in *)&addr)->sin_port), 8080);
   }
 
   it("should resolve literal ipv4 asynchronously without background dns") {
     dns_cb_state_t state = {0};
 
-    check_int_eq(turbo_dns_resolve_async(NULL, "127.0.0.1", TURBO_DNS_ANY,
+    check_equal(turbo_dns_resolve_async(NULL, "127.0.0.1", TURBO_DNS_ANY,
                                          on_dns_resolved, &state), 0);
-    check_int_eq(state.called, 1);
-    check_int_eq(state.status, 0);
-    check_str_eq(state.ip, "127.0.0.1");
+    check_equal(state.called, 1);
+    check_equal(state.status, 0);
+    check_equal(state.ip, "127.0.0.1");
   }
 
   it("should resolve literal ipv6 to ordered results immediately") {
     dns_results_state_t state = {0};
 
-    check_int_eq(turbo_dns_resolve_async_results(NULL, "::1", TURBO_DNS_ANY,
+    check_equal(turbo_dns_resolve_async_results(NULL, "::1", TURBO_DNS_ANY,
                                                  on_dns_results, &state), 0);
-    check_int_eq(state.called, 1);
-    check_int_eq(state.status, 0);
-    check_int_eq((int)state.count, 1);
-    check_int_eq(state.results[0].family, AF_INET6);
-    check_str_eq(state.results[0].ip, "::1");
+    check_equal(state.called, 1);
+    check_equal(state.status, 0);
+    check_equal((int)state.count, 1);
+    check_equal(state.results[0].family, AF_INET6);
+    check_equal(state.results[0].ip, "::1");
   }
 
   it("should store and read configured dns servers") {
@@ -78,12 +78,12 @@ spec("dns_core") {
     char stored[2][46];
     int count = 0;
 
-    check_int_eq(turbo_dns_init(), 0);
-    check_int_eq(turbo_dns_set_servers(servers, 2), 0);
-    check_int_eq(turbo_dns_get_servers(stored, 2, &count), 0);
-    check_int_eq(count, 2);
-    check_str_eq(stored[0], "1.1.1.1");
-    check_str_eq(stored[1], "8.8.8.8");
+    check_equal(turbo_dns_init(), 0);
+    check_equal(turbo_dns_set_servers(servers, 2), 0);
+    check_equal(turbo_dns_get_servers(stored, 2, &count), 0);
+    check_equal(count, 2);
+    check_equal(stored[0], "1.1.1.1");
+    check_equal(stored[1], "8.8.8.8");
     turbo_dns_cleanup();
   }
 }

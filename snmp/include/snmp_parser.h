@@ -6,6 +6,8 @@
 #ifndef SNMP_PARSER_H
 #define SNMP_PARSER_H
 
+
+#include "snmp_api.h"
 #include "platform.h"
 #include "snmp_types.h"
 #include "memory_pool.h"
@@ -39,7 +41,7 @@
  *   }
  *   pool_destroy(pool);
  */
-CXX_C_API int snmp_parse(
+TURBONET_SNMP_C_API int snmp_parse(
     const uint8_t *data,
     size_t len,
     snmp_message_t *msg,
@@ -49,7 +51,7 @@ CXX_C_API int snmp_parse(
 /**
  * Free SNMP message (when not using memory pool)
  */
-CXX_C_API void snmp_message_free(snmp_message_t *msg);
+TURBONET_SNMP_C_API void snmp_message_free(snmp_message_t *msg);
 
 /**
  * Parse and verify SNMPv3 message with USM security
@@ -64,7 +66,7 @@ CXX_C_API void snmp_message_free(snmp_message_t *msg);
  * @param pool Memory pool for zero-allocation parsing (optional)
  * @return Number of bytes consumed on success, negative error code on failure
  */
-CXX_C_API int snmp_parse_v3(
+TURBONET_SNMP_C_API int snmp_parse_v3(
     const uint8_t *data,
     size_t len,
     snmp_message_t *msg,

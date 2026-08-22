@@ -128,7 +128,7 @@ static void init_local_host_candidate(ice_candidate_t *candidate, const char *ip
 
 static void init_remote_candidate_from_sdp(ice_candidate_t *candidate, const char *sdp) {
     memset(candidate, 0, sizeof(*candidate));
-    check_int_eq(ice_candidate_parse(sdp, candidate), 0);
+    check_equal(ice_candidate_parse(sdp, candidate), 0);
 }
 
 static void init_local_srflx_candidate(ice_candidate_t *candidate, const char *ip, uint16_t port,
@@ -165,7 +165,7 @@ static void on_test_candidate(turbo_ice_agent_t *agent, const ice_candidate_t *c
         return;
     }
 
-    check_int_eq(ice_agent_add_remote_candidate(bridge->remote, sdp), 0);
+    check_equal(ice_agent_add_remote_candidate(bridge->remote, sdp), 0);
     bridge->candidate_tx++;
 }
 
@@ -322,7 +322,7 @@ static void make_ipv4_addr(const char *ip, uint16_t port, struct sockaddr_storag
     addr4 = (struct sockaddr_in *)out;
     addr4->sin_family = AF_INET;
     addr4->sin_port = htons(port);
-    check_int_eq(inet_pton(AF_INET, ip, &addr4->sin_addr), 1);
+    check_equal(inet_pton(AF_INET, ip, &addr4->sin_addr), 1);
 }
 
 spec("ice") {
@@ -330,14 +330,14 @@ spec("ice") {
     it("should provide correct default configuration values") {
         ice_config_t config = ice_default_config();
 
-        check_int_eq(config.gathering_timeout_ms, ICE_DEFAULT_GATHERING_TIMEOUT);
-        check_int_eq(config.connectivity_timeout_ms, ICE_DEFAULT_CONNECTIVITY_TIMEOUT);
-        check_int_eq(config.keepalive_interval_ms, ICE_DEFAULT_KEEPALIVE_INTERVAL);
-        check_int_eq(config.is_controlling, 1);
-        check_int_eq(config.aggressive_nomination, 0);
-        check_int_eq(config.lite_mode, 0);
-        check_int_eq(config.stun_server_count, 0);
-        check_int_eq(config.turn_server_count, 0);
+        check_equal(config.gathering_timeout_ms, ICE_DEFAULT_GATHERING_TIMEOUT);
+        check_equal(config.connectivity_timeout_ms, ICE_DEFAULT_CONNECTIVITY_TIMEOUT);
+        check_equal(config.keepalive_interval_ms, ICE_DEFAULT_KEEPALIVE_INTERVAL);
+        check_equal(config.is_controlling, 1);
+        check_equal(config.aggressive_nomination, 0);
+        check_equal(config.lite_mode, 0);
+        check_equal(config.stun_server_count, 0);
+        check_equal(config.turn_server_count, 0);
     }
 
     it("should reject consent intervals outside the RFC-safe range") {
@@ -361,8 +361,8 @@ spec("ice") {
         ice_config_t config = ice_default_config();
         turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
-        check_int_eq(ice_agent_get_state(agent), ICE_STATE_NEW);
-        check_int_eq(ice_agent_get_gathering_state(agent), ICE_GATHERING_NEW);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_NEW);
+        check_equal(ice_agent_get_gathering_state(agent), ICE_GATHERING_NEW);
         ice_agent_destroy(agent);
     }
 
@@ -370,7 +370,7 @@ spec("ice") {
         ice_config_t config = ice_default_config();
         turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
-        check_int_eq(ice_agent_get_local_candidate_count(agent), 0);
+        check_equal(ice_agent_get_local_candidate_count(agent), 0);
         ice_agent_destroy(agent);
     }
   }
@@ -396,7 +396,7 @@ spec("ice") {
         check_not_null(agent);
 
         int result = ice_agent_set_remote_credentials(agent, "testufrag", "testpassword123456789012");
-        check_int_eq(result, 0);
+        check_equal(result, 0);
 
         ice_agent_destroy(agent);
     }
@@ -412,14 +412,14 @@ spec("ice") {
         memset(oversized_pwd, 'p', sizeof(oversized_pwd) - 1);
         oversized_pwd[sizeof(oversized_pwd) - 1] = '\0';
 
-        check_int_eq(ice_agent_set_remote_credentials(NULL, "ufrag", "pwd"), -1);
-        check_int_eq(ice_agent_set_remote_credentials(agent, NULL, "pwd"), -1);
-        check_int_eq(ice_agent_set_remote_credentials(agent, "ufrag", NULL), -1);
-        check_int_eq(ice_agent_set_remote_credentials(agent, "", "pwd"), -2);
-        check_int_eq(ice_agent_set_remote_credentials(agent, "ufrag", ""), -2);
-        check_int_eq(
+        check_equal(ice_agent_set_remote_credentials(NULL, "ufrag", "pwd"), -1);
+        check_equal(ice_agent_set_remote_credentials(agent, NULL, "pwd"), -1);
+        check_equal(ice_agent_set_remote_credentials(agent, "ufrag", NULL), -1);
+        check_equal(ice_agent_set_remote_credentials(agent, "", "pwd"), -2);
+        check_equal(ice_agent_set_remote_credentials(agent, "ufrag", ""), -2);
+        check_equal(
             ice_agent_set_remote_credentials(agent, oversized_ufrag, "pwd"), -2);
-        check_int_eq(
+        check_equal(
             ice_agent_set_remote_credentials(agent, "ufrag", oversized_pwd), -2);
 
         ice_agent_destroy(agent);
@@ -440,26 +440,26 @@ spec("ice") {
         check_not_null(agent);
         ice_agent_get_local_credentials(
             agent, old_ufrag, sizeof(old_ufrag), old_pwd, sizeof(old_pwd));
-        check_int_eq(
+        check_equal(
             ice_agent_set_remote_credentials(agent, "remote", "remote-password"), 0);
-        check_int_eq(ice_agent_add_remote_candidate(agent, candidate), 0);
+        check_equal(ice_agent_add_remote_candidate(agent, candidate), 0);
         view->gathering_state = ICE_GATHERING_COMPLETE;
         view->state = ICE_STATE_GATHERING;
         view->pair_count = 1;
         view->selected_pair = &view->pairs[0];
 
-        check_int_eq(ice_agent_restart(agent, &options), 0);
+        check_equal(ice_agent_restart(agent, &options), 0);
         ice_agent_get_local_credentials(
             agent, new_ufrag, sizeof(new_ufrag), new_pwd, sizeof(new_pwd));
 
-        check_str_ne(new_ufrag, old_ufrag);
-        check_str_ne(new_pwd, old_pwd);
-        check_int_eq(ice_agent_get_state(agent), ICE_STATE_NEW);
-        check_int_eq(ice_agent_get_gathering_state(agent), ICE_GATHERING_COMPLETE);
-        check_int_eq(view->remote_candidate_count, 0);
-        check_int_eq(view->pair_count, 0);
+        check_not_equal(new_ufrag, old_ufrag);
+        check_not_equal(new_pwd, old_pwd);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_NEW);
+        check_equal(ice_agent_get_gathering_state(agent), ICE_GATHERING_COMPLETE);
+        check_equal(view->remote_candidate_count, 0);
+        check_equal(view->pair_count, 0);
         check_null(view->selected_pair);
-        check_int_eq(ice_agent_start_checks(agent), -3);
+        check_equal(ice_agent_start_checks(agent), -3);
 
         ice_agent_destroy(agent);
     }
@@ -471,28 +471,28 @@ spec("ice") {
         ice_restart_options_t options = ice_restart_options_default();
 
         check_not_null(agent);
-        check_int_eq(ice_agent_restart(NULL, &options), -1);
-        check_int_eq(ice_agent_restart(agent, NULL), -1);
+        check_equal(ice_agent_restart(NULL, &options), -1);
+        check_equal(ice_agent_restart(agent, NULL), -1);
 
         options.version++;
-        check_int_eq(
+        check_equal(
             ice_agent_restart(agent, &options),
             ICE_AGENT_ERROR_INVALID_OPTIONS);
         options = ice_restart_options_default();
         options.flags = 1;
-        check_int_eq(
+        check_equal(
             ice_agent_restart(agent, &options),
             ICE_AGENT_ERROR_INVALID_OPTIONS);
 
         options = ice_restart_options_default();
         view->state = ICE_STATE_GATHERING;
         view->gathering_state = ICE_GATHERING_GATHERING;
-        check_int_eq(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_BUSY);
+        check_equal(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_BUSY);
         view->state = ICE_STATE_CONNECTING;
-        check_int_eq(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_BUSY);
+        check_equal(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_BUSY);
         view->state = ICE_STATE_NEW;
         ice_agent_close(agent);
-        check_int_eq(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_restart(agent, &options), ICE_AGENT_ERROR_CLOSED);
 
         ice_agent_destroy(agent);
     }
@@ -501,17 +501,17 @@ spec("ice") {
   describe("Priority Calculation (RFC 8445)") {
     it("should correctly calculate host candidate priority") {
         uint32_t priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
-        check_uint_eq(priority, 2130706431);
+        check_equal(priority, 2130706431);
     }
 
     it("should correctly calculate srflx candidate priority") {
         uint32_t priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX, 65535, 1);
-        check_uint_eq(priority, 1694498815);
+        check_equal(priority, 1694498815);
     }
 
     it("should correctly calculate relay candidate priority") {
         uint32_t priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_RELAY, 65535, 1);
-        check_uint_eq(priority, 16777215);
+        check_equal(priority, 16777215);
     }
 
     it("should distinguish priorities between components") {
@@ -519,7 +519,7 @@ spec("ice") {
         uint32_t prio_comp2 = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 2);
 
         check(prio_comp1 > prio_comp2);
-        check_int_eq(prio_comp1 - prio_comp2, 1);
+        check_equal(prio_comp1 - prio_comp2, 1);
     }
   }
 
@@ -530,14 +530,14 @@ spec("ice") {
 
         int result = ice_candidate_parse(sdp, &candidate);
 
-        check_int_eq(result, 0);
-        check_str_eq(candidate.foundation, "1");
-        check_int_eq(candidate.component_id, 1);
-        check_int_eq(candidate.transport, ICE_TRANSPORT_UDP);
-        check_uint_eq(candidate.priority, 2130706431);
-        check_str_eq(candidate.ip, "192.168.1.100");
-        check_int_eq(candidate.port, 54321);
-        check_int_eq(candidate.type, ICE_CANDIDATE_TYPE_HOST);
+        check_equal(result, 0);
+        check_equal(candidate.foundation, "1");
+        check_equal(candidate.component_id, 1);
+        check_equal(candidate.transport, ICE_TRANSPORT_UDP);
+        check_equal(candidate.priority, 2130706431);
+        check_equal(candidate.ip, "192.168.1.100");
+        check_equal(candidate.port, 54321);
+        check_equal(candidate.type, ICE_CANDIDATE_TYPE_HOST);
     }
 
     it("should parse srflx candidates correctly") {
@@ -547,13 +547,13 @@ spec("ice") {
 
         int result = ice_candidate_parse(sdp, &candidate);
 
-        check_int_eq(result, 0);
-        check_str_eq(candidate.foundation, "2");
-        check_int_eq(candidate.type, ICE_CANDIDATE_TYPE_SRFLX);
-        check_str_eq(candidate.ip, "203.0.113.1");
-        check_int_eq(candidate.port, 12345);
-        check_str_eq(candidate.related_ip, "192.168.1.10");
-        check_int_eq(candidate.related_port, 5000);
+        check_equal(result, 0);
+        check_equal(candidate.foundation, "2");
+        check_equal(candidate.type, ICE_CANDIDATE_TYPE_SRFLX);
+        check_equal(candidate.ip, "203.0.113.1");
+        check_equal(candidate.port, 12345);
+        check_equal(candidate.related_ip, "192.168.1.10");
+        check_equal(candidate.related_port, 5000);
     }
 
     it("should parse relay candidates correctly") {
@@ -562,8 +562,8 @@ spec("ice") {
 
         int result = ice_candidate_parse(sdp, &candidate);
 
-        check_int_eq(result, 0);
-        check_int_eq(candidate.type, ICE_CANDIDATE_TYPE_RELAY);
+        check_equal(result, 0);
+        check_equal(candidate.type, ICE_CANDIDATE_TYPE_RELAY);
     }
 
     it("should handle 'a=' prefix in candidate SDP") {
@@ -572,9 +572,9 @@ spec("ice") {
 
         int result = ice_candidate_parse(sdp, &candidate);
 
-        check_int_eq(result, 0);
-        check_str_eq(candidate.foundation, "1");
-        check_str_eq(candidate.ip, "10.0.0.1");
+        check_equal(result, 0);
+        check_equal(candidate.foundation, "1");
+        check_equal(candidate.ip, "10.0.0.1");
     }
 
     it("should parse TCP host candidates correctly") {
@@ -583,8 +583,8 @@ spec("ice") {
 
         int result = ice_candidate_parse(sdp, &candidate);
 
-        check_int_eq(result, 0);
-        check_int_eq(candidate.transport, ICE_TRANSPORT_TCP);
+        check_equal(result, 0);
+        check_equal(candidate.transport, ICE_TRANSPORT_TCP);
     }
 
     it("should parse mDNS host candidates and defer IP resolution") {
@@ -594,16 +594,16 @@ spec("ice") {
 
         int result = ice_candidate_parse(sdp, &candidate);
 
-        check_int_eq(result, 0);
-        check_str_eq(candidate.mdns_name, "host-12345678.local");
-        check_str_eq(candidate.ip, "");
-        check_int_eq(candidate.port, 54321);
+        check_equal(result, 0);
+        check_equal(candidate.mdns_name, "host-12345678.local");
+        check_equal(candidate.ip, "");
+        check_equal(candidate.port, 54321);
     }
 
     it("should return error for invalid parsing parameters") {
         ice_candidate_t candidate;
-        check_int_eq(ice_candidate_parse(NULL, &candidate), -1);
-        check_int_eq(ice_candidate_parse("candidate:1 1 UDP 0 1.2.3.4 5 typ host", NULL), -1);
+        check_equal(ice_candidate_parse(NULL, &candidate), -1);
+        check_equal(ice_candidate_parse("candidate:1 1 UDP 0 1.2.3.4 5 typ host", NULL), -1);
     }
   }
 
@@ -622,7 +622,7 @@ spec("ice") {
         int len = ice_candidate_to_sdp(&candidate, buf, sizeof(buf));
 
         check(len > 0);
-        check_str_eq(buf, "candidate:1 1 UDP 2130706431 192.168.1.100 54321 typ host");
+        check_equal(buf, "candidate:1 1 UDP 2130706431 192.168.1.100 54321 typ host");
     }
 
     it("should generate correct SDP for srflx candidate with related address") {
@@ -649,9 +649,9 @@ spec("ice") {
         ice_candidate_t candidate = {0};
         char buf[256];
 
-        check_int_eq(ice_candidate_to_sdp(NULL, buf, sizeof(buf)), -1);
-        check_int_eq(ice_candidate_to_sdp(&candidate, NULL, sizeof(buf)), -1);
-        check_int_eq(ice_candidate_to_sdp(&candidate, buf, 0), -1);
+        check_equal(ice_candidate_to_sdp(NULL, buf, sizeof(buf)), -1);
+        check_equal(ice_candidate_to_sdp(&candidate, NULL, sizeof(buf)), -1);
+        check_equal(ice_candidate_to_sdp(&candidate, buf, 0), -1);
     }
 
     it("should truncate safely when output buffer is too small") {
@@ -669,7 +669,7 @@ spec("ice") {
         char buf[32];
         int len = ice_candidate_to_sdp(&candidate, buf, sizeof(buf));
 
-        check_int_eq((int)strlen(buf), (int)sizeof(buf) - 1);
+        check_equal((int)strlen(buf), (int)sizeof(buf) - 1);
         check(len > (int)strlen(buf));
         check(strncmp(buf, "candidate:2 1 UDP", 17) == 0);
     }
@@ -683,7 +683,7 @@ spec("ice") {
 
         const char *sdp = "candidate:1 1 UDP 2130706431 192.168.1.1 12345 typ host";
         int result = ice_agent_add_remote_candidate(agent, sdp);
-        check_int_eq(result, 0);
+        check_equal(result, 0);
 
         ice_agent_destroy(agent);
     }
@@ -692,8 +692,8 @@ spec("ice") {
         ice_config_t config = ice_default_config();
         turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
 
-        check_int_eq(ice_agent_add_remote_candidate(NULL, "candidate:..."), -1);
-        check_int_eq(ice_agent_add_remote_candidate(agent, NULL), -1);
+        check_equal(ice_agent_add_remote_candidate(NULL, "candidate:..."), -1);
+        check_equal(ice_agent_add_remote_candidate(agent, NULL), -1);
 
         ice_agent_destroy(agent);
     }
@@ -703,7 +703,7 @@ spec("ice") {
         turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         check_not_null(agent);
 
-        check_int_eq(
+        check_equal(
             ice_agent_add_remote_candidate(
                 agent,
                 "candidate:1 1 UDP 2130706431 non-existent-test-host.local 12345 typ host"),
@@ -731,11 +731,13 @@ spec("ice") {
         view->pair_count = 1;
         view->state = ICE_STATE_CONNECTING;
 
-        check_int_eq(ice_agent_add_remote_candidate(agent, duplicate_candidate), 0);
-        check_int_eq(view->remote_candidate_count, 1);
-        check_int_eq(view->pair_count, 1);
-        check_ptr_eq(view->pairs[0].local, &view->local_candidates[0]);
-        check_ptr_eq(view->pairs[0].remote, &view->remote_candidates[0]);
+        check_equal(ice_agent_add_remote_candidate(agent, duplicate_candidate), 0);
+        check_equal(view->remote_candidate_count, 1);
+        check_equal(view->pair_count, 1);
+        check_equal((const void *)view->pairs[0].local,
+                    (const void *)&view->local_candidates[0]);
+        check_equal((const void *)view->pairs[0].remote,
+                    (const void *)&view->remote_candidates[0]);
 
         view->local_candidates[0].socket = NULL;
         ice_agent_destroy(agent);
@@ -771,16 +773,20 @@ spec("ice") {
         selected_local_before = view->selected_pair->local;
         selected_remote_before = view->selected_pair->remote;
 
-        check_int_eq(ice_agent_add_remote_candidate(agent, higher_priority_candidate), 0);
-        check_int_eq(view->pair_count, 2);
+        check_equal(ice_agent_add_remote_candidate(agent, higher_priority_candidate), 0);
+        check_equal(view->pair_count, 2);
         check_not_null(view->selected_pair);
-        check_ptr_eq(view->selected_pair->local, selected_local_before);
-        check_ptr_eq(view->selected_pair->remote, selected_remote_before);
+        check_equal((const void *)view->selected_pair->local, (const void *)selected_local_before);
+        check_equal((const void *)view->selected_pair->remote,
+                    (const void *)selected_remote_before);
         check(view->current_check_pair >= 0);
         check(view->current_check_pair < view->pair_count);
-        check_ptr_eq(view->pairs[view->current_check_pair].local, selected_local_before);
-        check_ptr_eq(view->pairs[view->current_check_pair].remote, selected_remote_before);
-        check_ptr_eq(view->pairs[0].remote, &view->remote_candidates[1]);
+        check_equal((const void *)view->pairs[view->current_check_pair].local,
+                    (const void *)selected_local_before);
+        check_equal((const void *)view->pairs[view->current_check_pair].remote,
+                    (const void *)selected_remote_before);
+        check_equal((const void *)view->pairs[0].remote,
+                    (const void *)&view->remote_candidates[1]);
 
         view->local_candidates[0].socket = NULL;
         ice_agent_destroy(agent);
@@ -801,20 +807,21 @@ spec("ice") {
         view->local_candidate_count = 2;
         view->state = ICE_STATE_CONNECTING;
 
-        check_int_eq(ice_agent_add_remote_candidate(agent, remote_public_candidate), 0);
-        check_int_eq(view->remote_candidate_count, 1);
-        check_int_eq(view->pair_count, 2);
+        check_equal(ice_agent_add_remote_candidate(agent, remote_public_candidate), 0);
+        check_equal(view->remote_candidate_count, 1);
+        check_equal(view->pair_count, 2);
         int found_existing = 0;
         int found_new = 0;
         for (int i = 0; i < view->pair_count; ++i) {
-            check_ptr_eq(view->pairs[i].remote, &view->remote_candidates[0]);
+            check_equal((const void *)view->pairs[i].remote,
+                        (const void *)&view->remote_candidates[0]);
             found_existing |= view->pairs[i].local == &view->local_candidates[0];
             found_new |= view->pairs[i].local == &view->local_candidates[1];
         }
         check(found_existing);
         check(found_new);
-        check_str_eq(view->pairs[0].local->ip, "172.17.0.1");
-        check_str_eq(view->pairs[0].remote->ip, "161.97.65.129");
+        check_equal(view->pairs[0].local->ip, "172.17.0.1");
+        check_equal(view->pairs[0].remote->ip, "161.97.65.129");
 
         view->local_candidates[0].socket = NULL;
         view->local_candidates[1].socket = NULL;
@@ -843,13 +850,14 @@ spec("ice") {
         view->pair_count = 1;
         view->state = ICE_STATE_CONNECTING;
 
-        check_int_eq(ice_agent_add_remote_candidate(agent, remote_public_candidate), 0);
-        check_int_eq(view->remote_candidate_count, 1);
-        check_int_eq(view->pair_count, 2);
+        check_equal(ice_agent_add_remote_candidate(agent, remote_public_candidate), 0);
+        check_equal(view->remote_candidate_count, 1);
+        check_equal(view->pair_count, 2);
         int found_existing = 0;
         int found_new = 0;
         for (int i = 0; i < view->pair_count; ++i) {
-            check_ptr_eq(view->pairs[i].remote, &view->remote_candidates[0]);
+            check_equal((const void *)view->pairs[i].remote,
+                        (const void *)&view->remote_candidates[0]);
             found_existing |= view->pairs[i].local == &view->local_candidates[0];
             found_new |= view->pairs[i].local == &view->local_candidates[1];
         }
@@ -877,11 +885,11 @@ spec("ice") {
 
   describe("Agent State") {
     it("should return CLOSED state for NULL agent") {
-        check_int_eq(ice_agent_get_state(NULL), ICE_STATE_CLOSED);
+        check_equal(ice_agent_get_state(NULL), ICE_STATE_CLOSED);
     }
 
     it("should return NEW gathering state for NULL agent") {
-        check_int_eq(ice_agent_get_gathering_state(NULL), ICE_GATHERING_NEW);
+        check_equal(ice_agent_get_gathering_state(NULL), ICE_GATHERING_NEW);
     }
 
     it("should return error when queried for selected pair before selection") {
@@ -890,7 +898,7 @@ spec("ice") {
         ice_candidate_t local, remote;
 
         int result = ice_agent_get_selected_pair(agent, &local, &remote);
-        check_int_eq(result, -1); /* No pair selected yet */
+        check_equal(result, -1); /* No pair selected yet */
 
         ice_agent_destroy(agent);
     }
@@ -915,23 +923,23 @@ spec("ice") {
 
         ice_agent_close(NULL);
         ice_agent_close(agent);
-        check_int_eq(ice_agent_get_state(agent), ICE_STATE_CLOSED);
-        check_int_eq(observer.state_change_count, 1);
-        check_int_eq(observer.last_old_state, ICE_STATE_NEW);
-        check_int_eq(observer.last_new_state, ICE_STATE_CLOSED);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_equal(observer.state_change_count, 1);
+        check_equal(observer.last_old_state, ICE_STATE_NEW);
+        check_equal(observer.last_new_state, ICE_STATE_CLOSED);
 
         ice_agent_close(agent);
-        check_int_eq(observer.state_change_count, 1);
-        check_int_eq(ice_agent_set_role(agent, 0), ICE_AGENT_ERROR_CLOSED);
-        check_int_eq(ice_agent_set_remote_credentials(agent, "remote", "password"),
+        check_equal(observer.state_change_count, 1);
+        check_equal(ice_agent_set_role(agent, 0), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_set_remote_credentials(agent, "remote", "password"),
                      ICE_AGENT_ERROR_CLOSED);
-        check_int_eq(ice_agent_gather_candidates(agent), ICE_AGENT_ERROR_CLOSED);
-        check_int_eq(ice_agent_add_remote_candidate(agent, candidate), ICE_AGENT_ERROR_CLOSED);
-        check_int_eq(ice_agent_start_checks(agent), ICE_AGENT_ERROR_CLOSED);
-        check_int_eq(ice_agent_send(agent, &payload, sizeof(payload)), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_gather_candidates(agent), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_add_remote_candidate(agent, candidate), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_start_checks(agent), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_send(agent, &payload, sizeof(payload)), ICE_AGENT_ERROR_CLOSED);
 
         ice_agent_set_allow_loopback(agent, 1);
-        check_int_eq(view->config.allow_loopback, 0);
+        check_equal(view->config.allow_loopback, 0);
         ice_agent_end_of_candidates(agent);
 
         memset(&callbacks, 0, sizeof(callbacks));
@@ -954,12 +962,12 @@ spec("ice") {
         callbacks.user_data = &observer;
         ice_agent_set_callbacks(agent, &callbacks);
 
-        check_int_eq(ice_agent_gather_candidates(agent), ICE_AGENT_ERROR_CLOSED);
-        check_int_eq(ice_agent_get_state(agent), ICE_STATE_CLOSED);
-        check_int_eq(ice_agent_get_gathering_state(agent), ICE_GATHERING_NEW);
-        check_int_eq(observer.state_change_count, 2);
-        check_int_eq(observer.last_old_state, ICE_STATE_GATHERING);
-        check_int_eq(observer.last_new_state, ICE_STATE_CLOSED);
+        check_equal(ice_agent_gather_candidates(agent), ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_equal(ice_agent_get_gathering_state(agent), ICE_GATHERING_NEW);
+        check_equal(observer.state_change_count, 2);
+        check_equal(observer.last_old_state, ICE_STATE_GATHERING);
+        check_equal(observer.last_new_state, ICE_STATE_CLOSED);
 
         memset(&callbacks, 0, sizeof(callbacks));
         ice_agent_set_callbacks(agent, &callbacks);
@@ -969,7 +977,7 @@ spec("ice") {
 
   describe("Candidate Management") {
     it("should return zero local candidates for NULL agent") {
-        check_int_eq(ice_agent_get_local_candidate_count(NULL), 0);
+        check_equal(ice_agent_get_local_candidate_count(NULL), 0);
     }
 
     it("should return error for invalid local candidate indices") {
@@ -977,9 +985,9 @@ spec("ice") {
         turbo_ice_agent_t *agent = ice_agent_create(NULL, &config);
         ice_candidate_t out;
 
-        check_int_eq(ice_agent_get_local_candidate(agent, -1, &out), -2);
-        check_int_eq(ice_agent_get_local_candidate(agent, 0, &out), -2); /* No candidates yet */
-        check_int_eq(ice_agent_get_local_candidate(agent, 0, NULL), -1);
+        check_equal(ice_agent_get_local_candidate(agent, -1, &out), -2);
+        check_equal(ice_agent_get_local_candidate(agent, 0, &out), -2); /* No candidates yet */
+        check_equal(ice_agent_get_local_candidate(agent, 0, NULL), -1);
 
         ice_agent_destroy(agent);
     }
@@ -1020,12 +1028,12 @@ spec("ice") {
         left = ice_agent_create(ctx, &config);
         check_not_null(left);
 
-        check_int_eq(ice_agent_set_role(left, 1), 0);
-        check_int_eq(ice_agent_get_state(left), ICE_STATE_NEW);
+        check_equal(ice_agent_set_role(left, 1), 0);
+        check_equal(ice_agent_get_state(left), ICE_STATE_NEW);
 
         right = ice_agent_create(ctx, &config);
         check_not_null(right);
-        check_int_eq(ice_agent_set_role(right, 0), 0);
+        check_equal(ice_agent_set_role(right, 0), 0);
 
         memset(&left_bridge, 0, sizeof(left_bridge));
         memset(&right_bridge, 0, sizeof(right_bridge));
@@ -1047,11 +1055,11 @@ spec("ice") {
         ice_agent_get_local_credentials(right, right_ufrag, sizeof(right_ufrag), right_pwd,
                                         sizeof(right_pwd));
 
-        check_int_eq(ice_agent_set_remote_credentials(left, right_ufrag, right_pwd), 0);
-        check_int_eq(ice_agent_set_remote_credentials(right, left_ufrag, left_pwd), 0);
+        check_equal(ice_agent_set_remote_credentials(left, right_ufrag, right_pwd), 0);
+        check_equal(ice_agent_set_remote_credentials(right, left_ufrag, left_pwd), 0);
 
-        check_int_eq(ice_agent_gather_candidates(left), 0);
-        check_int_eq(ice_agent_gather_candidates(right), 0);
+        check_equal(ice_agent_gather_candidates(left), 0);
+        check_equal(ice_agent_gather_candidates(right), 0);
         ice_agent_end_of_candidates(left);
         ice_agent_end_of_candidates(right);
 
@@ -1062,32 +1070,32 @@ spec("ice") {
         memset(&right_task, 0, sizeof(right_task));
         left_task.agent = left;
         right_task.agent = right;
-        check_int_eq(coro_context_spawn(ctx, ice_start_checks_task, &left_task), 0);
-        check_int_eq(coro_context_spawn(ctx, ice_start_checks_task, &right_task), 0);
+        check_equal(coro_context_spawn(ctx, ice_start_checks_task, &left_task), 0);
+        check_equal(coro_context_spawn(ctx, ice_start_checks_task, &right_task), 0);
 
         done_state.left = &left_task;
         done_state.right = &right_task;
         done_state.left_agent = left;
         done_state.right_agent = right;
-        check_int_eq(run_ctx_until(ctx, ice_checks_done, &done_state, 6000), 0);
+        check_equal(run_ctx_until(ctx, ice_checks_done, &done_state, 6000), 0);
 
         check(left_task.done);
         check(right_task.done);
-        check_int_eq(left_task.rc, 0);
-        check_int_eq(right_task.rc, 0);
+        check_equal(left_task.rc, 0);
+        check_equal(right_task.rc, 0);
         check(ice_agent_get_state(left) == ICE_STATE_CONNECTED ||
               ice_agent_get_state(left) == ICE_STATE_COMPLETED);
         check(ice_agent_get_state(right) == ICE_STATE_CONNECTED ||
               ice_agent_get_state(right) == ICE_STATE_COMPLETED);
-        check_int_eq(ice_agent_get_selected_pair(left, &left_local, &left_remote), 0);
-        check_int_eq(ice_agent_get_selected_pair(right, &right_local, &right_remote), 0);
+        check_equal(ice_agent_get_selected_pair(left, &left_local, &left_remote), 0);
+        check_equal(ice_agent_get_selected_pair(right, &right_local, &right_remote), 0);
         check(left_local.port != 0);
         check(right_local.port != 0);
 
         left_view = (test_ice_agent_view_t *)left;
         right_view = (test_ice_agent_view_t *)right;
-        check_int_eq(left_view->checks_in_progress, 0);
-        check_int_eq(right_view->checks_in_progress, 0);
+        check_equal(left_view->checks_in_progress, 0);
+        check_equal(right_view->checks_in_progress, 0);
         if (left_view->last_consent_response_ms > 100) {
             left_view->last_consent_response_ms -= 100;
         }
@@ -1106,10 +1114,10 @@ spec("ice") {
                turbo_monotonic_ms() < consent_deadline) {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }
-        check_int_eq(ice_agent_get_state(left), ICE_STATE_DISCONNECTED);
-        check_int_eq(ice_agent_send(left, &payload, sizeof(payload)), -2);
-        check_int_eq(ice_agent_restart(left, &restart_options), 0);
-        check_int_eq(ice_agent_get_state(left), ICE_STATE_NEW);
+        check_equal(ice_agent_get_state(left), ICE_STATE_DISCONNECTED);
+        check_equal(ice_agent_send(left, &payload, sizeof(payload)), -2);
+        check_equal(ice_agent_restart(left, &restart_options), 0);
+        check_equal(ice_agent_get_state(left), ICE_STATE_NEW);
 
         ice_agent_destroy(right);
         ice_agent_destroy(left);
@@ -1144,8 +1152,8 @@ spec("ice") {
         check_not_null(left);
         check_not_null(right);
 
-        check_int_eq(ice_agent_gather_candidates(left), 0);
-        check_int_eq(ice_agent_gather_candidates(right), 0);
+        check_equal(ice_agent_gather_candidates(left), 0);
+        check_equal(ice_agent_gather_candidates(right), 0);
 
         left_view = (test_ice_agent_view_t *)left;
         right_view = (test_ice_agent_view_t *)right;
@@ -1153,23 +1161,23 @@ spec("ice") {
         right_loopback = find_loopback_local_candidate(right_view);
         check_not_null(left_loopback);
         check_not_null(right_loopback);
-        check_int_eq(coro_socket_get_local_address((coro_socket_t *)left_loopback->socket,
+        check_equal(coro_socket_get_local_address((coro_socket_t *)left_loopback->socket,
                                                    &left_sock_addr), 0);
-        check_int_eq(coro_socket_get_local_address((coro_socket_t *)right_loopback->socket,
+        check_equal(coro_socket_get_local_address((coro_socket_t *)right_loopback->socket,
                                                    &right_sock_addr), 0);
         left_sock_addr4 = (struct sockaddr_in *)&left_sock_addr;
         right_sock_addr4 = (struct sockaddr_in *)&right_sock_addr;
-        check_int_eq(left_sock_addr.ss_family, AF_INET);
-        check_int_eq(right_sock_addr.ss_family, AF_INET);
-        check_int_eq(ntohs(left_sock_addr4->sin_port), left_loopback->port);
-        check_int_eq(ntohs(right_sock_addr4->sin_port), right_loopback->port);
+        check_equal(left_sock_addr.ss_family, AF_INET);
+        check_equal(right_sock_addr.ss_family, AF_INET);
+        check_equal(ntohs(left_sock_addr4->sin_port), left_loopback->port);
+        check_equal(ntohs(right_sock_addr4->sin_port), right_loopback->port);
 
         memset(&recv_state, 0, sizeof(recv_state));
         memset(&send_state, 0, sizeof(send_state));
         recv_state.socket = (coro_socket_t *)right_loopback->socket;
         recv_state.rc = -1;
         coro_socket_set_timeout(recv_state.socket, 3000);
-        check_int_eq(coro_context_spawn(ctx, ice_udp_recv_task, &recv_state), 0);
+        check_equal(coro_context_spawn(ctx, ice_udp_recv_task, &recv_state), 0);
         for (int i = 0; i < 4; i++) {
             coro_context_run(ctx, TURBO_RUN_NOWAIT);
         }
@@ -1180,16 +1188,16 @@ spec("ice") {
         send_state.len = 5;
         send_state.rc = -1;
         make_ipv4_addr(right_loopback->ip, right_loopback->port, &send_state.dest_addr);
-        check_int_eq(coro_context_spawn(ctx, ice_udp_sendto_task, &send_state), 0);
+        check_equal(coro_context_spawn(ctx, ice_udp_sendto_task, &send_state), 0);
 
         done_flags[0] = &recv_state.done;
         done_flags[1] = &send_state.done;
-        check_int_eq(run_ctx_until_all(ctx, done_flags, 2, 3000), 0);
+        check_equal(run_ctx_until_all(ctx, done_flags, 2, 3000), 0);
 
-        check_int_eq(send_state.rc, 0);
-        check_int_eq(recv_state.rc, 0);
-        check_size_eq(recv_state.len, 5);
-        check_str_eq(recv_state.payload, "probe");
+        check_equal(send_state.rc, 0);
+        check_equal(recv_state.rc, 0);
+        check_equal(recv_state.len, 5);
+        check_equal(recv_state.payload, "probe");
 
         ice_agent_destroy(right);
         ice_agent_destroy(left);

@@ -51,13 +51,13 @@ typedef struct smtp_client_s smtp_client_t;
 /**
  * Create SMTP client
  */
-CXX_C_API smtp_client_t *smtp_client_create(coro_context_t *ctx,
+smtp_client_t *smtp_client_create(coro_context_t *ctx,
                                              const smtp_config_t *config);
 
 /**
  * Free SMTP client
  */
-CXX_C_API void smtp_client_free(smtp_client_t *client);
+void smtp_client_free(smtp_client_t *client);
 
 /* ── Connection ────────────────────────────────────────────────────── */
 
@@ -65,12 +65,12 @@ CXX_C_API void smtp_client_free(smtp_client_t *client);
  * Connect to SMTP server
  * Returns 0 on success, -1 on failure
  */
-CXX_C_API int smtp_connect(smtp_client_t *client);
+int smtp_connect(smtp_client_t *client);
 
 /**
  * Disconnect from SMTP server
  */
-CXX_C_API void smtp_disconnect(smtp_client_t *client);
+void smtp_disconnect(smtp_client_t *client);
 
 /**
  * Interrupt the client's current CoroNet socket wait from another thread.
@@ -79,7 +79,7 @@ CXX_C_API void smtp_disconnect(smtp_client_t *client);
  * receive, send, TLS upgrade, or disconnect observes `status` and completes
  * its normal cleanup before the caller may free the client.
  */
-CXX_C_API int smtp_interrupt(smtp_client_t *client, int status);
+int smtp_interrupt(smtp_client_t *client, int status);
 
 /* ── Send Email ────────────────────────────────────────────────────── */
 
@@ -87,13 +87,13 @@ CXX_C_API int smtp_interrupt(smtp_client_t *client, int status);
  * Send email message
  * Returns 0 on success, -1 on failure
  */
-CXX_C_API int smtp_send_message(smtp_client_t *client,
+int smtp_send_message(smtp_client_t *client,
                                  email_message_t *msg);
 
 /**
  * Send raw RFC 2822 message
  */
-CXX_C_API int smtp_send_raw(smtp_client_t *client,
+int smtp_send_raw(smtp_client_t *client,
                              const char *from_email,
                              const char **to_emails,
                              int to_count,
@@ -105,12 +105,12 @@ CXX_C_API int smtp_send_raw(smtp_client_t *client,
 /**
  * Get last error message
  */
-CXX_C_API const char *smtp_get_error(smtp_client_t *client);
+const char *smtp_get_error(smtp_client_t *client);
 
 /**
  * Get last SMTP response code
  */
-CXX_C_API int smtp_get_last_code(smtp_client_t *client);
+int smtp_get_last_code(smtp_client_t *client);
 
 #ifdef __cplusplus
 }

@@ -112,7 +112,7 @@ static void server_client_task(coro_t *co, void *arg) {
     }
 
     r = coro_socket_connect(client, "127.0.0.1", 19999);
-    check_int_eq(r, 0);
+    check_equal(r, 0);
 
     coro_socket_destroy(client);
 
@@ -134,13 +134,13 @@ spec("Coroutine Auto-Cleanup") {
         g_coro_executed = 0;
 
         int r = coro_context_spawn(ctx, simple_coro, &counter);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         /* Run loop to execute coroutine */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(counter, 1);
-        check_int_eq(g_coro_executed, 1);
+        check_equal(counter, 1);
+        check_equal(g_coro_executed, 1);
 
         robust_context_destroy(ctx);
     }
@@ -159,10 +159,10 @@ spec("Coroutine Auto-Cleanup") {
         /* Run loop to execute all coroutines */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(c1, 1);
-        check_int_eq(c2, 1);
-        check_int_eq(c3, 1);
-        check_int_eq(g_coro_executed, 3);
+        check_equal(c1, 1);
+        check_equal(c2, 1);
+        check_equal(c3, 1);
+        check_equal(g_coro_executed, 3);
 
         robust_context_destroy(ctx);
     }
@@ -177,15 +177,15 @@ spec("Coroutine Auto-Cleanup") {
 
         /* Run loop to execute and resume coroutine */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
-        check_int_eq(counter, 1);  /* First increment before yield */
+        check_equal(counter, 1);  /* First increment before yield */
 
         /* Run again to resume after first yield */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
-        check_int_eq(counter, 2);  /* Second increment */
+        check_equal(counter, 2);  /* Second increment */
 
         /* Run again to complete */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
-        check_int_eq(counter, 3);  /* Final increment */
+        check_equal(counter, 3);  /* Final increment */
 
         robust_context_destroy(ctx);
     }
@@ -202,9 +202,9 @@ spec("Coroutine Auto-Cleanup") {
         coro_context_spawn(ctx, sleep_coro, ctx);
 
         /* Run until all three sleepers have resumed. */
-        check_int_eq(run_ctx_until(ctx, &g_coro_count, 6, 5000), 0);
+        check_equal(run_ctx_until(ctx, &g_coro_count, 6, 5000), 0);
 
-        check_int_eq(g_coro_count, 6);  /* All completed (3 start + 3 end) */
+        check_equal(g_coro_count, 6);  /* All completed (3 start + 3 end) */
 
         robust_context_destroy(ctx);
     }
@@ -219,11 +219,11 @@ spec("Coroutine Auto-Cleanup") {
         coro_context_spawn(ctx, server_client_task, ctx);
 
         /* Run until the handler coroutine has completed. */
-        check_int_eq(run_ctx_until(ctx, &g_coro_executed, 1, 5000), 0);
+        check_equal(run_ctx_until(ctx, &g_coro_executed, 1, 5000), 0);
 
         robust_context_destroy(ctx);
 
         /* Server handler coroutine should have been auto-cleaned */
-        check_int_eq(g_coro_executed, 1);
+        check_equal(g_coro_executed, 1);
     }
 }

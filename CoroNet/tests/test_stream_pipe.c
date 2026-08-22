@@ -143,29 +143,29 @@ static void run_pipe_case(coro_context_t *ctx, const char *endpoint) {
     check(client != NULL);
 
     r = turbo_stream_connect_pipe(client, endpoint, on_connect, on_close);
-    check_int_eq(r, 0);
+    check_equal(r, 0);
 
-    check_int_eq(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
-    check_int_eq(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
-    check_int_eq(s_connected, 0);
-    check_int_eq(s_accepted_count, 1);
+    check_equal(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
+    check_equal(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
+    check_equal(s_connected, 0);
+    check_equal(s_accepted_count, 1);
     check(s_accepted_client != NULL);
 
     r = turbo_stream_recv_start(s_accepted_client, on_recv);
-    check_int_eq(r, 0);
+    check_equal(r, 0);
 
     r = turbo_stream_send(client, test_msg, msg_len);
-    check_int_eq(r, 0);
+    check_equal(r, 0);
 
-    check_int_eq(pipe_test_run_until(ctx, &s_recv_count, (int)msg_len, 3000), 0);
-    check_int_eq(s_recv_count, (int)msg_len);
-    check_int_eq(strncmp(s_recv_buf, test_msg, msg_len), 0);
+    check_equal(pipe_test_run_until(ctx, &s_recv_count, (int)msg_len, 3000), 0);
+    check_equal(s_recv_count, (int)msg_len);
+    check_equal(strncmp(s_recv_buf, test_msg, msg_len), 0);
 
     turbo_stream_destroy(client);
     if (s_accepted_client) turbo_stream_destroy(s_accepted_client);
     turbo_stream_listener_close(listener);
 
-    check_int_eq(pipe_test_run_until(ctx, &s_closed, 1, 3000), 0);
+    check_equal(pipe_test_run_until(ctx, &s_closed, 1, 3000), 0);
     pipe_test_run_until_idle(ctx, 1000);
     check(s_closed > 0);
 }
@@ -238,7 +238,7 @@ spec("Stream Pipe") {
             s_connected = -1;
             s_closed = 0;
 
-            check_int_eq(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+            check_equal(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
 
             turbo_stream_close(client);
             turbo_stream_destroy(client);
@@ -266,15 +266,15 @@ spec("Stream Pipe") {
 
             client = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
             check_not_null(client);
-            check_int_eq(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+            check_equal(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
 
-            check_int_eq(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
-            check_int_eq(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
-            check_int_eq(s_connected, 0);
-            check_int_eq(s_accepted_count, 1);
+            check_equal(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
+            check_equal(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
+            check_equal(s_connected, 0);
+            check_equal(s_accepted_count, 1);
             check_not_null(s_accepted_client);
 
-            check_int_eq(turbo_stream_recv_start(client, on_recv), 0);
+            check_equal(turbo_stream_recv_start(client, on_recv), 0);
 
             turbo_stream_close(client);
             turbo_stream_destroy(client);
@@ -307,16 +307,16 @@ spec("Stream Pipe") {
 
             client = turbo_stream_create(ctx, TURBO_STREAM_PIPE);
             check_not_null(client);
-            check_int_eq(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+            check_equal(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
 
-            check_int_eq(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
-            check_int_eq(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
-            check_int_eq(s_connected, 0);
-            check_int_eq(s_accepted_count, 1);
+            check_equal(pipe_test_run_until(ctx, &s_connected, 0, 3000), 0);
+            check_equal(pipe_test_run_until(ctx, &s_accepted_count, 1, 3000), 0);
+            check_equal(s_connected, 0);
+            check_equal(s_accepted_count, 1);
             check_not_null(s_accepted_client);
 
             for (j = 0; j < PIPE_SEND_BURST; ++j) {
-                check_int_eq(turbo_stream_send(client, s_send_payload, sizeof(s_send_payload)), 0);
+                check_equal(turbo_stream_send(client, s_send_payload, sizeof(s_send_payload)), 0);
             }
 
             turbo_stream_close(client);

@@ -1,6 +1,8 @@
 #ifndef TURBO_DNS_H
 #define TURBO_DNS_H
 
+
+#include "coronet_api.h"
 #include <platform.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -88,14 +90,14 @@ typedef void (*turbo_dns_results_cb)(const char *hostname,
  *
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_dns_init(void);
+CORONET_C_API int turbo_dns_init(void);
 
 /**
  * @brief Cleanup the DNS resolver subsystem.
  *
  * Reference counted - only cleans up when all references released.
  */
-CXX_C_API void turbo_dns_cleanup(void);
+CORONET_C_API void turbo_dns_cleanup(void);
 
 // =============================================================================
 // Synchronous API (blocking)
@@ -114,7 +116,7 @@ CXX_C_API void turbo_dns_cleanup(void);
  * @param out_len Output length of the sockaddr
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_dns_resolve(void *loop, const char *host, int port,
+CORONET_C_API int turbo_dns_resolve(void *loop, const char *host, int port,
                                 struct sockaddr_storage *out, int *out_len);
 
 /**
@@ -126,7 +128,7 @@ CXX_C_API int turbo_dns_resolve(void *loop, const char *host, int port,
  * @param family_pref 4 for IPv4 only, 6 for IPv6 only, 0 for any
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer, size_t buffer_size,
+CORONET_C_API int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer, size_t buffer_size,
                                      int family_pref);
 
 // =============================================================================
@@ -143,7 +145,7 @@ CXX_C_API int turbo_dns_resolve_sync(const char *hostname, char *ip_buffer, size
  * @param user_data User context passed to callback
  * @return 0 on success (resolution started), error code on failure
  */
-CXX_C_API int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t pref,
+CORONET_C_API int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dns_pref_t pref,
                                       turbo_dns_cb callback, void *user_data);
 
 /**
@@ -161,7 +163,7 @@ CXX_C_API int turbo_dns_resolve_async(void *loop, const char *hostname, turbo_dn
  *                  The handle is only valid while the query is still pending.
  * @return 0 on success (resolution started), error code on failure
  */
-CXX_C_API int turbo_dns_resolve_async2(void *loop, const char *hostname, turbo_dns_pref_t pref,
+CORONET_C_API int turbo_dns_resolve_async2(void *loop, const char *hostname, turbo_dns_pref_t pref,
                                        turbo_dns_cb callback, void *user_data,
                                        turbo_dns_query_t **out_query);
 
@@ -177,7 +179,7 @@ CXX_C_API int turbo_dns_resolve_async2(void *loop, const char *hostname, turbo_d
  *                  The handle is only valid while the query is still pending.
  * @return 0 on success (resolution started), error code on failure
  */
-CXX_C_API int turbo_dns_resolve_async_results2(void *loop, const char *hostname,
+CORONET_C_API int turbo_dns_resolve_async_results2(void *loop, const char *hostname,
                                                turbo_dns_pref_t pref,
                                                turbo_dns_results_cb callback,
                                                void *user_data,
@@ -186,7 +188,7 @@ CXX_C_API int turbo_dns_resolve_async_results2(void *loop, const char *hostname,
 /**
  * @brief Start asynchronous DNS resolution returning multiple ordered results.
  */
-CXX_C_API int turbo_dns_resolve_async_results(void *loop, const char *hostname,
+CORONET_C_API int turbo_dns_resolve_async_results(void *loop, const char *hostname,
                                               turbo_dns_pref_t pref,
                                               turbo_dns_results_cb callback,
                                               void *user_data);
@@ -199,7 +201,7 @@ CXX_C_API int turbo_dns_resolve_async_results(void *loop, const char *hostname,
  *
  * @param query Query handle from turbo_dns_resolve_async2
  */
-CXX_C_API void turbo_dns_cancel(turbo_dns_query_t *query);
+CORONET_C_API void turbo_dns_cancel(turbo_dns_query_t *query);
 
 // =============================================================================
 // DNS Server Configuration
@@ -212,7 +214,7 @@ CXX_C_API void turbo_dns_cancel(turbo_dns_query_t *query);
  * @param count   Number of servers (max 8)
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_dns_set_servers(const char *servers[], int count);
+CORONET_C_API int turbo_dns_set_servers(const char *servers[], int count);
 
 /**
  * @brief Get currently configured DNS servers.
@@ -222,7 +224,7 @@ CXX_C_API int turbo_dns_set_servers(const char *servers[], int count);
  * @param count       Output: actual number retrieved
  * @return 0 on success, error code on failure
  */
-CXX_C_API int turbo_dns_get_servers(char servers[][46], int max_servers, int *count);
+CORONET_C_API int turbo_dns_get_servers(char servers[][46], int max_servers, int *count);
 
 // =============================================================================
 // Utilities
@@ -238,7 +240,7 @@ CXX_C_API int turbo_dns_get_servers(char servers[][46], int max_servers, int *co
  * @param addr    Output sockaddr_storage
  * @return 0 on success, TURBO_EAI_NONAME if not a valid IP
  */
-CXX_C_API int turbo_dns_parse_address(const char *address, int port, struct sockaddr_storage *addr);
+CORONET_C_API int turbo_dns_parse_address(const char *address, int port, struct sockaddr_storage *addr);
 
 #ifdef __cplusplus
 }

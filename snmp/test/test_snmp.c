@@ -18,17 +18,17 @@ spec("snmp") {
       /* Test sysDescr.0 = 1.3.6.1.2.1.1.1.0 (9 components) */
       int result = snmp_oid_from_string("1.3.6.1.2.1.1.1.0", &oid);
 
-      check_int_eq(result, 0);
-      check_size_eq(oid.count, 9);
-      check_uint_eq(oid.components[0], 1);
-      check_uint_eq(oid.components[1], 3);
-      check_uint_eq(oid.components[2], 6);
-      check_uint_eq(oid.components[3], 1);
-      check_uint_eq(oid.components[4], 2);
-      check_uint_eq(oid.components[5], 1);
-      check_uint_eq(oid.components[6], 1);
-      check_uint_eq(oid.components[7], 1);
-      check_uint_eq(oid.components[8], 0);
+      check_equal(result, 0);
+      check_equal(oid.count, 9);
+      check_equal(oid.components[0], 1);
+      check_equal(oid.components[1], 3);
+      check_equal(oid.components[2], 6);
+      check_equal(oid.components[3], 1);
+      check_equal(oid.components[4], 2);
+      check_equal(oid.components[5], 1);
+      check_equal(oid.components[6], 1);
+      check_equal(oid.components[7], 1);
+      check_equal(oid.components[8], 0);
 
       snmp_oid_free(&oid);
     }
@@ -40,8 +40,8 @@ spec("snmp") {
       char buf[128];
       int result = snmp_oid_to_string(&oid, buf, sizeof(buf));
 
-      check_int_eq(result, 0);
-      check_str_eq(buf, "1.3.6.1.2.1.1.5.0");
+      check_equal(result, 0);
+      check_equal(buf, "1.3.6.1.2.1.1.5.0");
 
       snmp_oid_free(&oid);
     }
@@ -53,7 +53,7 @@ spec("snmp") {
       snmp_oid_from_string("1.3.6.1.2.1.1.1.0", &oid2);  /* Same as oid1 */
       snmp_oid_from_string("1.3.6.1.2.1.1.5.0", &oid3);  /* Greater than oid1 */
 
-      check_int_eq(snmp_oid_compare(&oid1, &oid2), 0);   /* Equal */
+      check_equal(snmp_oid_compare(&oid1, &oid2), 0);   /* Equal */
       check(snmp_oid_compare(&oid1, &oid3) < 0);   /* oid1 < oid3 */
       check(snmp_oid_compare(&oid3, &oid1) > 0);   /* oid3 > oid1 */
 
@@ -81,12 +81,12 @@ spec("snmp") {
           &packet_len
       );
 
-      check_int_eq(result, SNMP_BUILD_OK);
+      check_equal(result, SNMP_BUILD_OK);
       check(packet_len > 0);
       check(packet_len < sizeof(packet));
 
       /* Verify packet starts with SEQUENCE tag */
-      check_int_eq(packet[0], 0x30);
+      check_equal(packet[0], 0x30);
 
       snmp_oid_free(&oid);
     }
@@ -109,7 +109,7 @@ spec("snmp") {
           &packet_len
       );
 
-      check_int_eq(result, SNMP_BUILD_OK);
+      check_equal(result, SNMP_BUILD_OK);
       check(packet_len > 0);
 
       snmp_oid_free(&oids[0]);
@@ -136,7 +136,7 @@ spec("snmp") {
           &packet_len
       );
 
-      check_int_eq(build_result, SNMP_BUILD_OK);
+      check_equal(build_result, SNMP_BUILD_OK);
 
       /* Parse it back */
       MemoryPool *pool = pool_create(4096);
@@ -146,22 +146,22 @@ spec("snmp") {
       int parse_result = snmp_parse(packet, packet_len, &msg, pool);
 
       check(parse_result > 0);
-      check_int_eq(msg.version, SNMP_VERSION_2C);
-      check_mem_eq(msg.community, "public", msg.community_len);
-      check_int_eq(msg.pdu.type, SNMP_PDU_GET_REQUEST);
-      check_long_eq(msg.pdu.request_id, 1234);
-      check_int_eq(msg.pdu.error_status, 0);
-      check_int_eq(msg.pdu.error_index, 0);
-      check_size_eq(msg.pdu.varbind_count, 1);
+      check_equal(msg.version, SNMP_VERSION_2C);
+      check_equal(msg.community, "public", msg.community_len);
+      check_equal(msg.pdu.type, SNMP_PDU_GET_REQUEST);
+      check_equal(msg.pdu.request_id, 1234);
+      check_equal(msg.pdu.error_status, 0);
+      check_equal(msg.pdu.error_index, 0);
+      check_equal(msg.pdu.varbind_count, 1);
 
       /* Verify OID */
-      check_size_eq(msg.pdu.varbinds[0].oid.count, oid.count);
+      check_equal(msg.pdu.varbinds[0].oid.count, oid.count);
       for (size_t i = 0; i < oid.count; i++) {
-          check_uint_eq(msg.pdu.varbinds[0].oid.components[i], oid.components[i]);
+          check_equal(msg.pdu.varbinds[0].oid.components[i], oid.components[i]);
       }
 
       /* Verify value is NULL */
-      check_int_eq(msg.pdu.varbinds[0].value_type, SNMP_TYPE_NULL);
+      check_equal(msg.pdu.varbinds[0].value_type, SNMP_TYPE_NULL);
 
       pool_destroy(pool);
       snmp_oid_free(&oid);
@@ -185,7 +185,7 @@ spec("snmp") {
           &packet_len
       );
 
-      check_int_eq(build_result, SNMP_BUILD_OK);
+      check_equal(build_result, SNMP_BUILD_OK);
 
       /* Parse it back */
       MemoryPool *pool = pool_create(4096);
@@ -193,9 +193,9 @@ spec("snmp") {
       int parse_result = snmp_parse(packet, packet_len, &msg, pool);
 
       check(parse_result > 0);
-      check_int_eq(msg.version, SNMP_VERSION_1);
-      check_int_eq(msg.pdu.type, SNMP_PDU_GET_NEXT_REQUEST);
-      check_long_eq(msg.pdu.request_id, 9999);
+      check_equal(msg.version, SNMP_VERSION_1);
+      check_equal(msg.pdu.type, SNMP_PDU_GET_NEXT_REQUEST);
+      check_equal(msg.pdu.request_id, 9999);
 
       pool_destroy(pool);
       snmp_oid_free(&oid);
@@ -240,32 +240,32 @@ spec("snmp") {
       int result = snmp_parse(packet, sizeof(packet), &msg, pool);
 
       check(result > 0);
-      check_int_eq(msg.version, SNMP_VERSION_2C);
-      check_size_eq(msg.community_len, 6);
-      check_mem_eq(msg.community, "public", 6);
-      check_int_eq(msg.pdu.type, SNMP_PDU_GET_RESPONSE);
-      check_long_eq(msg.pdu.request_id, 123456);
-      check_int_eq(msg.pdu.error_status, 0);
-      check_int_eq(msg.pdu.error_index, 0);
-      check_size_eq(msg.pdu.varbind_count, 1);
+      check_equal(msg.version, SNMP_VERSION_2C);
+      check_equal(msg.community_len, 6);
+      check_equal(msg.community, "public", 6);
+      check_equal(msg.pdu.type, SNMP_PDU_GET_RESPONSE);
+      check_equal(msg.pdu.request_id, 123456);
+      check_equal(msg.pdu.error_status, 0);
+      check_equal(msg.pdu.error_index, 0);
+      check_equal(msg.pdu.varbind_count, 1);
 
       /* Verify OID */
       snmp_oid_t *oid = &msg.pdu.varbinds[0].oid;
-      check_size_eq(oid->count, 9);  /* 1.3.6.1.2.1.1.1.0 = 9 components */
-      check_uint_eq(oid->components[0], 1);
-      check_uint_eq(oid->components[1], 3);
-      check_uint_eq(oid->components[2], 6);
-      check_uint_eq(oid->components[3], 1);
-      check_uint_eq(oid->components[4], 2);
-      check_uint_eq(oid->components[5], 1);
-      check_uint_eq(oid->components[6], 1);
-      check_uint_eq(oid->components[7], 1);
-      check_uint_eq(oid->components[8], 0);
+      check_equal(oid->count, 9);  /* 1.3.6.1.2.1.1.1.0 = 9 components */
+      check_equal(oid->components[0], 1);
+      check_equal(oid->components[1], 3);
+      check_equal(oid->components[2], 6);
+      check_equal(oid->components[3], 1);
+      check_equal(oid->components[4], 2);
+      check_equal(oid->components[5], 1);
+      check_equal(oid->components[6], 1);
+      check_equal(oid->components[7], 1);
+      check_equal(oid->components[8], 0);
 
       /* Verify value */
-      check_int_eq(msg.pdu.varbinds[0].value_type, SNMP_TYPE_OCTET_STRING);
-      check_size_eq(msg.pdu.varbinds[0].value.bytes.len, 19);
-      check_mem_eq(msg.pdu.varbinds[0].value.bytes.data, "Linux 5.4.0 x86_64", 18);
+      check_equal(msg.pdu.varbinds[0].value_type, SNMP_TYPE_OCTET_STRING);
+      check_equal(msg.pdu.varbinds[0].value.bytes.len, 19);
+      check_equal(msg.pdu.varbinds[0].value.bytes.data, "Linux 5.4.0 x86_64", 18);
 
       pool_destroy(pool);
     }

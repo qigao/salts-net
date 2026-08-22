@@ -15,6 +15,8 @@
 #ifndef TURBO_STUN_H
 #define TURBO_STUN_H
 
+
+#include "ice_api.h"
 #include <stdint.h>
 #include <stddef.h>
 #include "CoroNet.h"
@@ -137,7 +139,7 @@ typedef struct {
  * @param mapped  Output mapped address
  * @return 0 on success, negative on error
  */
-CXX_C_API int stun_binding_request(coro_context_t *ctx,
+TURBONET_ICE_C_API int stun_binding_request(coro_context_t *ctx,
                                    const stun_client_config_t *config,
                                    stun_mapped_address_t *mapped);
 
@@ -145,47 +147,47 @@ CXX_C_API int stun_binding_request(coro_context_t *ctx,
  * Low-level STUN message functions
  * ============================================================================ */
 
-CXX_C_API int stun_generate_transaction_id(stun_transaction_id_t *txn_id);
+TURBONET_ICE_C_API int stun_generate_transaction_id(stun_transaction_id_t *txn_id);
 
-CXX_C_API size_t stun_build_binding_request(
+TURBONET_ICE_C_API size_t stun_build_binding_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id);
 
-CXX_C_API size_t stun_build_binding_indication(
+TURBONET_ICE_C_API size_t stun_build_binding_indication(
     uint8_t *buffer, const stun_transaction_id_t *txn_id);
 
-CXX_C_API size_t stun_build_binding_response(
+TURBONET_ICE_C_API size_t stun_build_binding_response(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *mapped_ip, uint16_t mapped_port);
 
-CXX_C_API int stun_parse_binding_response(
+TURBONET_ICE_C_API int stun_parse_binding_response(
     const uint8_t *data, size_t len,
     const stun_transaction_id_t *expected_txn_id,
     stun_mapped_address_t *mapped);
 
-CXX_C_API int stun_is_stun_message(const uint8_t *data, size_t len);
+TURBONET_ICE_C_API int stun_is_stun_message(const uint8_t *data, size_t len);
 
 /* ============================================================================
  * ICE Connectivity Check Functions
  * ============================================================================ */
 
-CXX_C_API int stun_build_ice_request(
+TURBONET_ICE_C_API int stun_build_ice_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *local_ufrag, const char *remote_ufrag,
     const char *remote_pwd, uint32_t priority,
     int is_controlling, uint64_t tie_breaker, int use_candidate);
 
-CXX_C_API int stun_build_ice_response(
+TURBONET_ICE_C_API int stun_build_ice_response(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *local_pwd, const char *mapped_ip, uint16_t mapped_port);
 
-CXX_C_API int stun_validate_message_integrity(
+TURBONET_ICE_C_API int stun_validate_message_integrity(
     const uint8_t *data, size_t len, const char *password);
 
-CXX_C_API int stun_parse_ice_request(
+TURBONET_ICE_C_API int stun_parse_ice_request(
     const uint8_t *data, size_t len, char *username_out,
     uint32_t *priority_out, int *use_candidate_out);
 
-CXX_C_API int stun_get_error_code(const uint8_t *data, size_t len);
+TURBONET_ICE_C_API int stun_get_error_code(const uint8_t *data, size_t len);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,8 @@
 #ifndef ASN1_DER_COMPAT_H
 #define ASN1_DER_COMPAT_H
 
+
+#include "asn1_api.h"
 /**
  * @file asn1_der_compat.h
  * @brief Compatibility layer for old ASN.1 DER API
@@ -32,15 +34,15 @@ extern "C" {
 typedef asn1_value_t asn1_der_value_t;
 
 // Legacy API compatibility functions
-CXX_C_API int asn1_der_decode_legacy(const uint8_t *data, size_t len, asn1_value_t **result);
-CXX_C_API int asn1_der_encode_legacy(const asn1_value_t *value, uint8_t *buffer, size_t *buffer_len);
-CXX_C_API void asn1_der_free_legacy(asn1_value_t *value);
+TURBONET_ASN1_C_API int asn1_der_decode_legacy(const uint8_t *data, size_t len, asn1_value_t **result);
+TURBONET_ASN1_C_API int asn1_der_encode_legacy(const asn1_value_t *value, uint8_t *buffer, size_t *buffer_len);
+TURBONET_ASN1_C_API void asn1_der_free_legacy(asn1_value_t *value);
 
 // Legacy structure access helpers
-CXX_C_API int asn1_der_get_tag(const asn1_value_t *value);
-CXX_C_API const uint8_t *asn1_der_get_data(const asn1_value_t *value, size_t *len);
-CXX_C_API size_t asn1_der_get_child_count(const asn1_value_t *value);
-CXX_C_API const asn1_value_t *asn1_der_get_child(const asn1_value_t *value, size_t index);
+TURBONET_ASN1_C_API int asn1_der_get_tag(const asn1_value_t *value);
+TURBONET_ASN1_C_API const uint8_t *asn1_der_get_data(const asn1_value_t *value, size_t *len);
+TURBONET_ASN1_C_API size_t asn1_der_get_child_count(const asn1_value_t *value);
+TURBONET_ASN1_C_API const asn1_value_t *asn1_der_get_child(const asn1_value_t *value, size_t index);
 
 #ifdef __cplusplus
 }

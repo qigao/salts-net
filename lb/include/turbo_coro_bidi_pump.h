@@ -10,6 +10,8 @@
 #ifndef coro_BIDI_PUMP_H
 #define coro_BIDI_PUMP_H
 
+
+#include "turbo_lb_api.h"
 #include "platform.h"
 #include "CoroNet/turbo_coro_socket.h"
 #include <stddef.h>
@@ -37,7 +39,7 @@ typedef struct {
  * @param b       Second client (typically the "upstream/worker" side)
  * @param config  Optional config (NULL for defaults)
  */
-CXX_C_API void coro_bidi_pump(coro_socket_t *a,
+TURBONET_LB_C_API void coro_bidi_pump(coro_socket_t *a,
                                      coro_socket_t *b,
                                      const turbo_bidi_pump_config_t *config);
 

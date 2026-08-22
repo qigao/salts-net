@@ -157,14 +157,14 @@ spec("websocket_session") {
     coro_websocket_transport_t kind;
 
     memset(&options, 0, sizeof(options));
-    check_int_eq(coro_websocket_options_init(
+    check_equal(coro_websocket_options_init(
                      &options, CORO_WEBSOCKET_OPTIONS_V1_SIZE - 1U),
                  TURBO_EINVAL);
-    check_int_eq(coro_websocket_options_init(&options, sizeof(options)),
+    check_equal(coro_websocket_options_init(&options, sizeof(options)),
                  TURBO_OK);
-    check_int_eq(options.role, CORO_WEBSOCKET_CLIENT);
-    check_int_eq(options.transport, CORO_WEBSOCKET_TRANSPORT_HTTP1);
-    check_size_eq(options.max_message_size,
+    check_equal(options.role, CORO_WEBSOCKET_CLIENT);
+    check_equal(options.transport, CORO_WEBSOCKET_TRANSPORT_HTTP1);
+    check_equal(options.max_message_size,
                   CORO_WEBSOCKET_DEFAULT_MAX_MESSAGE_SIZE);
 
     memset(&capture, 0, sizeof(capture));
@@ -172,14 +172,14 @@ spec("websocket_session") {
     transport.size = CORO_WEBSOCKET_TRANSPORT_OPS_V1_SIZE - 1U;
     transport.send = capture_send;
     transport.user_data = &capture;
-    check_int_eq(coro_websocket_create(&options, &transport, &websocket),
+    check_equal(coro_websocket_create(&options, &transport, &websocket),
                  TURBO_EINVAL);
     check_null(websocket);
 
     for (kind = CORO_WEBSOCKET_TRANSPORT_HTTP1;
          kind <= CORO_WEBSOCKET_TRANSPORT_HTTP3; ++kind) {
       memset(&capture, 0, sizeof(capture));
-      check_int_eq(create_session(CORO_WEBSOCKET_SERVER, kind, 16, NULL, NULL,
+      check_equal(create_session(CORO_WEBSOCKET_SERVER, kind, 16, NULL, NULL,
                                   &capture, &websocket),
                    TURBO_OK);
       check_not_null(websocket);
@@ -194,29 +194,29 @@ spec("websocket_session") {
     ws_frame_t frame;
 
     memset(&capture, 0, sizeof(capture));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP2, 32, NULL, NULL,
                                 &capture, &websocket),
                  TURBO_OK);
-    check_int_eq(coro_websocket_send(websocket, CORO_WEBSOCKET_TEXT, "server",
+    check_equal(coro_websocket_send(websocket, CORO_WEBSOCKET_TEXT, "server",
                                      6),
                  TURBO_OK);
-    check_int_eq(ws_frame_parse(capture.frames[0], capture.lengths[0], &frame),
+    check_equal(ws_frame_parse(capture.frames[0], capture.lengths[0], &frame),
                  WS_PARSE_OK);
-    check_int_eq(frame.masked, 0);
+    check_equal(frame.masked, 0);
     coro_websocket_destroy(websocket);
 
     memset(&capture, 0, sizeof(capture));
-    check_int_eq(create_session(CORO_WEBSOCKET_CLIENT,
+    check_equal(create_session(CORO_WEBSOCKET_CLIENT,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 32, NULL, NULL,
                                 &capture, &websocket),
                  TURBO_OK);
-    check_int_eq(coro_websocket_send(websocket, CORO_WEBSOCKET_TEXT, "client",
+    check_equal(coro_websocket_send(websocket, CORO_WEBSOCKET_TEXT, "client",
                                      6),
                  TURBO_OK);
-    check_int_eq(ws_frame_parse(capture.frames[0], capture.lengths[0], &frame),
+    check_equal(ws_frame_parse(capture.frames[0], capture.lengths[0], &frame),
                  WS_PARSE_OK);
-    check_int_eq(frame.masked, 1);
+    check_equal(frame.masked, 1);
     coro_websocket_destroy(websocket);
   }
 
@@ -240,7 +240,7 @@ spec("websocket_session") {
 
     memset(&messages, 0, sizeof(messages));
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 16,
                                 capture_message, &messages, &transport,
                                 &websocket),
@@ -257,31 +257,31 @@ spec("websocket_session") {
                             sizeof(close_payload));
     check(len_one > 0 && len_two > 0 && len_ping > 0 && len_close > 0);
 
-    check_int_eq(coro_websocket_feed(websocket, frame_one, 1), TURBO_OK);
-    check_int_eq(coro_websocket_input_complete(websocket), 0);
-    check_int_eq(coro_websocket_feed(websocket, frame_one + 1, len_one - 1),
+    check_equal(coro_websocket_feed(websocket, frame_one, 1), TURBO_OK);
+    check_equal(coro_websocket_input_complete(websocket), 0);
+    check_equal(coro_websocket_feed(websocket, frame_one + 1, len_one - 1),
                  TURBO_OK);
-    check_int_eq(coro_websocket_feed(websocket, frame_two, len_two), TURBO_OK);
-    check_size_eq(messages.count, 1);
-    check_int_eq(messages.opcodes[0], CORO_WEBSOCKET_TEXT);
-    check_size_eq(messages.lengths[0], 5);
-    check_mem_eq(messages.messages[0], "hello", 5);
-    check_int_eq(coro_websocket_input_complete(websocket), 1);
+    check_equal(coro_websocket_feed(websocket, frame_two, len_two), TURBO_OK);
+    check_equal(messages.count, 1);
+    check_equal(messages.opcodes[0], CORO_WEBSOCKET_TEXT);
+    check_equal(messages.lengths[0], 5);
+    check_equal(messages.messages[0], "hello", 5);
+    check_equal(coro_websocket_input_complete(websocket), 1);
 
-    check_int_eq(coro_websocket_feed(websocket, frame_ping, len_ping), TURBO_OK);
-    check_size_eq(transport.count, 1);
-    check_int_eq(ws_frame_parse(transport.frames[0], transport.lengths[0],
+    check_equal(coro_websocket_feed(websocket, frame_ping, len_ping), TURBO_OK);
+    check_equal(transport.count, 1);
+    check_equal(ws_frame_parse(transport.frames[0], transport.lengths[0],
                                 &parsed),
                  WS_PARSE_OK);
-    check_int_eq(parsed.opcode, CORO_WEBSOCKET_PONG);
-    check_int_eq(parsed.masked, 0);
-    check_mem_eq(parsed.payload, ping, sizeof(ping));
+    check_equal(parsed.opcode, CORO_WEBSOCKET_PONG);
+    check_equal(parsed.masked, 0);
+    check_equal(parsed.payload, ping, sizeof(ping));
 
-    check_int_eq(coro_websocket_feed(websocket, frame_close, len_close),
+    check_equal(coro_websocket_feed(websocket, frame_close, len_close),
                  TURBO_OK);
-    check_size_eq(transport.count, 2);
-    check_int_eq(transport.end_stream[1], 1);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
+    check_equal(transport.count, 2);
+    check_equal(transport.end_stream[1], 1);
+    check_equal(coro_websocket_is_open(websocket), 0);
     coro_websocket_destroy(websocket);
   }
 
@@ -300,7 +300,7 @@ spec("websocket_session") {
 
     memset(&messages, 0, sizeof(messages));
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP2, 3,
                                 capture_message, &messages, &transport,
                                 &websocket),
@@ -310,16 +310,16 @@ spec("websocket_session") {
     two_len = build_frame(combined + one_len, sizeof(combined) - one_len,
                           CORO_WEBSOCKET_TEXT, 1, 1, two, sizeof(two));
     check(one_len > 0 && two_len > 0);
-    check_int_eq(coro_websocket_feed(websocket, combined, one_len + two_len),
+    check_equal(coro_websocket_feed(websocket, combined, one_len + two_len),
                  TURBO_OK);
-    check_size_eq(messages.count, 2);
-    check_mem_eq(messages.messages[0], one, sizeof(one));
-    check_mem_eq(messages.messages[1], two, sizeof(two));
+    check_equal(messages.count, 2);
+    check_equal(messages.messages[0], one, sizeof(one));
+    check_equal(messages.messages[1], two, sizeof(two));
     coro_websocket_destroy(websocket);
 
     memset(&messages, 0, sizeof(messages));
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP2, 3,
                                 capture_message, &messages, &transport,
                                 &websocket),
@@ -327,10 +327,10 @@ spec("websocket_session") {
     oversize_len = build_frame(oversize, sizeof(oversize), CORO_WEBSOCKET_TEXT,
                                1, 1, too_large, sizeof(too_large));
     check(oversize_len > 0);
-    check_int_eq(coro_websocket_feed(websocket, oversize, oversize_len),
+    check_equal(coro_websocket_feed(websocket, oversize, oversize_len),
                  TURBO_ERANGE);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
-    check_size_eq(messages.count, 0);
+    check_equal(coro_websocket_is_open(websocket), 0);
+    check_equal(messages.count, 0);
     coro_websocket_destroy(websocket);
   }
 
@@ -349,7 +349,7 @@ spec("websocket_session") {
 
     memset(&messages, 0, sizeof(messages));
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP2, 4,
                                 capture_message, &messages, &transport,
                                 &websocket),
@@ -359,26 +359,26 @@ spec("websocket_session") {
     second_len = build_frame(second_frame, sizeof(second_frame),
                              CORO_WEBSOCKET_CONTINUATION, 1, 1, second,
                              sizeof(second));
-    check_int_eq(coro_websocket_feed(websocket, first_frame, first_len),
+    check_equal(coro_websocket_feed(websocket, first_frame, first_len),
                  TURBO_OK);
-    check_int_eq(coro_websocket_feed(websocket, second_frame, second_len),
+    check_equal(coro_websocket_feed(websocket, second_frame, second_len),
                  TURBO_ERANGE);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
-    check_size_eq(messages.count, 0);
+    check_equal(coro_websocket_is_open(websocket), 0);
+    check_equal(messages.count, 0);
     coro_websocket_destroy(websocket);
 
     memset(&messages, 0, sizeof(messages));
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP2, 16,
                                 capture_message, &messages, &transport,
                                 &websocket),
                  TURBO_OK);
     unmasked_len = build_frame(unmasked_frame, sizeof(unmasked_frame),
                                CORO_WEBSOCKET_TEXT, 1, 0, first, sizeof(first));
-    check_int_eq(coro_websocket_feed(websocket, unmasked_frame, unmasked_len),
+    check_equal(coro_websocket_feed(websocket, unmasked_frame, unmasked_len),
                  TURBO_EPROTO);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
+    check_equal(coro_websocket_is_open(websocket), 0);
     coro_websocket_destroy(websocket);
   }
 
@@ -392,17 +392,17 @@ spec("websocket_session") {
     coro_websocket_t *websocket = NULL;
 
     memset(&capture, 0, sizeof(capture));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 16,
                                 destroy_message, NULL, &capture, &websocket),
                  TURBO_OK);
     frame_len = build_frame(frame, sizeof(frame), CORO_WEBSOCKET_TEXT, 1, 1,
                             (const uint8_t *)"message", 7);
     check(frame_len > 0);
-    check_int_eq(coro_websocket_feed(websocket, frame, frame_len), TURBO_OK);
+    check_equal(coro_websocket_feed(websocket, frame, frame_len), TURBO_OK);
 
     memset(&destroy_transport, 0, sizeof(destroy_transport));
-    check_int_eq(coro_websocket_options_init(&options, sizeof(options)),
+    check_equal(coro_websocket_options_init(&options, sizeof(options)),
                  TURBO_OK);
     options.role = CORO_WEBSOCKET_CLIENT;
     options.max_message_size = 16;
@@ -410,13 +410,13 @@ spec("websocket_session") {
     transport_ops.size = sizeof(transport_ops);
     transport_ops.send = destroy_send;
     transport_ops.user_data = &destroy_transport;
-    check_int_eq(coro_websocket_create(&options, &transport_ops, &websocket),
+    check_equal(coro_websocket_create(&options, &transport_ops, &websocket),
                  TURBO_OK);
     destroy_transport.websocket = websocket;
-    check_int_eq(coro_websocket_close(websocket, CORO_WEBSOCKET_CLOSE_NORMAL,
+    check_equal(coro_websocket_close(websocket, CORO_WEBSOCKET_CLOSE_NORMAL,
                                       NULL),
                  TURBO_OK);
-    check_int_eq(destroy_transport.called, 1);
+    check_equal(destroy_transport.called, 1);
   }
 
   it("sends a policy close when the message callback rejects input") {
@@ -430,7 +430,7 @@ spec("websocket_session") {
 
     memset(&messages, 0, sizeof(messages));
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 16,
                                 reject_message, &messages, &transport,
                                 &websocket),
@@ -438,18 +438,18 @@ spec("websocket_session") {
     frame_len = build_frame(frame, sizeof(frame), CORO_WEBSOCKET_TEXT, 1, 1,
                             payload, sizeof(payload));
     check(frame_len > 0);
-    check_int_eq(coro_websocket_feed(websocket, frame, frame_len),
+    check_equal(coro_websocket_feed(websocket, frame, frame_len),
                  TURBO_ECANCELED);
-    check_size_eq(transport.count, 1);
-    check_int_eq(transport.end_stream[0], 1);
-    check_int_eq(ws_frame_parse(transport.frames[0], transport.lengths[0],
+    check_equal(transport.count, 1);
+    check_equal(transport.end_stream[0], 1);
+    check_equal(ws_frame_parse(transport.frames[0], transport.lengths[0],
                                 &parsed),
                  WS_PARSE_OK);
-    check_int_eq(parsed.opcode, CORO_WEBSOCKET_CLOSE);
-    check_size_eq(parsed.payload_len, 2);
-    check_int_eq(((int)parsed.payload[0] << 8) | parsed.payload[1],
+    check_equal(parsed.opcode, CORO_WEBSOCKET_CLOSE);
+    check_equal(parsed.payload_len, 2);
+    check_equal(((int)parsed.payload[0] << 8) | parsed.payload[1],
                  CORO_WEBSOCKET_CLOSE_POLICY_VIOLATION);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
+    check_equal(coro_websocket_is_open(websocket), 0);
     coro_websocket_destroy(websocket);
   }
 
@@ -465,22 +465,22 @@ spec("websocket_session") {
     coro_websocket_t *websocket = NULL;
 
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_CLIENT,
+    check_equal(create_session(CORO_WEBSOCKET_CLIENT,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 16, NULL, NULL,
                                 &transport, &websocket),
                  TURBO_OK);
-    check_int_eq(coro_websocket_send(websocket, CORO_WEBSOCKET_TEXT,
+    check_equal(coro_websocket_send(websocket, CORO_WEBSOCKET_TEXT,
                                      invalid_utf8, sizeof(invalid_utf8)),
                  TURBO_EINVAL);
-    check_int_eq(coro_websocket_close(websocket, 1012, NULL), TURBO_EINVAL);
-    check_int_eq(coro_websocket_close(websocket, CORO_WEBSOCKET_CLOSE_NORMAL,
+    check_equal(coro_websocket_close(websocket, 1012, NULL), TURBO_EINVAL);
+    check_equal(coro_websocket_close(websocket, CORO_WEBSOCKET_CLOSE_NORMAL,
                                       invalid_reason),
                  TURBO_EINVAL);
-    check_size_eq(transport.count, 0);
+    check_equal(transport.count, 0);
     coro_websocket_destroy(websocket);
 
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 16, NULL, NULL,
                                 &transport, &websocket),
                  TURBO_OK);
@@ -488,14 +488,14 @@ spec("websocket_session") {
                                     CORO_WEBSOCKET_CLOSE, 1, 1, close_payload,
                                     sizeof(close_payload));
     check(invalid_close_len > 0);
-    check_int_eq(coro_websocket_feed(websocket, invalid_close,
+    check_equal(coro_websocket_feed(websocket, invalid_close,
                                      invalid_close_len),
                  TURBO_EPROTO);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
+    check_equal(coro_websocket_is_open(websocket), 0);
     coro_websocket_destroy(websocket);
 
     memset(&transport, 0, sizeof(transport));
-    check_int_eq(create_session(CORO_WEBSOCKET_SERVER,
+    check_equal(create_session(CORO_WEBSOCKET_SERVER,
                                 CORO_WEBSOCKET_TRANSPORT_HTTP1, 16, NULL, NULL,
                                 &transport, &websocket),
                  TURBO_OK);
@@ -503,10 +503,10 @@ spec("websocket_session") {
                                    CORO_WEBSOCKET_TEXT, 1, 1, invalid_utf8,
                                    sizeof(invalid_utf8));
     check(invalid_text_len > 0);
-    check_int_eq(coro_websocket_feed(websocket, invalid_text,
+    check_equal(coro_websocket_feed(websocket, invalid_text,
                                      invalid_text_len),
                  TURBO_EPROTO);
-    check_int_eq(coro_websocket_is_open(websocket), 0);
+    check_equal(coro_websocket_is_open(websocket), 0);
     coro_websocket_destroy(websocket);
   }
 }

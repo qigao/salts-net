@@ -8,6 +8,8 @@
 #ifndef CRYPTO_RANDOM_H
 #define CRYPTO_RANDOM_H
 
+
+#include "asn1_api.h"
 #include "platform.h"
 #include <stdint.h>
 #include <stddef.h>
@@ -18,6 +20,6 @@
  * @param len Number of bytes to generate
  * @return 0 on success, -1 on error
  */
-CXX_C_API int crypto_random_bytes(uint8_t *buf, size_t len);
+TURBONET_ASN1_C_API int crypto_random_bytes(uint8_t *buf, size_t len);
 
 #endif // CRYPTO_RANDOM_H

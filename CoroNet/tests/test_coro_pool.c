@@ -55,11 +55,11 @@ static void echo_loop_handler(coro_socket_t *client, void *arg) {
     TLOG_DEBUG("echo_loop_handler: waiting for data");
     int rc = coro_socket_recv(client, &data, &len);
     if (rc != 0 || !data || len == 0) {
-      TLOG_DEBUG("echo_loop_handler: connection closed or error (rc={:d})", rc);
+      TLOG_DEBUGF("echo_loop_handler: connection closed or error (rc={:d})", rc);
       break;
     }
 
-    TLOG_DEBUG("echo_loop_handler: received {:d} bytes", (int)len);
+    TLOG_DEBUGF("echo_loop_handler: received {:d} bytes", (int)len);
     coro_socket_send(client, data, len);
     TLOG_DEBUG("echo_loop_handler: sent echo");
     coro_socket_free_recv(data);
@@ -126,7 +126,7 @@ static int test_start_server(test_ctx_t *t,
 
   rc = coro_socket_listen_on(t->server, TEST_HOST, t->port, handler, NULL);
   if (rc != 0) {
-    TLOG_DEBUG("test_start_server: listen_url failed rc={:d}", rc);
+    TLOG_DEBUGF("test_start_server: listen_url failed rc={:d}", rc);
     coro_socket_destroy(t->server);
     t->server = NULL;
     return -1;
@@ -400,26 +400,26 @@ static void test_borrow_return(coro_t *co, void *arg) {
   }
 
   rc = coro_pool_borrow(pool, &c);
-  TLOG_DEBUG("After borrow: rc={:d}, c={:p}", rc, (void*)c);
+  TLOG_DEBUGF("After borrow: rc={:d}, c={:p}", rc, (void*)c);
   if (rc != 0 || !c) {
-    TLOG_DEBUG("FAIL: borrow failed, rc={:d}", rc);
+    TLOG_DEBUGF("FAIL: borrow failed, rc={:d}", rc);
     goto done;
   }
 
   /* Use the connection */
   TLOG_DEBUG("Before send");
   rc = coro_socket_send(c, POOL_TEST_MESSAGE, strlen(POOL_TEST_MESSAGE));
-  TLOG_DEBUG("After send: rc={:d}", rc);
+  TLOG_DEBUGF("After send: rc={:d}", rc);
   if (rc != 0) {
-    TLOG_DEBUG("FAIL: send failed, rc={:d}", rc);
+    TLOG_DEBUGF("FAIL: send failed, rc={:d}", rc);
     goto done;
   }
 
   TLOG_DEBUG("Before recv");
   rc = coro_socket_recv(c, &data, &len);
-  TLOG_DEBUG("After recv: rc={:d}, len={:d}", rc, (int)len);
+  TLOG_DEBUGF("After recv: rc={:d}, len={:d}", rc, (int)len);
   if (rc != 0 || len != strlen(POOL_TEST_MESSAGE)) {
-    TLOG_DEBUG("FAIL: recv failed or wrong length, rc={:d}, len={:d}, expected={:d}",
+    TLOG_DEBUGF("FAIL: recv failed or wrong length, rc={:d}, len={:d}, expected={:d}",
                rc, (int)len, (int)strlen(POOL_TEST_MESSAGE));
     coro_socket_free_recv(data);
     data = NULL;
@@ -740,51 +740,51 @@ spec("coro_pool") {
 
   describe("Lifecycle") {
     it("should create and destroy pool") {
-      check_int_eq(run_pool_test_case(test_create_destroy), 1);
+      check_equal(run_pool_test_case(test_create_destroy), 1);
     }
 
     it("should open with min_size pre-connected") {
-      check_int_eq(run_pool_test_case(test_open_close), 1);
+      check_equal(run_pool_test_case(test_open_close), 1);
     }
 
     it("should initialize each physical connection exactly once") {
-      check_int_eq(run_pool_test_case(test_connection_initializer_runs_once_per_socket), 1);
+      check_equal(run_pool_test_case(test_connection_initializer_runs_once_per_socket), 1);
     }
 
     it("should reject a connection when protocol initialization fails") {
-      check_int_eq(run_pool_test_case(test_connection_initializer_rejects_socket), 1);
+      check_equal(run_pool_test_case(test_connection_initializer_rejects_socket), 1);
     }
   }
 
   describe("Borrow/Return") {
     it("should borrow, use, and return a connection") {
-      check_int_eq(run_pool_test_case(test_borrow_return), 1);
+      check_equal(run_pool_test_case(test_borrow_return), 1);
     }
 
     it("should borrow, use, and return a websocket connection") {
-      check_int_eq(run_pool_test_case(test_ws_borrow_return), 1);
+      check_equal(run_pool_test_case(test_ws_borrow_return), 1);
     }
 
     it("should grow pool on demand up to max_size") {
-      check_int_eq(run_pool_test_case(test_borrow_grows), 1);
+      check_equal(run_pool_test_case(test_borrow_grows), 1);
     }
 
     it("should replace a connection discarded by the protocol layer") {
-      check_int_eq(run_pool_test_case(test_discard_replaces_broken_connection), 1);
+      check_equal(run_pool_test_case(test_discard_replaces_broken_connection), 1);
     }
 
     it("should time out blocked borrowers") {
-      check_int_eq(run_pool_test_case(test_borrow_timeout), 1);
+      check_equal(run_pool_test_case(test_borrow_timeout), 1);
     }
 
     it("should not destroy borrowed connections on close") {
-      check_int_eq(run_pool_test_case(test_close_keeps_borrowed_alive), 1);
+      check_equal(run_pool_test_case(test_close_keeps_borrowed_alive), 1);
     }
   }
 
   describe("Query") {
     it("should track idle and borrowed counts") {
-      check_int_eq(run_pool_test_case(test_query_counts), 1);
+      check_equal(run_pool_test_case(test_query_counts), 1);
     }
   }
 }

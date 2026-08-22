@@ -30,8 +30,8 @@ spec("mime_encoded_word") {
 
       check(len > 0);
       check(memcmp(ew.charset, "UTF-8", 5) == 0);
-      check_int_eq(ew.charset_len, 5);
-      check_int_eq(ew.encoding, MIME_EW_ENCODING_BASE64);
+      check_equal(ew.charset_len, 5);
+      check_equal(ew.encoding, MIME_EW_ENCODING_BASE64);
       check(memcmp(ew.encoded_text, "SGVsbG8=", 8) == 0);
     }
 
@@ -43,7 +43,7 @@ spec("mime_encoded_word") {
 
       check(len > 0);
       check(memcmp(ew.charset, "ISO-8859-1", 10) == 0);
-      check_int_eq(ew.encoding, MIME_EW_ENCODING_QUOTED_PRINTABLE);
+      check_equal(ew.encoding, MIME_EW_ENCODING_QUOTED_PRINTABLE);
     }
 
     it("should be case insensitive for encoding") {
@@ -52,10 +52,10 @@ spec("mime_encoded_word") {
       mime_encoded_word_t ew;
 
       check(mime_parse_encoded_word(str1, strlen(str1), &ew) > 0);
-      check_int_eq(ew.encoding, MIME_EW_ENCODING_BASE64);
+      check_equal(ew.encoding, MIME_EW_ENCODING_BASE64);
 
       check(mime_parse_encoded_word(str2, strlen(str2), &ew) > 0);
-      check_int_eq(ew.encoding, MIME_EW_ENCODING_QUOTED_PRINTABLE);
+      check_equal(ew.encoding, MIME_EW_ENCODING_QUOTED_PRINTABLE);
     }
 
     it("should reject invalid encoded-word") {
@@ -63,7 +63,7 @@ spec("mime_encoded_word") {
       mime_encoded_word_t ew;
 
       size_t len = mime_parse_encoded_word(str, strlen(str), &ew);
-      check_int_eq(len, 0);
+      check_equal(len, 0);
     }
   }
 
@@ -79,7 +79,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_encoded_word(&pool_storage, &ew);
 
       check(decoded != NULL);
-      check_str_eq(decoded, "Hello World");
+      check_equal(decoded, "Hello World");
 
       mem_destroy(&pool_storage);
     }
@@ -96,7 +96,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_encoded_word(&pool_storage, &ew);
 
       check(decoded != NULL);
-      check_str_eq(decoded, "你好");
+      check_equal(decoded, "你好");
 
       mem_destroy(&pool_storage);
     }
@@ -114,7 +114,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_encoded_word(&pool_storage, &ew);
 
       check(decoded != NULL);
-      check_str_eq(decoded, "Hello World");
+      check_equal(decoded, "Hello World");
 
       mem_destroy(&pool_storage);
     }
@@ -130,7 +130,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_encoded_word(&pool_storage, &ew);
 
       check(decoded != NULL);
-      check_str_eq(decoded, "François");
+      check_equal(decoded, "François");
 
       mem_destroy(&pool_storage);
     }
@@ -145,7 +145,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_header(&pool_storage, header, strlen(header));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "Hello World");
+      check_equal(decoded, "Hello World");
 
       mem_destroy(&pool_storage);
     }
@@ -158,7 +158,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_header(&pool_storage, header, strlen(header));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "Hello World from John");
+      check_equal(decoded, "Hello World from John");
 
       mem_destroy(&pool_storage);
     }
@@ -172,7 +172,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_header(&pool_storage, header, strlen(header));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "HelloWorld");
+      check_equal(decoded, "HelloWorld");
 
       mem_destroy(&pool_storage);
     }
@@ -185,7 +185,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_header(&pool_storage, header, strlen(header));
 
       check(decoded != NULL);
-      check_str_eq(decoded, "Re: 测试邮件");
+      check_equal(decoded, "Re: 测试邮件");
 
       mem_destroy(&pool_storage);
     }
@@ -200,7 +200,7 @@ spec("mime_encoded_word") {
       char *decoded = mime_decode_header_auto(&pool_storage, header);
 
       check(decoded != NULL);
-      check_str_eq(decoded, "Test");
+      check_equal(decoded, "Test");
 
       mem_destroy(&pool_storage);
     }

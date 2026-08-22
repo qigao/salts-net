@@ -66,25 +66,25 @@ typedef struct imap_client_s imap_client_t;
 /**
  * Create IMAP client
  */
-CXX_C_API imap_client_t *imap_client_create(coro_context_t *ctx,
+imap_client_t *imap_client_create(coro_context_t *ctx,
                                              const imap_config_t *config);
 
 /**
  * Free IMAP client
  */
-CXX_C_API void imap_client_free(imap_client_t *client);
+void imap_client_free(imap_client_t *client);
 
 /* ── Connection ────────────────────────────────────────────────────── */
 
 /**
  * Connect and login to IMAP server
  */
-CXX_C_API int imap_connect(imap_client_t *client);
+int imap_connect(imap_client_t *client);
 
 /**
  * Logout and disconnect
  */
-CXX_C_API void imap_disconnect(imap_client_t *client);
+void imap_disconnect(imap_client_t *client);
 
 /* ── Mailbox Operations ────────────────────────────────────────────── */
 
@@ -92,7 +92,7 @@ CXX_C_API void imap_disconnect(imap_client_t *client);
  * List mailboxes
  * Returns array of mailbox names (caller must free)
  */
-CXX_C_API char **imap_list_mailboxes(imap_client_t *client,
+char **imap_list_mailboxes(imap_client_t *client,
                                       const char *reference,
                                       const char *pattern,
                                       int *count);
@@ -100,19 +100,19 @@ CXX_C_API char **imap_list_mailboxes(imap_client_t *client,
 /**
  * Select mailbox
  */
-CXX_C_API imap_mailbox_t *imap_select_mailbox(imap_client_t *client,
+imap_mailbox_t *imap_select_mailbox(imap_client_t *client,
                                                const char *mailbox);
 
 /**
  * Create mailbox
  */
-CXX_C_API int imap_create_mailbox(imap_client_t *client,
+int imap_create_mailbox(imap_client_t *client,
                                    const char *mailbox);
 
 /**
  * Delete mailbox
  */
-CXX_C_API int imap_delete_mailbox(imap_client_t *client,
+int imap_delete_mailbox(imap_client_t *client,
                                    const char *mailbox);
 
 /* ── Message Operations ────────────────────────────────────────────── */
@@ -121,52 +121,52 @@ CXX_C_API int imap_delete_mailbox(imap_client_t *client,
  * Search messages
  * Returns array of sequence numbers (caller must free)
  */
-CXX_C_API int *imap_search(imap_client_t *client,
+int *imap_search(imap_client_t *client,
                             const char *criteria,
                             int *count);
 
 /**
  * Fetch message by sequence number
  */
-CXX_C_API email_message_t *imap_fetch_message(imap_client_t *client,
+email_message_t *imap_fetch_message(imap_client_t *client,
                                                int seq_num);
 
 /**
  * Fetch message by UID
  */
-CXX_C_API email_message_t *imap_fetch_message_uid(imap_client_t *client,
+email_message_t *imap_fetch_message_uid(imap_client_t *client,
                                                    int uid);
 
 /**
  * Fetch message info (without body)
  */
-CXX_C_API imap_message_info_t *imap_fetch_info(imap_client_t *client,
+imap_message_info_t *imap_fetch_info(imap_client_t *client,
                                                 int seq_num);
 
 /**
  * Set message flags
  */
-CXX_C_API int imap_set_flags(imap_client_t *client,
+int imap_set_flags(imap_client_t *client,
                               int seq_num,
                               const char *flags);
 
 /**
  * Delete message (set \\Deleted flag)
  */
-CXX_C_API int imap_delete_message(imap_client_t *client,
+int imap_delete_message(imap_client_t *client,
                                    int seq_num);
 
 /**
  * Expunge deleted messages
  */
-CXX_C_API int imap_expunge(imap_client_t *client);
+int imap_expunge(imap_client_t *client);
 
 /* ── Error Handling ────────────────────────────────────────────────── */
 
 /**
  * Get last error message
  */
-CXX_C_API const char *imap_get_error(imap_client_t *client);
+const char *imap_get_error(imap_client_t *client);
 
 #ifdef __cplusplus
 }

@@ -1,6 +1,8 @@
 #ifndef TURBO_CORO_WEBSOCKET_H
 #define TURBO_CORO_WEBSOCKET_H
 
+
+#include "coronet_api.h"
 /**
  * @file turbo_coro_websocket.h
  * @brief Transport-independent WebSocket session for CoroNet adapters.
@@ -107,7 +109,7 @@ typedef struct coro_websocket_transport_ops_s {
    sizeof(((coro_websocket_transport_ops_t *)0)->user_data))
 
 /** Initialize options without writing past the caller-provided size. */
-CXX_C_API int coro_websocket_options_init(coro_websocket_options_t *options,
+CORONET_C_API int coro_websocket_options_init(coro_websocket_options_t *options,
                                           size_t options_size);
 
 /**
@@ -116,22 +118,22 @@ CXX_C_API int coro_websocket_options_init(coro_websocket_options_t *options,
  * The options and transport structures are copied. The callback user_data
  * pointers remain caller-owned and are borrowed until destroy().
  */
-CXX_C_API int coro_websocket_create(
+CORONET_C_API int coro_websocket_create(
     const coro_websocket_options_t *options,
     const coro_websocket_transport_ops_t *transport,
     coro_websocket_t **out_websocket);
 
-CXX_C_API void coro_websocket_destroy(coro_websocket_t *websocket);
+CORONET_C_API void coro_websocket_destroy(coro_websocket_t *websocket);
 
 /** Feed one borrowed HTTP stream DATA payload into the frame parser. */
-CXX_C_API int coro_websocket_feed(coro_websocket_t *websocket,
+CORONET_C_API int coro_websocket_feed(coro_websocket_t *websocket,
                                   const void *data, size_t len);
 
 /**
  * Send one unfragmented text, binary, ping, or pong frame.
  * Text payloads must be valid UTF-8.
  */
-CXX_C_API int coro_websocket_send(coro_websocket_t *websocket,
+CORONET_C_API int coro_websocket_send(coro_websocket_t *websocket,
                                   coro_websocket_opcode_t opcode,
                                   const void *data, size_t len);
 
@@ -139,17 +141,17 @@ CXX_C_API int coro_websocket_send(coro_websocket_t *websocket,
  * Send a close frame and mark the logical stream closed.
  * @p reason must be NULL or a NUL-terminated UTF-8 string of at most 123 bytes.
  */
-CXX_C_API int coro_websocket_close(coro_websocket_t *websocket,
+CORONET_C_API int coro_websocket_close(coro_websocket_t *websocket,
                                    uint16_t code, const char *reason);
 
 /** Mark the session closed after the underlying stream was reset/closed. */
-CXX_C_API void coro_websocket_mark_closed(coro_websocket_t *websocket);
+CORONET_C_API void coro_websocket_mark_closed(coro_websocket_t *websocket);
 
 /** Return non-zero while the session can receive or send WebSocket frames. */
-CXX_C_API int coro_websocket_is_open(const coro_websocket_t *websocket);
+CORONET_C_API int coro_websocket_is_open(const coro_websocket_t *websocket);
 
 /** Return non-zero if an input DATA stream ended between complete frames. */
-CXX_C_API int coro_websocket_input_complete(
+CORONET_C_API int coro_websocket_input_complete(
     const coro_websocket_t *websocket);
 
 #ifdef __cplusplus

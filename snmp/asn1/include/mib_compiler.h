@@ -1,6 +1,8 @@
 #ifndef MIB_COMPILER_H
 #define MIB_COMPILER_H
 
+
+#include "asn1_api.h"
 #include "ast.h"
 #include "platform.h"
 
@@ -18,15 +20,15 @@ typedef struct {
 } mib_compile_context_t;
 
 // Main compiler functions
-CXX_C_API int mib_compile_file(const char *mib_file, const char *output_dir);
-CXX_C_API int mib_compile_string(const char *mib_content, const char *output_dir);
-CXX_C_API mib_compile_context_t *mib_compile_create_context(void);
-CXX_C_API void mib_compile_destroy_context(mib_compile_context_t *ctx);
+TURBONET_ASN1_C_API int mib_compile_file(const char *mib_file, const char *output_dir);
+TURBONET_ASN1_C_API int mib_compile_string(const char *mib_content, const char *output_dir);
+TURBONET_ASN1_C_API mib_compile_context_t *mib_compile_create_context(void);
+TURBONET_ASN1_C_API void mib_compile_destroy_context(mib_compile_context_t *ctx);
 
 // Code generation
-CXX_C_API int mib_generate_c_header(mib_compile_context_t *ctx, const char *filename);
-CXX_C_API int mib_generate_c_source(mib_compile_context_t *ctx, const char *filename);
-CXX_C_API int mib_generate_runtime_table(mib_compile_context_t *ctx, const char *filename);
+TURBONET_ASN1_C_API int mib_generate_c_header(mib_compile_context_t *ctx, const char *filename);
+TURBONET_ASN1_C_API int mib_generate_c_source(mib_compile_context_t *ctx, const char *filename);
+TURBONET_ASN1_C_API int mib_generate_runtime_table(mib_compile_context_t *ctx, const char *filename);
 
 // OID management
 typedef struct {
@@ -42,8 +44,8 @@ typedef struct {
     size_t capacity;
 } mib_oid_table_t;
 
-CXX_C_API mib_oid_table_t *mib_extract_oids(AstNode *root);
-CXX_C_API void mib_oid_table_destroy(mib_oid_table_t *table);
+TURBONET_ASN1_C_API mib_oid_table_t *mib_extract_oids(AstNode *root);
+TURBONET_ASN1_C_API void mib_oid_table_destroy(mib_oid_table_t *table);
 
 #ifdef __cplusplus
 }

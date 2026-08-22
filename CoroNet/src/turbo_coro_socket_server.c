@@ -259,9 +259,9 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
         pre_tls_buffer_size - pre_tls_consumed);
     if (r != 0) {
       if (server_admission_end_is_expected(task, r)) {
-        TLOG_DEBUG("server: TLS admission ended rc={}", r);
+        TLOG_DEBUGF("server: TLS admission ended rc={}", r);
       } else {
-        TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
+        TLOG_ERRORF("server: failed to wrap accepted TCP client as TLS rc={}", r);
       }
     } else {
       TLOG_DEBUG("server: accepted client wrapped as TLS");
@@ -273,9 +273,9 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
           pre_tls_buffer_size - pre_tls_consumed);
       if (r != 0) {
         if (server_admission_end_is_expected(task, r)) {
-          TLOG_DEBUG("server: secure WebSocket TLS admission ended rc={}", r);
+          TLOG_DEBUGF("server: secure WebSocket TLS admission ended rc={}", r);
         } else {
-          TLOG_ERROR("server: failed to wrap accepted TCP client as TLS rc={}", r);
+          TLOG_ERRORF("server: failed to wrap accepted TCP client as TLS rc={}", r);
         }
       }
     }
@@ -283,9 +283,9 @@ static void coro_entry_bridge(coro_t *co, void *arg) {
       r = coro_socket_wrap_accepted_ws_server(task->socket);
       if (r != 0) {
         if (server_admission_end_is_expected(task, r)) {
-          TLOG_DEBUG("server: WebSocket admission ended rc={}", r);
+          TLOG_DEBUGF("server: WebSocket admission ended rc={}", r);
         } else {
-          TLOG_ERROR("server: failed to wrap accepted client as WebSocket rc={}", r);
+          TLOG_ERRORF("server: failed to wrap accepted client as WebSocket rc={}", r);
         }
       }
     }
@@ -417,13 +417,13 @@ static void accept_loop_task(coro_t *co, void *arg) {
            OS can reclaim descriptors, then retry.  Dying here would leave the
            port bound but silent — new clients would queue in the kernel backlog
            forever with no indication something went wrong. */
-        TLOG_WARN("server: accept failed with transient error rc={} — backing off 100 ms", r);
+        TLOG_WARNF("server: accept failed with transient error rc={} — backing off 100 ms", r);
         coro_sleep(server->ctx, 100);
       } else {
         /* Fatal listener error — broken pipe, network down, etc.
            Log and stop; the port will be unbound when the server socket is 
            destroyed by the caller. */
-        TLOG_ERROR("server: accept loop fatal error rc={} — stopping accept loop", r);
+        TLOG_ERRORF("server: accept loop fatal error rc={} — stopping accept loop", r);
         break;
       }
     }

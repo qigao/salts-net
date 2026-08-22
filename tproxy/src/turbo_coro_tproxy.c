@@ -387,9 +387,9 @@ static void on_proxy_connection(coro_socket_t *client, void *arg) {
     turbo_stats_gauge_add("tproxy.conns.active", 1);
     TURBO_STATS_INC("tproxy.conns.total");
 
-    TLOG_INFO("[TProxy] Connection accepted from {}", peer_ip);
+    TLOG_INFOF("[TProxy] Connection accepted from {}", peer_ip);
     on_proxy_connection_impl(client, arg);
-    TLOG_INFO("[TProxy] Connection closed from {}", peer_ip);
+    TLOG_INFOF("[TProxy] Connection closed from {}", peer_ip);
 
     turbo_stats_gauge_add("tproxy.conns.active", -1);
 }
@@ -414,7 +414,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
     // Check Blacklist
     if (proxy->config.blacklist_ips && peer_ip[0] != '\0') {
         if (is_ip_in_list(proxy->config.blacklist_ips, peer_ip)) {
-            TLOG_WARN("[TProxy] Blocked {} (blacklisted)", peer_ip);
+            TLOG_WARNF("[TProxy] Blocked {} (blacklisted)", peer_ip);
             coro_socket_free_recv(data);
             return;
         }
@@ -423,7 +423,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
     // Check Whitelist
     if (proxy->config.whitelist_ips && peer_ip[0] != '\0') {
        if (!is_ip_in_list(proxy->config.whitelist_ips, peer_ip)) {
-           TLOG_WARN("[TProxy] Blocked {} (not in whitelist)", peer_ip);
+           TLOG_WARNF("[TProxy] Blocked {} (not in whitelist)", peer_ip);
            coro_socket_free_recv(data);
            return;
        }
@@ -448,7 +448,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             TURBO_STATS_ADD("tproxy.bytes.in", len);
             coro_socket_free_recv(data);
             
-            TLOG_INFO("[TProxy] Forwarding raw UDP to {}", proxy->config.backend_url);
+            TLOG_INFOF("[TProxy] Forwarding raw UDP to {}", proxy->config.backend_url);
             // Pump any subsequent data between that specific client peer and upstream.
             start_bidi_pump(proxy, client, upstream);
         } else {
@@ -565,7 +565,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             }
 
             fmt(target_url, sizeof(target_url), "tcp://{}:{}", target_host, target_port);
-            TLOG_INFO("[TProxy] Request: SOCKS5 TCP CONNECT -> {}", target_url);
+            TLOG_INFOF("[TProxy] Request: SOCKS5 TCP CONNECT -> {}", target_url);
 
             const char *routed_backend = NULL;
             turbo_rule_action_type_t action = TURBO_RULE_ACTION_DIRECT;
@@ -585,7 +585,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
                 action = coro_rule_evaluate(proxy->rule_engine, target_host, target_port, &routed_backend);
                 action_set = true;
                 if (action == TURBO_RULE_ACTION_REJECT) {
-                    TLOG_WARN("[TProxy] SOCKS5 Request REJECTED by rule: {}", target_host);
+                    TLOG_WARNF("[TProxy] SOCKS5 Request REJECTED by rule: {}", target_host);
                     char fail_resp[] = {0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0};
                     coro_socket_send(client, fail_resp, 10);
                     return;
@@ -600,16 +600,16 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
 
             if (action == TURBO_RULE_ACTION_PROXY && routed_backend) {
                 strncpy(target_url, routed_backend, sizeof(target_url)-1);
-                TLOG_INFO("[TProxy] SOCKS5 Routing via Proxy: {}", target_url);
+                TLOG_INFOF("[TProxy] SOCKS5 Routing via Proxy: {}", target_url);
             } else {
-                TLOG_INFO("[TProxy] SOCKS5 Routing via Direct: {}", target_url);
+                TLOG_INFOF("[TProxy] SOCKS5 Routing via Direct: {}", target_url);
             }
 
             // Open Upstream
             coro_socket_t *upstream = coro_socket_create(ctx, socket_type_for_url(target_url));
         if (!upstream || connect_socket_to_url(upstream, target_url) != 0) {
             if (upstream) coro_socket_destroy(upstream);
-            TLOG_INFO("[TProxy] Dropped SOCKS5 connection from {} (protocol error)", peer_ip);
+            TLOG_INFOF("[TProxy] Dropped SOCKS5 connection from {} (protocol error)", peer_ip);
             char fail_resp[] = {0x05, 0x05, 0x00, 0x01, 0,0,0,0, 0,0};
             coro_socket_send(client, fail_resp, 10);
             return;
@@ -628,7 +628,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
         // Ex: CONNECT target.com:443 HTTP/1.1
         char *host_start = data + 8;
         char *host_end = strchr(host_start, ' ');
-        if (!host_end) { free(data); TLOG_INFO("[TProxy] Dropped HTTP CONNECT from {} (invalid request)", peer_ip); return; }
+        if (!host_end) { free(data); TLOG_INFOF("[TProxy] Dropped HTTP CONNECT from {} (invalid request)", peer_ip); return; }
         
         int host_len = host_end - host_start;
         char host_port_str[256] = {0};
@@ -640,7 +640,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             const char *auth_req = "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Proxy\"\r\n\r\n";
             coro_socket_send(client, auth_req, strlen(auth_req));
             free(data);
-            TLOG_INFO("[TProxy] Dropped HTTP CONNECT from {} (auth failed)", peer_ip);
+            TLOG_INFOF("[TProxy] Dropped HTTP CONNECT from {} (auth failed)", peer_ip);
             return;
         }
 
@@ -683,7 +683,7 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
             action = coro_rule_evaluate(proxy->rule_engine, t_host, t_port, &routed_backend);
             action_set = true;
             if (action == TURBO_RULE_ACTION_REJECT) {
-                TLOG_WARN("[TProxy] HTTP Request REJECTED by rule: {}", t_host);
+                TLOG_WARNF("[TProxy] HTTP Request REJECTED by rule: {}", t_host);
                 char *fail_resp = "HTTP/1.1 403 Forbidden\r\n\r\n";
                 coro_socket_send(client, fail_resp, strlen(fail_resp));
                 return;
@@ -698,17 +698,17 @@ static void on_proxy_connection_impl(coro_socket_t *client, void *arg) {
 
         if (action == TURBO_RULE_ACTION_PROXY && routed_backend) {
             strncpy(target_url, routed_backend, sizeof(target_url)-1);
-            TLOG_INFO("[TProxy] HTTP Routing via Proxy: {}", target_url);
+            TLOG_INFOF("[TProxy] HTTP Routing via Proxy: {}", target_url);
         } else {
-            TLOG_INFO("[TProxy] HTTP Routing via Direct: {}", target_url);
+            TLOG_INFOF("[TProxy] HTTP Routing via Direct: {}", target_url);
         }
             
-        TLOG_INFO("[TProxy] Connecting to -> {}", target_url);
+        TLOG_INFOF("[TProxy] Connecting to -> {}", target_url);
 
             coro_socket_t *upstream = coro_socket_create(ctx, socket_type_for_url(target_url));
             if (!upstream || connect_socket_to_url(upstream, target_url) != 0) {
                 if (upstream) coro_socket_destroy(upstream);
-                TLOG_ERROR("[TProxy] HTTP CONNECT to {} failed", target_url);
+                TLOG_ERRORF("[TProxy] HTTP CONNECT to {} failed", target_url);
                 char *fail_resp = "HTTP/1.1 502 Bad Gateway\r\n\r\n";
             coro_socket_send(client, fail_resp, strlen(fail_resp));
             return;
@@ -762,7 +762,7 @@ static void health_check_worker_coro(coro_t *co, void *arg) {
         return;
     }
 
-    TLOG_DEBUG("[TProxy] Health checking: %s", task->url);
+    TLOG_DEBUGF("[TProxy] Health checking: {}", task->url);
     uint64_t start = turbo_hrtime();
     coro_socket_set_timeout(client, 5000); 
     int r = connect_socket_to_url(client, task->url);

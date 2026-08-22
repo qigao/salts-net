@@ -51,7 +51,7 @@ static int pop3_read_line(pop3_client_t *client, char **line) {
       if (client->read_buffer[i] == '\n') {
         size_t line_len = i + 1;
         if (line_len >= sizeof(client->line_buffer)) {
-          fmt(client->error_msg, sizeof(client->error_msg), "POP3 response line too large");
+          fmt_text(client->error_msg, sizeof(client->error_msg), "POP3 response line too large");
           return -1;
         }
 
@@ -80,14 +80,14 @@ static int pop3_read_line(pop3_client_t *client, char **line) {
         if (data) {
           coro_socket_free_recv(data);
         }
-        fmt(client->error_msg, sizeof(client->error_msg), "Failed to read POP3 response");
+        fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read POP3 response");
         return -1;
       }
 
       free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
       if (len > free_space) {
         coro_socket_free_recv(data);
-        fmt(client->error_msg, sizeof(client->error_msg), "POP3 response buffer overflow");
+        fmt_text(client->error_msg, sizeof(client->error_msg), "POP3 response buffer overflow");
         return -1;
       }
 
@@ -115,7 +115,7 @@ static int pop3_read_response(pop3_client_t *client) {
 
   // POP3 responses start with +OK or -ERR
   if (line_len < 3) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Invalid POP3 response");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid POP3 response");
     return -1;
   }
 
@@ -260,7 +260,7 @@ int pop3_connect(pop3_client_t *client) {
     if (socket) pop3_socket_publish(client, socket);
   }
   if (!client->socket) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
   }
 
@@ -287,7 +287,7 @@ int pop3_connect(pop3_client_t *client) {
     }
 
     if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      fmt(client->error_msg, sizeof(client->error_msg), "Failed to upgrade POP3 connection to TLS");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to upgrade POP3 connection to TLS");
       pop3_disconnect(client);
       return -1;
     }
@@ -346,7 +346,7 @@ int pop3_stat(pop3_client_t *client, int *total_size) {
   // Parse response: "+OK count size"
   int count = 0, size = 0;
   if (sscanf(client->line_buffer, "+OK %d %d", &count, &size) != 2) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to parse STAT response");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to parse STAT response");
     return -1;
   }
 

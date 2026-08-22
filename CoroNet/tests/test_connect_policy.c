@@ -38,13 +38,13 @@ spec("CoroNet resolved-address connect policy") {
     check_not_null(ctx);
     socket = coro_socket_create_udpv4(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_set_connect_policy(socket, audit_connect_policy, &audit), 0);
-    check_int_eq(coro_socket_connect(socket, "127.0.0.1", 9), 0);
-    check_int_eq(audit.calls, 1);
-    check_size_eq(audit.result_count, 1);
-    check_str_eq(audit.hostname, "127.0.0.1");
-    check_str_eq(audit.ip, "127.0.0.1");
-    check_int_eq(coro_socket_set_connect_policy(socket, NULL, NULL), 0);
+    check_equal(coro_socket_set_connect_policy(socket, audit_connect_policy, &audit), 0);
+    check_equal(coro_socket_connect(socket, "127.0.0.1", 9), 0);
+    check_equal(audit.calls, 1);
+    check_equal(audit.result_count, 1);
+    check_equal(audit.hostname, "127.0.0.1");
+    check_equal(audit.ip, "127.0.0.1");
+    check_equal(coro_socket_set_connect_policy(socket, NULL, NULL), 0);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);
@@ -59,11 +59,11 @@ spec("CoroNet resolved-address connect policy") {
     socket = coro_socket_create(ctx, CORO_SOCKET_TCP_V4);
     check_not_null(socket);
     audit.result = TURBO_EPERM;
-    check_int_eq(coro_socket_set_connect_policy(socket, audit_connect_policy, &audit), 0);
-    check_int_eq(coro_socket_connect(socket, "127.0.0.1", 1), TURBO_EPERM);
-    check_int_eq(audit.calls, 1);
-    check_size_eq(audit.result_count, 1);
-    check_int_eq(coro_socket_set_connect_policy(socket, NULL, NULL), 0);
+    check_equal(coro_socket_set_connect_policy(socket, audit_connect_policy, &audit), 0);
+    check_equal(coro_socket_connect(socket, "127.0.0.1", 1), TURBO_EPERM);
+    check_equal(audit.calls, 1);
+    check_equal(audit.result_count, 1);
+    check_equal(coro_socket_set_connect_policy(socket, NULL, NULL), 0);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);

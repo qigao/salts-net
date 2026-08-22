@@ -22,6 +22,8 @@
 #ifndef TURBO_CORONET_OBJECT_POOL_H
 #define TURBO_CORONET_OBJECT_POOL_H
 
+
+#include "coronet_api.h"
 #include "platform.h"
 #include "turbo_coro.h"
 #include "turbo_coro_context.h"
@@ -53,7 +55,7 @@ typedef struct coro_object_pool_config_s {
  * @param ctx Coroutine context (required for arena allocation)
  * @return Pool handle or NULL on failure
  */
-CXX_C_API coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *config,
+CORONET_C_API coro_object_pool_t *coro_object_pool_create(const coro_object_pool_config_t *config,
                                                        coro_context_t *ctx);
 
 /**
@@ -62,7 +64,7 @@ CXX_C_API coro_object_pool_t *coro_object_pool_create(const coro_object_pool_con
  *
  * WARNING: All coroutines must be released before destroying the pool.
  */
-CXX_C_API void coro_object_pool_destroy(coro_object_pool_t *pool);
+CORONET_C_API void coro_object_pool_destroy(coro_object_pool_t *pool);
 
 /* ── Acquire / Release ────────────────────────────────────── */
 
@@ -75,7 +77,7 @@ CXX_C_API void coro_object_pool_destroy(coro_object_pool_t *pool);
  *
  * PERFORMANCE: O(1) - pop from free-list or allocate new
  */
-CXX_C_API coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn, void *arg);
+CORONET_C_API coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn, void *arg);
 
 /**
  * @brief Spawn a coroutine into a scheduler using an object pool.
@@ -92,7 +94,7 @@ CXX_C_API coro_t *coro_object_pool_acquire(coro_object_pool_t *pool, coro_fn fn,
  * @param arg   Argument passed to entry function
  * @return Coroutine handle or NULL on failure
  */
-CXX_C_API coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
+CORONET_C_API coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
                                     coro_object_pool_t *pool,
                                     coro_fn fn,
                                     void *arg);
@@ -105,7 +107,7 @@ CXX_C_API coro_t *coro_spawn_pooled(coro_scheduler_t *sched,
  * PERFORMANCE: O(1) - push to free-list
  * NOTE: The coroutine must be in DEAD state before releasing
  */
-CXX_C_API void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co);
+CORONET_C_API void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co);
 
 /**
  * @brief Reclaim pool bookkeeping for a coroutine being force-destroyed.
@@ -114,7 +116,7 @@ CXX_C_API void coro_object_pool_release(coro_object_pool_t *pool, coro_t *co);
  * Used during scheduler teardown when a coroutine did not finish cleanly and
  * therefore cannot be returned through the normal DEAD-state release path.
  */
-CXX_C_API void coro_object_pool_discard_coro(coro_t *co);
+CORONET_C_API void coro_object_pool_discard_coro(coro_t *co);
 
 /**
  * @brief Drop stale active coroutine accounting after forced scheduler teardown.
@@ -125,7 +127,7 @@ CXX_C_API void coro_object_pool_discard_coro(coro_t *co);
  * active_count can still reflect pre-teardown ownership. This helper reconciles
  * that bookkeeping before pool destruction.
  */
-CXX_C_API void coro_object_pool_forget_active(coro_object_pool_t *pool);
+CORONET_C_API void coro_object_pool_forget_active(coro_object_pool_t *pool);
 
 /* ── Query ────────────────────────────────────────────────── */
 
@@ -134,21 +136,21 @@ CXX_C_API void coro_object_pool_forget_active(coro_object_pool_t *pool);
  * @param pool Pool handle
  * @return Number of available coroutines
  */
-CXX_C_API size_t coro_object_pool_free_count(const coro_object_pool_t *pool);
+CORONET_C_API size_t coro_object_pool_free_count(const coro_object_pool_t *pool);
 
 /**
  * @brief Get number of active (acquired) coroutines
  * @param pool Pool handle
  * @return Number of coroutines currently in use
  */
-CXX_C_API size_t coro_object_pool_active_count(const coro_object_pool_t *pool);
+CORONET_C_API size_t coro_object_pool_active_count(const coro_object_pool_t *pool);
 
 /**
  * @brief Get total capacity of the pool
  * @param pool Pool handle
  * @return Total number of coroutines (free + active)
  */
-CXX_C_API size_t coro_object_pool_capacity(const coro_object_pool_t *pool);
+CORONET_C_API size_t coro_object_pool_capacity(const coro_object_pool_t *pool);
 
 #ifdef __cplusplus
 }

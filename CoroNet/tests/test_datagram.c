@@ -213,9 +213,9 @@ spec("Datagram") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);
 #if defined(TURBO_HAS_IO_URING)
-        check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
+        check_equal(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
 #else
-        check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING),
+        check_equal(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING),
                      TURBO_ENOTSUP);
 #endif
 
@@ -231,7 +231,7 @@ spec("Datagram") {
         check(ctx != NULL);
         sock = coro_socket_create_udpv4(ctx);
         check(sock != NULL);
-        check_int_eq(coro_socket_get_udp_backend(sock), TURBO_UDP_BACKEND_IO_URING);
+        check_equal(coro_socket_get_udp_backend(sock), TURBO_UDP_BACKEND_IO_URING);
 
         coro_socket_destroy(sock);
         coro_context_destroy(ctx);
@@ -246,7 +246,7 @@ spec("Datagram") {
         check(dg != NULL);
 
         int r = turbo_datagram_bind(dg, "127.0.0.1", 0);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         turbo_datagram_destroy(dg);
 
@@ -262,10 +262,10 @@ spec("Datagram") {
             turbo_datagram_t *dg;
 
             check_not_null(ctx);
-            check_int_eq(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
+            check_equal(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
             dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
             check_not_null(dg);
-            check_int_eq(turbo_datagram_bind(dg, "127.0.0.1", 0), 0);
+            check_equal(turbo_datagram_bind(dg, "127.0.0.1", 0), 0);
 
             turbo_datagram_destroy(dg);
             datagram_test_destroy_context_robust(ctx);
@@ -280,22 +280,22 @@ spec("Datagram") {
         check_not_null(ctx);
         dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
         check_not_null(dg);
-        check_int_eq(turbo_datagram_bind(dg, "0.0.0.0", 0), 0);
+        check_equal(turbo_datagram_bind(dg, "0.0.0.0", 0), 0);
 
-        check_int_eq(turbo_datagram_set_multicast_loop(dg, 0), 0);
-        check_int_eq(turbo_datagram_set_multicast_loop(dg, 1), 0);
-        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 0), 0);
-        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 255), 0);
-        check_int_eq(turbo_datagram_set_multicast_ttl(dg, -1), TURBO_ERANGE);
-        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 256), TURBO_ERANGE);
-        check_int_eq(turbo_datagram_set_broadcast(dg, 1), 0);
-        check_int_eq(turbo_datagram_set_broadcast(dg, 0), 0);
+        check_equal(turbo_datagram_set_multicast_loop(dg, 0), 0);
+        check_equal(turbo_datagram_set_multicast_loop(dg, 1), 0);
+        check_equal(turbo_datagram_set_multicast_ttl(dg, 0), 0);
+        check_equal(turbo_datagram_set_multicast_ttl(dg, 255), 0);
+        check_equal(turbo_datagram_set_multicast_ttl(dg, -1), TURBO_ERANGE);
+        check_equal(turbo_datagram_set_multicast_ttl(dg, 256), TURBO_ERANGE);
+        check_equal(turbo_datagram_set_broadcast(dg, 1), 0);
+        check_equal(turbo_datagram_set_broadcast(dg, 0), 0);
 
-        check_int_eq(turbo_datagram_join_multicast(dg, "invalid", NULL), TURBO_EINVAL);
-        check_int_eq(turbo_datagram_join_multicast(dg, "127.0.0.1", NULL), TURBO_EINVAL);
-        check_int_eq(turbo_datagram_join_multicast(dg, "239.255.0.1", "invalid"),
+        check_equal(turbo_datagram_join_multicast(dg, "invalid", NULL), TURBO_EINVAL);
+        check_equal(turbo_datagram_join_multicast(dg, "127.0.0.1", NULL), TURBO_EINVAL);
+        check_equal(turbo_datagram_join_multicast(dg, "239.255.0.1", "invalid"),
                      TURBO_EINVAL);
-        check_int_eq(turbo_datagram_leave_multicast(dg, "invalid", NULL), TURBO_EINVAL);
+        check_equal(turbo_datagram_leave_multicast(dg, "invalid", NULL), TURBO_EINVAL);
 
         turbo_datagram_destroy(dg);
         datagram_test_destroy_context_robust(ctx);
@@ -308,19 +308,19 @@ spec("Datagram") {
         check_not_null(ctx);
         dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP6);
         check_not_null(dg);
-        check_int_eq(turbo_datagram_bind(dg, "::1", 0), 0);
+        check_equal(turbo_datagram_bind(dg, "::1", 0), 0);
 
-        check_int_eq(turbo_datagram_set_multicast_loop(dg, 0), 0);
-        check_int_eq(turbo_datagram_set_multicast_loop(dg, 1), 0);
-        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 1), 0);
-        check_int_eq(turbo_datagram_set_multicast_ttl(dg, 256), TURBO_ERANGE);
-        check_int_eq(turbo_datagram_set_broadcast(dg, 1), TURBO_ENOTSUP);
+        check_equal(turbo_datagram_set_multicast_loop(dg, 0), 0);
+        check_equal(turbo_datagram_set_multicast_loop(dg, 1), 0);
+        check_equal(turbo_datagram_set_multicast_ttl(dg, 1), 0);
+        check_equal(turbo_datagram_set_multicast_ttl(dg, 256), TURBO_ERANGE);
+        check_equal(turbo_datagram_set_broadcast(dg, 1), TURBO_ENOTSUP);
 
-        check_int_eq(turbo_datagram_join_multicast(dg, "127.0.0.1", NULL), TURBO_EINVAL);
-        check_int_eq(turbo_datagram_join_multicast(dg, "::1", NULL), TURBO_EINVAL);
-        check_int_eq(turbo_datagram_join_multicast(dg, "ff02::1", "not-an-index"),
+        check_equal(turbo_datagram_join_multicast(dg, "127.0.0.1", NULL), TURBO_EINVAL);
+        check_equal(turbo_datagram_join_multicast(dg, "::1", NULL), TURBO_EINVAL);
+        check_equal(turbo_datagram_join_multicast(dg, "ff02::1", "not-an-index"),
                      TURBO_EINVAL);
-        check_int_eq(turbo_datagram_leave_multicast(dg, "invalid", NULL), TURBO_EINVAL);
+        check_equal(turbo_datagram_leave_multicast(dg, "invalid", NULL), TURBO_EINVAL);
 
         turbo_datagram_destroy(dg);
         datagram_test_destroy_context_robust(ctx);
@@ -351,9 +351,9 @@ spec("Datagram") {
 
         r = coro_socket_bind(server1, (struct sockaddr *)&addr);
         if (r == 0) {
-            check_int_eq(coro_socket_get_local_address(server1, &local_addr), 0);
+            check_equal(coro_socket_get_local_address(server1, &local_addr), 0);
             addr.sin_port = ((const struct sockaddr_in *)&local_addr)->sin_port;
-            check_int_eq(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
+            check_equal(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
         } else {
             check(r != 0);
         }
@@ -368,11 +368,11 @@ spec("Datagram") {
         check(ctx != NULL);
 
         check(turbo_datagram_create(ctx, (turbo_datagram_kind_t)-1) == NULL);
-        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+        check_equal(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
         turbo_datagram_t *dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
         check(dg != NULL);
-        check_int_eq(coro_context_get_last_error(ctx), 0);
+        check_equal(coro_context_get_last_error(ctx), 0);
 
         turbo_datagram_destroy(dg);
         datagram_test_destroy_context_robust(ctx);
@@ -385,7 +385,7 @@ spec("Datagram") {
 
         coro_socket_t *sock = coro_socket_create_udpv4(ctx);
         check(sock == NULL);
-        check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+        check_equal(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
         coro_context_destroy(ctx);
     }
@@ -398,22 +398,22 @@ spec("Datagram") {
         turbo_datagram_t *client = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
 
         int r = turbo_datagram_bind(server, "127.0.0.1", 0);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         r = turbo_datagram_bind(client, "127.0.0.1", 0);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         struct sockaddr_storage server_addr;
         r = turbo_datagram_get_local_addr(server, &server_addr);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         s_received = 0;
         turbo_datagram_recv_start(server, on_datagram_recv);
         
         r = turbo_datagram_sendto(client, (struct sockaddr*)&server_addr, "hello", 5);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
-        check_int_eq(datagram_test_run_until(ctx, &s_received, 1, 3000), 0);
+        check_equal(datagram_test_run_until(ctx, &s_received, 1, 3000), 0);
 
         turbo_datagram_destroy(server);
         turbo_datagram_destroy(client);
@@ -428,8 +428,8 @@ spec("Datagram") {
         turbo_datagram_t *server = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
         turbo_datagram_t *client = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
 
-        check_int_eq(turbo_datagram_bind(server, "127.0.0.1", 0), 0);
-        check_int_eq(turbo_datagram_bind(client, "127.0.0.1", 0), 0);
+        check_equal(turbo_datagram_bind(server, "127.0.0.1", 0), 0);
+        check_equal(turbo_datagram_bind(client, "127.0.0.1", 0), 0);
 
         struct sockaddr_storage server_addr;
         turbo_datagram_get_local_addr(server, &server_addr);
@@ -454,7 +454,7 @@ spec("Datagram") {
             coro_context_run(ctx, TURBO_RUN_ONCE);
         }
 
-        check_int_eq(s_stress_received, total);
+        check_equal(s_stress_received, total);
 
         turbo_datagram_destroy(server);
         turbo_datagram_destroy(client);
@@ -475,24 +475,24 @@ spec("Datagram") {
         check_not_null(left);
         check_not_null(right);
 
-        check_int_eq(turbo_datagram_bind(left, "127.0.0.1", 0), 0);
-        check_int_eq(turbo_datagram_bind(right, "127.0.0.1", 0), 0);
-        check_int_eq(turbo_datagram_get_local_addr(left, &left_addr), 0);
-        check_int_eq(turbo_datagram_get_local_addr(right, &right_addr), 0);
+        check_equal(turbo_datagram_bind(left, "127.0.0.1", 0), 0);
+        check_equal(turbo_datagram_bind(right, "127.0.0.1", 0), 0);
+        check_equal(turbo_datagram_get_local_addr(left, &left_addr), 0);
+        check_equal(turbo_datagram_get_local_addr(right, &right_addr), 0);
 
-        check_int_eq(turbo_datagram_connect(left, "127.0.0.1", datagram_test_port(&right_addr)), 0);
-        check_int_eq(turbo_datagram_connect(right, "127.0.0.1", datagram_test_port(&left_addr)), 0);
+        check_equal(turbo_datagram_connect(left, "127.0.0.1", datagram_test_port(&right_addr)), 0);
+        check_equal(turbo_datagram_connect(right, "127.0.0.1", datagram_test_port(&left_addr)), 0);
 
         s_connected_datagram_a_received = 0;
         s_connected_datagram_b_received = 0;
-        check_int_eq(turbo_datagram_recv_start(left, on_connected_datagram_a_recv), 0);
-        check_int_eq(turbo_datagram_recv_start(right, on_connected_datagram_b_recv), 0);
+        check_equal(turbo_datagram_recv_start(left, on_connected_datagram_a_recv), 0);
+        check_equal(turbo_datagram_recv_start(right, on_connected_datagram_b_recv), 0);
 
-        check_int_eq(turbo_datagram_send(left, "ping", 4), 0);
-        check_int_eq(datagram_test_run_until(ctx, &s_connected_datagram_b_received, 1, 3000), 0);
+        check_equal(turbo_datagram_send(left, "ping", 4), 0);
+        check_equal(datagram_test_run_until(ctx, &s_connected_datagram_b_received, 1, 3000), 0);
 
-        check_int_eq(turbo_datagram_send(right, "pong", 4), 0);
-        check_int_eq(datagram_test_run_until(ctx, &s_connected_datagram_a_received, 1, 3000), 0);
+        check_equal(turbo_datagram_send(right, "pong", 4), 0);
+        check_equal(datagram_test_run_until(ctx, &s_connected_datagram_a_received, 1, 3000), 0);
 
         turbo_datagram_destroy(left);
         turbo_datagram_destroy(right);
@@ -511,8 +511,8 @@ spec("Datagram") {
 
             dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
             check_not_null(dg);
-            check_int_eq(turbo_datagram_bind(dg, "127.0.0.1", 0), 0);
-            check_int_eq(turbo_datagram_recv_start(dg, on_stress_recv), 0);
+            check_equal(turbo_datagram_bind(dg, "127.0.0.1", 0), 0);
+            check_equal(turbo_datagram_recv_start(dg, on_stress_recv), 0);
 
             turbo_datagram_close(dg);
             turbo_datagram_destroy(dg);
@@ -540,14 +540,14 @@ spec("Datagram") {
             check_not_null(sender);
             check_not_null(receiver);
 
-            check_int_eq(turbo_datagram_bind(sender, "127.0.0.1", 0), 0);
-            check_int_eq(turbo_datagram_bind(receiver, "127.0.0.1", 0), 0);
-            check_int_eq(turbo_datagram_get_local_addr(receiver, &receiver_addr), 0);
-            check_int_eq(turbo_datagram_connect(sender, "127.0.0.1",
+            check_equal(turbo_datagram_bind(sender, "127.0.0.1", 0), 0);
+            check_equal(turbo_datagram_bind(receiver, "127.0.0.1", 0), 0);
+            check_equal(turbo_datagram_get_local_addr(receiver, &receiver_addr), 0);
+            check_equal(turbo_datagram_connect(sender, "127.0.0.1",
                                                 datagram_test_port(&receiver_addr)), 0);
 
             for (j = 0; j < DATAGRAM_SEND_BURST; ++j) {
-                check_int_eq(turbo_datagram_send(sender, s_datagram_send_payload,
+                check_equal(turbo_datagram_send(sender, s_datagram_send_payload,
                                                  sizeof(s_datagram_send_payload)), 0);
             }
 
@@ -579,13 +579,13 @@ spec("Datagram") {
 
         datagram_test_make_loopback_addr(&left_bind, 0);
         datagram_test_make_loopback_addr(&right_bind, 0);
-        check_int_eq(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
-        check_int_eq(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
-        check_int_eq(coro_socket_get_local_address(left, &left_addr), 0);
-        check_int_eq(coro_socket_get_local_address(right, &right_addr), 0);
+        check_equal(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
+        check_equal(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
+        check_equal(coro_socket_get_local_address(left, &left_addr), 0);
+        check_equal(coro_socket_get_local_address(right, &right_addr), 0);
 
-        check_int_eq(coro_socket_connect(left, "127.0.0.1", datagram_test_port(&right_addr)), 0);
-        check_int_eq(coro_socket_connect(right, "127.0.0.1", datagram_test_port(&left_addr)), 0);
+        check_equal(coro_socket_connect(left, "127.0.0.1", datagram_test_port(&right_addr)), 0);
+        check_equal(coro_socket_connect(right, "127.0.0.1", datagram_test_port(&left_addr)), 0);
 
         memset(&left_recv, 0, sizeof(left_recv));
         memset(&right_recv, 0, sizeof(right_recv));
@@ -594,31 +594,31 @@ spec("Datagram") {
         left_recv.rc = -1;
         right_recv.rc = -1;
 
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &left_recv), 0);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &left_recv), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
 
         /* coro_context_spawn() is lazy; arm both recv waits before sending. */
         for (int i = 0; i < 4; i++) {
             coro_context_run(ctx, TURBO_RUN_NOWAIT);
         }
 
-        check_int_eq(coro_socket_send(left, "ping", 4), 0);
-        check_int_eq(coro_socket_send(right, "pong", 4), 0);
+        check_equal(coro_socket_send(left, "ping", 4), 0);
+        check_equal(coro_socket_send(right, "pong", 4), 0);
 
         done_flags[0] = &left_recv.done;
         done_flags[1] = &right_recv.done;
         (void)datagram_test_run_until_all(ctx, done_flags, 2, 3000);
-        check_int_eq(left_recv.done, 1);
-        check_int_eq(right_recv.done, 1);
+        check_equal(left_recv.done, 1);
+        check_equal(right_recv.done, 1);
 
-        check_int_eq(left_recv.rc, 0);
-        check_int_eq(right_recv.rc, 0);
-        check_size_eq(left_recv.len, 4);
-        check_size_eq(right_recv.len, 4);
-        check_str_eq(left_recv.payload, "pong");
-        check_str_eq(right_recv.payload, "ping");
-        check_int_eq(datagram_test_port(&left_recv.peer_addr), datagram_test_port(&right_addr));
-        check_int_eq(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
+        check_equal(left_recv.rc, 0);
+        check_equal(right_recv.rc, 0);
+        check_equal(left_recv.len, 4);
+        check_equal(right_recv.len, 4);
+        check_equal(left_recv.payload, "pong");
+        check_equal(right_recv.payload, "ping");
+        check_equal(datagram_test_port(&left_recv.peer_addr), datagram_test_port(&right_addr));
+        check_equal(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
@@ -648,10 +648,10 @@ spec("Datagram") {
 
         datagram_test_make_loopback_addr(&left_bind, 0);
         datagram_test_make_loopback_addr(&right_bind, 0);
-        check_int_eq(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
-        check_int_eq(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
-        check_int_eq(coro_socket_get_local_address(left, &left_addr), 0);
-        check_int_eq(coro_socket_get_local_address(right, &right_addr), 0);
+        check_equal(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
+        check_equal(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
+        check_equal(coro_socket_get_local_address(left, &left_addr), 0);
+        check_equal(coro_socket_get_local_address(right, &right_addr), 0);
 
         memset(&left_recv, 0, sizeof(left_recv));
         memset(&right_recv, 0, sizeof(right_recv));
@@ -672,35 +672,35 @@ spec("Datagram") {
         left_send.rc = -1;
         right_send.rc = -1;
 
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &left_recv), 0);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &left_recv), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
         for (int i = 0; i < 4; i++) {
             coro_context_run(ctx, TURBO_RUN_NOWAIT);
         }
 
-        check_int_eq(coro_context_spawn(ctx, udp_socket_sendto_task, &left_send), 0);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_sendto_task, &right_send), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_sendto_task, &left_send), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_sendto_task, &right_send), 0);
 
         done_flags[0] = &left_recv.done;
         done_flags[1] = &right_recv.done;
         done_flags[2] = &left_send.done;
         done_flags[3] = &right_send.done;
         (void)datagram_test_run_until_all(ctx, done_flags, 4, 3000);
-        check_int_eq(left_send.done, 1);
-        check_int_eq(right_send.done, 1);
-        check_int_eq(left_recv.done, 1);
-        check_int_eq(right_recv.done, 1);
+        check_equal(left_send.done, 1);
+        check_equal(right_send.done, 1);
+        check_equal(left_recv.done, 1);
+        check_equal(right_recv.done, 1);
 
-        check_int_eq(left_send.rc, 0);
-        check_int_eq(right_send.rc, 0);
-        check_int_eq(left_recv.rc, 0);
-        check_int_eq(right_recv.rc, 0);
-        check_size_eq(left_recv.len, 4);
-        check_size_eq(right_recv.len, 4);
-        check_str_eq(left_recv.payload, "pong");
-        check_str_eq(right_recv.payload, "ping");
-        check_int_eq(datagram_test_port(&left_recv.peer_addr), datagram_test_port(&right_addr));
-        check_int_eq(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
+        check_equal(left_send.rc, 0);
+        check_equal(right_send.rc, 0);
+        check_equal(left_recv.rc, 0);
+        check_equal(right_recv.rc, 0);
+        check_equal(left_recv.len, 4);
+        check_equal(right_recv.len, 4);
+        check_equal(left_recv.payload, "pong");
+        check_equal(right_recv.payload, "ping");
+        check_equal(datagram_test_port(&left_recv.peer_addr), datagram_test_port(&right_addr));
+        check_equal(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
@@ -729,18 +729,18 @@ spec("Datagram") {
 
         datagram_test_make_loopback_addr(&left_bind, 0);
         datagram_test_make_loopback_addr(&right_bind, 0);
-        check_int_eq(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
-        check_int_eq(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
-        check_int_eq(coro_socket_get_local_address(left, &left_addr), 0);
-        check_int_eq(coro_socket_get_local_address(right, &right_addr), 0);
+        check_equal(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
+        check_equal(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
+        check_equal(coro_socket_get_local_address(left, &left_addr), 0);
+        check_equal(coro_socket_get_local_address(right, &right_addr), 0);
 
         memset(&timed_out_recv, 0, sizeof(timed_out_recv));
         timed_out_recv.socket = right;
         timed_out_recv.rc = -1;
         coro_socket_set_timeout(right, 1);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &timed_out_recv), 0);
-        check_int_eq(datagram_test_run_until(ctx, &timed_out_recv.done, 1, 3000), 0);
-        check_int_eq(timed_out_recv.rc, TURBO_ETIMEDOUT);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &timed_out_recv), 0);
+        check_equal(datagram_test_run_until(ctx, &timed_out_recv.done, 1, 3000), 0);
+        check_equal(timed_out_recv.rc, TURBO_ETIMEDOUT);
 
         memset(&right_recv, 0, sizeof(right_recv));
         memset(&left_send, 0, sizeof(left_send));
@@ -753,21 +753,21 @@ spec("Datagram") {
         left_send.rc = -1;
 
         coro_socket_set_timeout(right, 3000);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
         for (int i = 0; i < 4; i++) {
             coro_context_run(ctx, TURBO_RUN_NOWAIT);
         }
-        check_int_eq(coro_context_spawn(ctx, udp_socket_sendto_task, &left_send), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_sendto_task, &left_send), 0);
 
         done_flags[0] = &right_recv.done;
         done_flags[1] = &left_send.done;
-        check_int_eq(datagram_test_run_until_all(ctx, done_flags, 2, 3000), 0);
+        check_equal(datagram_test_run_until_all(ctx, done_flags, 2, 3000), 0);
 
-        check_int_eq(left_send.rc, 0);
-        check_int_eq(right_recv.rc, 0);
-        check_size_eq(right_recv.len, 4);
-        check_str_eq(right_recv.payload, "late");
-        check_int_eq(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
+        check_equal(left_send.rc, 0);
+        check_equal(right_recv.rc, 0);
+        check_equal(right_recv.len, 4);
+        check_equal(right_recv.payload, "late");
+        check_equal(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);
@@ -796,18 +796,18 @@ spec("Datagram") {
 
         datagram_test_make_loopback_addr(&left_bind, 0);
         datagram_test_make_loopback_addr(&right_bind, 0);
-        check_int_eq(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
-        check_int_eq(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
-        check_int_eq(coro_socket_get_local_address(left, &left_addr), 0);
-        check_int_eq(coro_socket_get_local_address(right, &right_addr), 0);
+        check_equal(coro_socket_bind(left, (struct sockaddr *)&left_bind), 0);
+        check_equal(coro_socket_bind(right, (struct sockaddr *)&right_bind), 0);
+        check_equal(coro_socket_get_local_address(left, &left_addr), 0);
+        check_equal(coro_socket_get_local_address(right, &right_addr), 0);
 
         memset(&left_timeout_recv, 0, sizeof(left_timeout_recv));
         left_timeout_recv.socket = left;
         left_timeout_recv.rc = -1;
         coro_socket_set_timeout(left, 1);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &left_timeout_recv), 0);
-        check_int_eq(datagram_test_run_until(ctx, &left_timeout_recv.done, 1, 3000), 0);
-        check_int_eq(left_timeout_recv.rc, TURBO_ETIMEDOUT);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &left_timeout_recv), 0);
+        check_equal(datagram_test_run_until(ctx, &left_timeout_recv.done, 1, 3000), 0);
+        check_equal(left_timeout_recv.rc, TURBO_ETIMEDOUT);
 
         memset(&right_recv, 0, sizeof(right_recv));
         memset(&left_send, 0, sizeof(left_send));
@@ -820,21 +820,21 @@ spec("Datagram") {
         left_send.rc = -1;
 
         coro_socket_set_timeout(right, 3000);
-        check_int_eq(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_recv_task, &right_recv), 0);
         for (int i = 0; i < 4; i++) {
             coro_context_run(ctx, TURBO_RUN_NOWAIT);
         }
-        check_int_eq(coro_context_spawn(ctx, udp_socket_sendto_task, &left_send), 0);
+        check_equal(coro_context_spawn(ctx, udp_socket_sendto_task, &left_send), 0);
 
         done_flags[0] = &right_recv.done;
         done_flags[1] = &left_send.done;
-        check_int_eq(datagram_test_run_until_all(ctx, done_flags, 2, 3000), 0);
+        check_equal(datagram_test_run_until_all(ctx, done_flags, 2, 3000), 0);
 
-        check_int_eq(left_send.rc, 0);
-        check_int_eq(right_recv.rc, 0);
-        check_size_eq(right_recv.len, 4);
-        check_str_eq(right_recv.payload, "send");
-        check_int_eq(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
+        check_equal(left_send.rc, 0);
+        check_equal(right_recv.rc, 0);
+        check_equal(right_recv.len, 4);
+        check_equal(right_recv.payload, "send");
+        check_equal(datagram_test_port(&right_recv.peer_addr), datagram_test_port(&left_addr));
 
         coro_socket_destroy(left);
         coro_socket_destroy(right);

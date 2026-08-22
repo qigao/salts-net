@@ -229,12 +229,12 @@ int coro_pool_open_ws_host_ex(coro_pool_t *pool, const char *connect_host, int p
   }
 
   for (size_t i = 0; i < pool->config.min_size; i++) {
-    TLOG_DEBUG("pool[{:p}] open-ws: preconnecting slot {:d}", (void *)pool, (int)i);
+    TLOG_DEBUGF("pool[{:p}] open-ws: preconnecting slot {:d}", (void *)pool, (int)i);
     pool->alive_count++;
     {
       int rc = connect_slot(pool, i, POOL_SLOT_IDLE);
       if (rc != 0) {
-        TLOG_DEBUG("pool[{:p}] open-ws: slot {:d} connect failed rc={:d}", (void *)pool, (int)i,
+        TLOG_DEBUGF("pool[{:p}] open-ws: slot {:d} connect failed rc={:d}", (void *)pool, (int)i,
                    rc);
         pool->alive_count--;
         return rc;
@@ -654,7 +654,7 @@ static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial
     rc = coro_socket_connect(c, pool->host, pool->port);
   }
   if (rc != 0) {
-    TLOG_DEBUG("pool[{:p}] connect_slot: idx={:d} connect failed rc={:d}", (void *)pool, (int)idx,
+    TLOG_DEBUGF("pool[{:p}] connect_slot: idx={:d} connect failed rc={:d}", (void *)pool, (int)idx,
                rc);
     coro_socket_destroy(c);
     return rc;
@@ -679,7 +679,7 @@ static int connect_slot(coro_pool_t *pool, size_t idx, pool_slot_state_t initial
 
 static void destroy_slot(coro_pool_t *pool, size_t idx) {
   if (pool->slots[idx].client) {
-    TLOG_DEBUG("pool[{:p}] destroy_slot: idx={:d} client={:p} connected={:d} state={:s}",
+    TLOG_DEBUGF("pool[{:p}] destroy_slot: idx={:d} client={:p} connected={:d} state={:s}",
                (void *)pool, (int)idx, (void *)pool->slots[idx].client,
                pool->slots[idx].client->connected, pool_slot_state_name(pool->slots[idx].state));
     coro_socket_destroy(pool->slots[idx].client);

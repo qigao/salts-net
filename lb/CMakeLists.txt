@@ -7,7 +7,7 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 # Build SHARED library
 add_library(${TARGET_NAME} SHARED ${HEADER_FILES} ${SOURCE_FILES})
 add_library(TurboNet::LB ALIAS ${TARGET_NAME})
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+cmake_config_api(${TARGET_NAME} TURBONET_LB_C_API)
 
 # Set target properties
 set_target_properties(

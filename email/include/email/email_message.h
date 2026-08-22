@@ -80,12 +80,12 @@ typedef struct {
 /**
  * Create new email message
  */
-CXX_C_API email_message_t *email_message_create(mem_pool_t *pool);
+email_message_t *email_message_create(mem_pool_t *pool);
 
 /**
  * Free email message
  */
-CXX_C_API void email_message_free(email_message_t *msg);
+void email_message_free(email_message_t *msg);
 
 /* ── Address Management ────────────────────────────────────────────── */
 
@@ -93,35 +93,35 @@ CXX_C_API void email_message_free(email_message_t *msg);
  * Set From address
  * Example: email_message_set_from(msg, "John Doe", "john@example.com")
  */
-CXX_C_API int email_message_set_from(email_message_t *msg,
+int email_message_set_from(email_message_t *msg,
                                       const char *name,
                                       const char *email);
 
 /**
  * Add To recipient
  */
-CXX_C_API int email_message_add_to(email_message_t *msg,
+int email_message_add_to(email_message_t *msg,
                                     const char *name,
                                     const char *email);
 
 /**
  * Add CC recipient
  */
-CXX_C_API int email_message_add_cc(email_message_t *msg,
+int email_message_add_cc(email_message_t *msg,
                                     const char *name,
                                     const char *email);
 
 /**
  * Add BCC recipient
  */
-CXX_C_API int email_message_add_bcc(email_message_t *msg,
+int email_message_add_bcc(email_message_t *msg,
                                      const char *name,
                                      const char *email);
 
 /**
  * Set Reply-To address
  */
-CXX_C_API int email_message_set_reply_to(email_message_t *msg,
+int email_message_set_reply_to(email_message_t *msg,
                                           const char *name,
                                           const char *email);
 
@@ -130,25 +130,25 @@ CXX_C_API int email_message_set_reply_to(email_message_t *msg,
 /**
  * Set subject (automatically encodes non-ASCII)
  */
-CXX_C_API int email_message_set_subject(email_message_t *msg,
+int email_message_set_subject(email_message_t *msg,
                                          const char *subject);
 
 /**
  * Set plain text body
  */
-CXX_C_API int email_message_set_text_body(email_message_t *msg,
+int email_message_set_text_body(email_message_t *msg,
                                            const char *text);
 
 /**
  * Set HTML body
  */
-CXX_C_API int email_message_set_html_body(email_message_t *msg,
+int email_message_set_html_body(email_message_t *msg,
                                            const char *html);
 
 /**
  * Set priority
  */
-CXX_C_API void email_message_set_priority(email_message_t *msg,
+void email_message_set_priority(email_message_t *msg,
                                            email_priority_t priority);
 
 /* ── Attachments ───────────────────────────────────────────────────── */
@@ -157,7 +157,7 @@ CXX_C_API void email_message_set_priority(email_message_t *msg,
  * Add file attachment
  * data is zero-copy (caller must keep alive until message is sent)
  */
-CXX_C_API int email_message_add_attachment(email_message_t *msg,
+int email_message_add_attachment(email_message_t *msg,
                                             const char *filename,
                                             const char *content_type,
                                             const char *data,
@@ -166,7 +166,7 @@ CXX_C_API int email_message_add_attachment(email_message_t *msg,
 /**
  * Add inline attachment (for HTML <img src="cid:...">)
  */
-CXX_C_API int email_message_add_inline_attachment(email_message_t *msg,
+int email_message_add_inline_attachment(email_message_t *msg,
                                                    const char *content_id,
                                                    const char *filename,
                                                    const char *content_type,
@@ -178,7 +178,7 @@ CXX_C_API int email_message_add_inline_attachment(email_message_t *msg,
 /**
  * Enable message signing
  */
-CXX_C_API int email_message_enable_signing(email_message_t *msg,
+int email_message_enable_signing(email_message_t *msg,
                                             const char *cert_path,
                                             const char *key_path,
                                             const char *key_password);
@@ -186,7 +186,7 @@ CXX_C_API int email_message_enable_signing(email_message_t *msg,
 /**
  * Enable message encryption
  */
-CXX_C_API int email_message_enable_encryption(email_message_t *msg,
+int email_message_enable_encryption(email_message_t *msg,
                                                const char *recipient_cert_path);
 
 /* ── Serialization ─────────────────────────────────────────────────── */
@@ -195,14 +195,14 @@ CXX_C_API int email_message_enable_encryption(email_message_t *msg,
  * Build RFC 2822 message with MIME parts
  * Returns serialized message (caller must free with tstr_free)
  */
-CXX_C_API tstr_t email_message_to_string(email_message_t *msg);
+tstr email_message_to_string(email_message_t *msg);
 
 /* ── Parsing ───────────────────────────────────────────────────────── */
 
 /**
  * Parse RFC 2822 message from string
  */
-CXX_C_API email_message_t *email_message_parse(mem_pool_t *pool,
+email_message_t *email_message_parse(mem_pool_t *pool,
                                                 const char *raw_message,
                                                 size_t len);
 

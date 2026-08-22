@@ -49,26 +49,26 @@ spec("coro_cancel") {
 
     state.wait = coro_wait_create(ctx);
     state.token = coro_cancel_source_token(source);
-    check_ptr_eq(coro_cancel_token_context(state.token), ctx);
+    check_equal((const void *)coro_cancel_token_context(state.token), (const void *)ctx);
     state.registration = NULL;
     atomic_init(&state.entered, 0);
     atomic_init(&state.callback_count, 0);
     atomic_init(&state.result, TURBO_EALREADY);
     check_not_null(state.wait);
-    check_int_eq(coro_context_spawn(ctx, wait_with_cancellation, &state), TURBO_OK);
+    check_equal(coro_context_spawn(ctx, wait_with_cancellation, &state), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(atomic_load_explicit(&state.entered, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&state.entered, memory_order_acquire), 1);
 
-    check_int_eq(coro_cancel_source_request(source), TURBO_OK);
-    check_int_eq(coro_cancel_source_request(source), TURBO_EALREADY);
+    check_equal(coro_cancel_source_request(source), TURBO_OK);
+    check_equal(coro_cancel_source_request(source), TURBO_EALREADY);
     while (atomic_load_explicit(&state.result, memory_order_acquire) == TURBO_EALREADY) {
       (void)coro_context_run(ctx, TURBO_RUN_ONCE);
     }
 
-    check_int_eq(atomic_load_explicit(&state.callback_count, memory_order_acquire), 1);
-    check_int_eq(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
-    check_int_eq(coro_wait_destroy(state.wait), TURBO_OK);
-    check_int_eq(coro_cancel_source_destroy(source), TURBO_OK);
+    check_equal(atomic_load_explicit(&state.callback_count, memory_order_acquire), 1);
+    check_equal(atomic_load_explicit(&state.result, memory_order_acquire), TURBO_ECANCELED);
+    check_equal(coro_wait_destroy(state.wait), TURBO_OK);
+    check_equal(coro_cancel_source_destroy(source), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -80,15 +80,15 @@ spec("coro_cancel") {
     check_not_null(ctx);
     check_not_null(source);
 
-    check_int_eq(coro_cancel_source_request(source), TURBO_OK);
+    check_equal(coro_cancel_source_request(source), TURBO_OK);
     check_true(coro_cancel_token_is_requested(coro_cancel_source_token(source)));
-    check_int_eq(coro_cancel_register(coro_cancel_source_token(source), count_cancel,
+    check_equal(coro_cancel_register(coro_cancel_source_token(source), count_cancel,
                                       &callback_count, &registration),
                  TURBO_ECANCELED);
     check_null(registration);
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(callback_count, 0);
-    check_int_eq(coro_cancel_source_destroy(source), TURBO_OK);
+    check_equal(callback_count, 0);
+    check_equal(coro_cancel_source_destroy(source), TURBO_OK);
     coro_context_destroy(ctx);
   }
 
@@ -100,11 +100,11 @@ spec("coro_cancel") {
     check_not_null(ctx);
     check_not_null(source);
 
-    check_int_eq(coro_cancel_register(coro_cancel_source_token(source), count_cancel,
+    check_equal(coro_cancel_register(coro_cancel_source_token(source), count_cancel,
                                       &callback_count, &registration), TURBO_OK);
-    check_int_eq(coro_cancel_source_destroy(source), TURBO_EBUSY);
-    check_int_eq(coro_cancel_unregister(registration), TURBO_OK);
-    check_int_eq(coro_cancel_source_destroy(source), TURBO_OK);
+    check_equal(coro_cancel_source_destroy(source), TURBO_EBUSY);
+    check_equal(coro_cancel_unregister(registration), TURBO_OK);
+    check_equal(coro_cancel_source_destroy(source), TURBO_OK);
     coro_context_destroy(ctx);
   }
 }

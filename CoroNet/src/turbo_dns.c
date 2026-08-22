@@ -38,7 +38,7 @@
   #define TURBO_DNS_CLOSE_SOCKET(s) close(s)
 #endif
 
-#include "turbo_str_view.h"
+#include "turbo_vstr.h"
 
 // =============================================================================
 // Internal Constants
@@ -141,7 +141,7 @@ static turbo_dns_cache_entry_t g_dns_cache[DNS_CACHE_CAPACITY];
 static void destroy_ares_context(turbo_ares_t *ctx);
 
 static char *dns_hostname_dup(const char *hostname) {
-  return tstr_v_to_cstr(tstr_v_from_cstr(hostname));
+  return vstr_to_cstr(vstr_from_cstr(hostname));
 }
 
 static void dns_hostname_free(char *hostname) {
@@ -490,7 +490,7 @@ static int init_ares_context(turbo_ares_t **out_ctx) {
     status = ares_library_init(ARES_LIB_INIT_ALL);
     if (status != ARES_SUCCESS) {
       turbo_mutex_unlock(&g_dns_lock);
-      TLOG_DEBUG("ares_library_init failed: {}", ares_strerror(status));
+      TLOG_DEBUGF("ares_library_init failed: {}", ares_strerror(status));
       turbo_mutex_destroy(&ctx->mu);
       free(ctx);
       return TURBO_EAI_FAIL;
@@ -517,12 +517,12 @@ static int init_ares_context(turbo_ares_t **out_ctx) {
     options.nservers = valid_dns;
     init_flags |= ARES_OPT_SERVERS;
     for (int i = 0; i < valid_dns; i++)
-      TLOG_INFO("Using custom DNS server: {}", local_servers[i]);
+      TLOG_INFOF("Using custom DNS server: {}", local_servers[i]);
   }
 
   status = ares_init_options(&ctx->channel, &options, init_flags);
   if (status != ARES_SUCCESS) {
-    TLOG_DEBUG("ares_init_options failed: {}", ares_strerror(status));
+    TLOG_DEBUGF("ares_init_options failed: {}", ares_strerror(status));
     dns_release_ares_library_ref();
     turbo_mutex_destroy(&ctx->mu);
     free(ctx);
@@ -592,14 +592,14 @@ static void release_parent_ref(turbo_dns_parent_query_t *parent) {
       int err = (parent->status_v4 != ARES_SUCCESS && parent->status_v4 != 0) ? parent->status_v4 :
                 (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0) ? parent->status_v6 :
                 ARES_ENODATA;
-      TLOG_DEBUG("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
+      TLOG_DEBUGF("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
       parent->results_callback(parent->hostname, NULL, 0, err, parent->user_data);
     }
   } else if (!atomic_load(&parent->delivered)) {
     int err = (parent->status_v4 != ARES_SUCCESS && parent->status_v4 != 0) ? parent->status_v4 :
               (parent->status_v6 != ARES_SUCCESS && parent->status_v6 != 0) ? parent->status_v6 :
               ARES_ENODATA;
-    TLOG_DEBUG("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
+    TLOG_DEBUGF("DNS failed for {}: {}", parent->hostname, ares_strerror(err));
     parent->callback(parent->hostname, NULL, err, parent->user_data);
   }
 
@@ -651,7 +651,7 @@ static void dns_dual_addrinfo_cb(void *arg, int status, int timeouts,
         if (slot && slot->ip[0] != '\0') {
           slot->family = node->ai_family;
           (*slot_count)++;
-          TLOG_DEBUG("DNS: {} -> {}", parent->hostname, slot->ip);
+          TLOG_DEBUGF("DNS: {} -> {}", parent->hostname, slot->ip);
         }
       }
     } else {
@@ -673,7 +673,7 @@ static void dns_dual_addrinfo_cb(void *arg, int status, int timeouts,
     }
 
     if (ip[0] != '\0') {
-      TLOG_DEBUG("DNS: {} -> {}", parent->hostname, ip);
+      TLOG_DEBUGF("DNS: {} -> {}", parent->hostname, ip);
       if (!atomic_exchange(&parent->delivered, 1)) {
         parent->callback(parent->hostname, ip, 0, parent->user_data);
       }
@@ -1081,7 +1081,7 @@ int turbo_dns_resolve_async2(void *loop_unused, const char *hostname,
   turbo_thread_destroy(&driver_thread); /* detach so it cleans itself up */
 
   release_parent_ref(parent); /* release initial ref */
-  TLOG_DEBUG("Started async DNS lookup for {}", hostname);
+  TLOG_DEBUGF("Started async DNS lookup for {}", hostname);
   return 0;
 }
 
@@ -1183,7 +1183,7 @@ int turbo_dns_resolve_async_results2(void *loop_unused, const char *hostname,
   turbo_thread_destroy(&driver_thread);
 
   release_parent_ref(parent); /* release initial ref */
-  TLOG_DEBUG("Started async DNS multi-result lookup for {}", hostname);
+  TLOG_DEBUGF("Started async DNS multi-result lookup for {}", hostname);
   return 0;
 }
 
@@ -1219,13 +1219,13 @@ int turbo_dns_set_servers(const char *servers[], int count) {
     if (len >= sizeof(g_dns_servers[i])) continue;
     strcpy(g_dns_servers[g_dns_count], servers[i]);
     g_dns_count++;
-    TLOG_INFO("Added DNS server[{}]: {}", g_dns_count - 1, servers[i]);
+    TLOG_INFOF("Added DNS server[{}]: {}", g_dns_count - 1, servers[i]);
   }
   int final_count = g_dns_count;
   dns_cache_clear_locked();
   turbo_mutex_unlock(&g_dns_lock);
 
-  TLOG_INFO("Configured {} DNS servers", final_count);
+  TLOG_INFOF("Configured {} DNS servers", final_count);
   return 0;
 }
 

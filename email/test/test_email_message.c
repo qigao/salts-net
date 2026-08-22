@@ -203,12 +203,12 @@ spec("email_message") {
       email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
       check(msg != NULL);
       check(msg->from != NULL);
-      check_str_eq(msg->from->email, "john@example.com");
+      check_equal(msg->from->email, "john@example.com");
       check(msg->to != NULL);
-      check_str_eq(msg->to->email, "alice@example.com");
-      check_str_eq(msg->subject, "Hello World");
-      check_str_eq(msg->message_id, "<msg-1@example.com>");
-      check_str_eq(msg->text_body, "Plain body");
+      check_equal(msg->to->email, "alice@example.com");
+      check_equal(msg->subject, "Hello World");
+      check_equal(msg->message_id, "<msg-1@example.com>");
+      check_equal(msg->text_body, "Plain body");
       check_null(msg->html_body);
 
       email_message_free(msg);
@@ -236,9 +236,9 @@ spec("email_message") {
 
       email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
       check(msg != NULL);
-      check_str_eq(msg->subject, "Multipart Example");
-      check_str_eq(msg->text_body, "Plain section");
-      check_str_eq(msg->html_body, "<html><body><p>HTML section</p></body></html>");
+      check_equal(msg->subject, "Multipart Example");
+      check_equal(msg->text_body, "Plain section");
+      check_equal(msg->html_body, "<html><body><p>HTML section</p></body></html>");
 
       email_message_free(msg);
       mem_destroy(&pool);
@@ -269,9 +269,9 @@ spec("email_message") {
 
       email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
       check(msg != NULL);
-      check_str_eq(msg->subject, "Nested Multipart Example");
-      check_str_eq(msg->text_body, "Nested plain section");
-      check_str_eq(msg->html_body,
+      check_equal(msg->subject, "Nested Multipart Example");
+      check_equal(msg->text_body, "Nested plain section");
+      check_equal(msg->html_body,
                    "<html><body><p>Nested HTML section</p></body></html>");
 
       email_message_free(msg);
@@ -301,12 +301,12 @@ spec("email_message") {
 
       email_message_t *msg = email_message_parse(&pool, raw, strlen(raw));
       check(msg != NULL);
-      check_str_eq(msg->text_body, "Body text");
-      check_int_eq(msg->attachment_count, 1);
+      check_equal(msg->text_body, "Body text");
+      check_equal(msg->attachment_count, 1);
       check(msg->attachments != NULL);
-      check_str_eq(msg->attachments->filename, "note.txt");
-      check_str_eq(msg->attachments->content_type, "application/octet-stream");
-      check_str_eq(msg->attachments->data, "hello");
+      check_equal(msg->attachments->filename, "note.txt");
+      check_equal(msg->attachments->content_type, "application/octet-stream");
+      check_equal(msg->attachments->data, "hello");
 
       email_message_free(msg);
       mem_destroy(&pool);
@@ -324,7 +324,7 @@ spec("email_message") {
       email_message_set_subject(msg, "测试邮件");
       email_message_set_text_body(msg, "Hello");
 
-      tstr_t serialized = email_message_to_string(msg);
+      tstr serialized = email_message_to_string(msg);
       check(serialized != NULL);
       check(strstr(serialized, "Subject: =?UTF-8?B?") != NULL);
 
@@ -343,7 +343,7 @@ spec("email_message") {
       email_message_set_subject(msg, "Test");
       email_message_set_text_body(msg, "Hello");
 
-      tstr_t serialized = email_message_to_string(msg);
+      tstr serialized = email_message_to_string(msg);
       check(serialized != NULL);
       check(strstr(serialized, "From: =?UTF-8?B?") != NULL);
       check(strstr(serialized, "\"=?UTF-8?B?") == NULL);
@@ -363,7 +363,7 @@ spec("email_message") {
       email_message_set_subject(msg, "Test");
       email_message_add_attachment(msg, "测试.txt", "text/plain", "data", 4);
 
-      tstr_t serialized = email_message_to_string(msg);
+      tstr serialized = email_message_to_string(msg);
       check(serialized != NULL);
       check(strstr(serialized, "filename*=UTF-8''") != NULL);
       check(strstr(serialized, "filename=\"") == NULL);
@@ -382,7 +382,7 @@ spec("email_message") {
       email_message_set_subject(msg, "Test");
       email_message_set_text_body(msg, "Hello");
 
-      tstr_t serialized = email_message_to_string(msg);
+      tstr serialized = email_message_to_string(msg);
       check(serialized == NULL);
 
       email_message_free(msg);
@@ -402,7 +402,7 @@ spec("email_message") {
       email_message_set_subject(msg, "Fold test");
       email_message_set_text_body(msg, "body");
 
-      tstr_t serialized = email_message_to_string(msg);
+      tstr serialized = email_message_to_string(msg);
       check(serialized != NULL);
       /* Folded lines must contain CRLF + WSP between addresses */
       check(strstr(serialized, "To:") != NULL);
@@ -435,7 +435,7 @@ spec("email_message") {
           "seventy-eight character soft line length limit from RFC 5322");
       email_message_set_text_body(msg, "body");
 
-      tstr_t serialized = email_message_to_string(msg);
+      tstr serialized = email_message_to_string(msg);
       check(serialized != NULL);
       check(strstr(serialized, "Subject:") != NULL);
       /* No individual line exceeds 998 characters */

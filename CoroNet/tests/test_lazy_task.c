@@ -61,11 +61,11 @@ spec("Lazy Task API") {
         /* Create task - should NOT execute */
         coro_task_t *task = coro_task_create(ctx, simple_task, &counter);
         check(task != NULL);
-        check_int_eq(counter, 0);
-        check_int_eq(g_executed, 0);
+        check_equal(counter, 0);
+        check_equal(g_executed, 0);
 
         /* Verify task is not done */
-        check_int_eq(coro_task_is_done(task), 0);
+        check_equal(coro_task_is_done(task), 0);
 
         robust_context_destroy(ctx);
     }
@@ -82,16 +82,16 @@ spec("Lazy Task API") {
         check(task != NULL);
 
         int r = coro_task_start(task);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         /* Run loop to execute task */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(counter, 1);
-        check_int_eq(g_executed, 1);
+        check_equal(counter, 1);
+        check_equal(g_executed, 1);
 
         /* Task should be done */
-        check_int_eq(coro_task_is_done(task), 1);
+        check_equal(coro_task_is_done(task), 1);
 
         robust_context_destroy(ctx);
     }
@@ -108,17 +108,17 @@ spec("Lazy Task API") {
 
         /* Cancel before start */
         int r = coro_task_cancel(task);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         /* Task should be done (cancelled) */
-        check_int_eq(coro_task_is_done(task), 1);
+        check_equal(coro_task_is_done(task), 1);
 
         /* Try to start - should fail */
         r = coro_task_start(task);
-        check_int_eq(r, TURBO_EINVAL);
+        check_equal(r, TURBO_EINVAL);
 
         /* Verify task never executed */
-        check_int_eq(g_executed, 0);
+        check_equal(g_executed, 0);
 
         /* Run loop to clean up */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
@@ -137,16 +137,16 @@ spec("Lazy Task API") {
 
         /* Start once */
         int r = coro_task_start(task);
-        check_int_eq(r, 0);
+        check_equal(r, 0);
 
         /* Try to start again - should fail */
         r = coro_task_start(task);
-        check_int_eq(r, TURBO_EINVAL);
+        check_equal(r, TURBO_EINVAL);
 
         /* Run loop to execute task */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(counter, 1);  /* Should execute only once */
+        check_equal(counter, 1);  /* Should execute only once */
 
         robust_context_destroy(ctx);
     }
@@ -174,9 +174,9 @@ spec("Lazy Task API") {
         /* Run loop to execute started tasks */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(c1, 1);  /* Executed */
-        check_int_eq(c2, 0);  /* Cancelled */
-        check_int_eq(c3, 1);  /* Executed */
+        check_equal(c1, 1);  /* Executed */
+        check_equal(c2, 0);  /* Cancelled */
+        check_equal(c3, 1);  /* Executed */
 
         robust_context_destroy(ctx);
     }
@@ -195,12 +195,12 @@ spec("Lazy Task API") {
         coro_task_start(task);
 
         /* Task should not be done yet (not even started) */
-        check_int_eq(coro_task_is_done(task), 0);
+        check_equal(coro_task_is_done(task), 0);
 
         /* Run loop until completion */
         coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-        check_int_eq(g_executed, 2);  /* Started and completed */
+        check_equal(g_executed, 2);  /* Started and completed */
 
         robust_context_destroy(ctx);
     }
@@ -214,20 +214,20 @@ spec("Lazy Task API") {
 
         /* Eager: spawns immediately but needs event loop to execute */
         coro_context_spawn(ctx, simple_task, &eager_counter);
-        check_int_eq(eager_counter, 0);  /* Not executed yet */
+        check_equal(eager_counter, 0);  /* Not executed yet */
 
         /* Lazy: does not execute until started */
         coro_task_t *task = coro_task_create(ctx, simple_task, &lazy_counter);
-        check_int_eq(lazy_counter, 0);  /* Not executed yet */
+        check_equal(lazy_counter, 0);  /* Not executed yet */
 
         coro_task_start(task);
-        check_int_eq(lazy_counter, 0);  /* Still not executed */
+        check_equal(lazy_counter, 0);  /* Still not executed */
 
         /* Run loop to execute both */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(eager_counter, 1);  /* Now executed */
-        check_int_eq(lazy_counter, 1);   /* Now executed */
+        check_equal(eager_counter, 1);  /* Now executed */
+        check_equal(lazy_counter, 1);   /* Now executed */
 
         robust_context_destroy(ctx);
     }
@@ -247,7 +247,7 @@ spec("Lazy Task API") {
         /* Run loop to execute and cleanup tasks */
         coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(g_counter, 10);
+        check_equal(g_counter, 10);
 
         /* All tasks should be cleaned up (we can't verify count without exposing internals) */
 
@@ -261,13 +261,13 @@ spec("Lazy Task API") {
 
         coro_task_t *task = coro_task_create(ctx, simple_task, &counter);
         check_not_null(task);
-        check_int_eq(coro_task_start(task), TURBO_OK);
+        check_equal(coro_task_start(task), TURBO_OK);
 
         coro_task_destroy(task);
         (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
-        check_int_eq(counter, 1);
-        check_size_eq(turbo_vec_size(&ctx->tasks), 0);
+        check_equal(counter, 1);
+        check_equal(turbo_vec_size(&ctx->tasks), 0);
         robust_context_destroy(ctx);
     }
 }

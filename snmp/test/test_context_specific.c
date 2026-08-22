@@ -16,22 +16,22 @@ spec("context_specific") {
         asn1_value_t *result = NULL;
         int parse_result = scan_binary_asn1(data, sizeof(data), &result);
         
-        check_int_eq(parse_result, 0);
+        check_equal(parse_result, 0);
         check_not_null(result);
         
         if (result) {
-            check_int_eq(result->tag, 0xA0);
-            check_int_eq(result->tag_class, 2); /* context-specific */
-            check_int_eq(result->constructed, 1);
-            check_int_eq(result->tag_number, 0);
+            check_equal(result->tag, 0xA0);
+            check_equal(result->tag_class, 2); /* context-specific */
+            check_equal(result->constructed, 1);
+            check_equal(result->tag_number, 0);
             
-            check_int_eq(result->type, TK_CONTEXT_SPECIFIC);
+            check_equal(result->type, TK_CONTEXT_SPECIFIC);
             
             if (result->constructed && result->value.sequence.count > 0) {
                 asn1_value_t *child = result->value.sequence.children[0];
-                check_int_eq(child->type, ASN1_TYPE_INTEGER);
+                check_equal(child->type, ASN1_TYPE_INTEGER);
                 if (child->type == ASN1_TYPE_INTEGER) {
-                    check_int_eq((int)child->value.integer, 42);
+                    check_equal((int)child->value.integer, 42);
                 }
             }
             
@@ -47,13 +47,13 @@ spec("context_specific") {
         asn1_value_t *result = NULL;
         int parse_result = scan_binary_asn1(data, sizeof(data), &result);
         
-        check_int_eq(parse_result, 0);
+        check_equal(parse_result, 0);
         check_not_null(result);
         
         if (result) {
-            check_int_eq(result->tag, 0xA0);
-            check_int_eq(result->tag_class, 2);
-            check_size_eq(result->value.sequence.count, 2);
+            check_equal(result->tag, 0xA0);
+            check_equal(result->tag_class, 2);
+            check_equal(result->value.sequence.count, 2);
             
             asn1_free(result);
         }

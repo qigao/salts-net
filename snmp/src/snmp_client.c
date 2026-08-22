@@ -143,7 +143,7 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
     }
 
     if (coro_socket_connect(client->sock, client->host, client->port) != 0) {
-        TLOG_ERROR("SNMP failed to connect to {:s}:{:d}", client->host, client->port);
+        TLOG_ERRORF("SNMP failed to connect to {:s}:{:d}", client->host, client->port);
         coro_socket_destroy(client->sock);
         free(client->host);
         free(client->community);
@@ -151,7 +151,7 @@ snmp_client_t *snmp_client_create(const snmp_client_config_t *config) {
         return NULL;
     }
 
-    TLOG_INFO("SNMP client created for {:s}:{:d} (version: {:d})",
+    TLOG_INFOF("SNMP client created for {:s}:{:d} (version: {:d})",
               client->host, client->port, (int)client->version);
 
     return client;
@@ -182,7 +182,7 @@ static int send_request_and_wait(
     while (attempt <= client->retries) {
         /* Send request */
         if (coro_socket_send(client->sock, request, request_len) != 0) {
-            TLOG_DEBUG("SNMP send error on attempt {:d}", attempt + 1);
+            TLOG_DEBUGF("SNMP send error on attempt {:d}", attempt + 1);
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 
@@ -204,19 +204,19 @@ static int send_request_and_wait(
             coro_socket_free_recv(data);
 
             if (result > 0) {
-                TLOG_DEBUG("SNMP response received ({:d} bytes)", (int)len);
+                TLOG_DEBUGF("SNMP response received ({:d} bytes)", (int)len);
                 return SNMP_CLIENT_OK;
             } else {
-                TLOG_DEBUG("SNMP parse error in response from {:s}", client->host);
+                TLOG_DEBUGF("SNMP parse error in response from {:s}", client->host);
                 pool_destroy(client->response_pool);
                 client->response_pool = NULL;
                 /* Might be a malformed packet, try next attempt */
             }
         } else if (res == TURBO_ETIMEDOUT) {
-            TLOG_DEBUG("SNMP attempt {:d} timed out for {:s}", attempt + 1, client->host);
+            TLOG_DEBUGF("SNMP attempt {:d} timed out for {:s}", attempt + 1, client->host);
         } else {
             /* For actual network errors, fail immediately */
-            TLOG_DEBUG("SNMP network error: {:d}", res);
+            TLOG_DEBUGF("SNMP network error: {:d}", res);
             return SNMP_CLIENT_ERROR_NETWORK;
         }
 
@@ -257,7 +257,7 @@ int snmp_client_get(
 
     if (build_result != SNMP_BUILD_OK) {
         strcpy(client->error_msg, "Failed to build GetRequest");
-        TLOG_ERROR("SNMP build error: {:s}", client->error_msg);
+        TLOG_ERRORF("SNMP build error: {:s}", client->error_msg);
         return SNMP_CLIENT_ERROR_INVALID;
     }
 

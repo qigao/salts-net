@@ -323,7 +323,7 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
     }
 
     if (ev->status != 0) {
-        TLOG_DEBUG("epoll[{:p}] read-event stream={:p} status={:d} bytes={:d}", (void *)st,
+        TLOG_DEBUGF("epoll[{:p}] read-event stream={:p} status={:d} bytes={:d}", (void *)st,
                    (void *)s, ev->status, (int)bytes);
     }
 
@@ -511,7 +511,7 @@ static void on_epoll_event_bounce(void *arg1, void *arg2) {
                     case SEP_OP_ERROR: {
                         if (st->is_listener) {
                             turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
-                            TLOG_ERROR("epoll listener accept failed: {:d}", ev->status);
+                            TLOG_ERRORF("epoll listener accept failed: {:d}", ev->status);
                             turbo_stream_listener_close(l);
                         }
                         break;
@@ -826,7 +826,7 @@ static void stream_epoll_reactor_worker(void *arg) {
             if (errno == EINTR) {
                 continue;
             }
-            TLOG_ERROR("epoll reactor wait failed err={:d}", errno);
+            TLOG_ERRORF("epoll reactor wait failed err={:d}", errno);
             break;
         }
 
@@ -1042,7 +1042,7 @@ static void epoll_release_context_ref(stream_epoll_state_t *st) {
 
 static void epoll_shutdown_state(stream_epoll_state_t *st) {
     if (!st) return;
-    TLOG_DEBUG("epoll[{:p}] shutdown-begin fd={:d} listener={:d}",
+    TLOG_DEBUGF("epoll[{:p}] shutdown-begin fd={:d} listener={:d}",
                (void *)st, st->fd, st->is_listener);
     epoll_request_stop(st);
     if (st->fd >= 0) {
@@ -1139,7 +1139,7 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a,
     }
 
     if (connect_rc == 0) {
-        TLOG_DEBUG("epoll[{:p}] connect-immediate fd={:d}", (void *)st, st->fd);
+        TLOG_DEBUGF("epoll[{:p}] connect-immediate fd={:d}", (void *)st, st->fd);
         post_event(st, SEP_OP_CONNECT, 0, NULL, NULL, 0);
     }
 
@@ -1253,7 +1253,7 @@ static void epoll_close(turbo_stream_t *s) {
         return;
     }
 
-    TLOG_DEBUG("epoll[{:p}] stream-close stream={:p} fd={:d}", (void *)st, (void *)s, st->fd);
+    TLOG_DEBUGF("epoll[{:p}] stream-close stream={:p} fd={:d}", (void *)st, (void *)s, st->fd);
 
     epoll_shutdown_state(st);
 }
@@ -1321,7 +1321,7 @@ static void epoll_listener_close(turbo_stream_listener_t *l) {
         return;
     }
 
-    TLOG_DEBUG("epoll[{:p}] listener-close listener={:p} fd={:d}", (void *)st, (void *)l,
+    TLOG_DEBUGF("epoll[{:p}] listener-close listener={:p} fd={:d}", (void *)st, (void *)l,
                st->fd);
 
     epoll_shutdown_state(st);

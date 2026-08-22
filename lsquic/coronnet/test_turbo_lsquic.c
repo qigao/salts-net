@@ -63,7 +63,7 @@ spec("LSQUIC CoroNet adapter") {
   it("rejects incomplete configuration") {
     turbo_lsquic_t *adapter = NULL;
 
-    check_int_eq(turbo_lsquic_create(NULL, &adapter), TURBO_EINVAL);
+    check_equal(turbo_lsquic_create(NULL, &adapter), TURBO_EINVAL);
     check_null(adapter);
   }
 
@@ -82,11 +82,11 @@ spec("LSQUIC CoroNet adapter") {
     check_not_null(context);
     turbo_lsquic_test_config(&config, context, &engine_api);
 
-    check_int_eq(turbo_lsquic_create(&config, &first), TURBO_OK);
+    check_equal(turbo_lsquic_create(&config, &first), TURBO_OK);
     check_not_null(first);
     check_not_null(turbo_lsquic_engine(first));
     check_not_null(turbo_lsquic_datagram(first));
-    check_int_eq(turbo_datagram_get_local_addr(turbo_lsquic_datagram(first),
+    check_equal(turbo_datagram_get_local_addr(turbo_lsquic_datagram(first),
                                                &local_addr), TURBO_OK);
 
     iov[0].iov_base = first_part;
@@ -98,9 +98,9 @@ spec("LSQUIC CoroNet adapter") {
     out_spec.iovlen = 2;
     out_spec.local_sa = (const struct sockaddr *)&local_addr;
     out_spec.dest_sa = (const struct sockaddr *)&local_addr;
-    check_int_eq(turbo_lsquic_packets_out(first, &out_spec, 1), 1);
+    check_equal(turbo_lsquic_packets_out(first, &out_spec, 1), 1);
 
-    check_int_eq(turbo_lsquic_create(&config, &second), TURBO_OK);
+    check_equal(turbo_lsquic_create(&config, &second), TURBO_OK);
     check_not_null(second);
 
     turbo_lsquic_destroy(first);
@@ -120,15 +120,15 @@ spec("LSQUIC CoroNet adapter") {
     check_not_null(context);
     turbo_lsquic_test_config(&config, context, &engine_api);
 
-    check_int_eq(turbo_lsquic_create(&config, &adapter), TURBO_OK);
+    check_equal(turbo_lsquic_create(&config, &adapter), TURBO_OK);
     check_not_null(adapter);
 
     sender = turbo_datagram_create(context, TURBO_DATAGRAM_UDP4);
     check_not_null(sender);
-    check_int_eq(turbo_datagram_bind(sender, "127.0.0.1", 0), TURBO_OK);
-    check_int_eq(turbo_datagram_get_local_addr(turbo_lsquic_datagram(adapter),
+    check_equal(turbo_datagram_bind(sender, "127.0.0.1", 0), TURBO_OK);
+    check_equal(turbo_datagram_get_local_addr(turbo_lsquic_datagram(adapter),
                                                &adapter_addr), TURBO_OK);
-    check_int_eq(turbo_datagram_sendto(sender,
+    check_equal(turbo_datagram_sendto(sender,
                                        (const struct sockaddr *)&adapter_addr,
                                        "late", 4), TURBO_OK);
 
@@ -169,9 +169,9 @@ spec("LSQUIC CoroNet adapter") {
     engine_api.ea_alpn = "turbo-lsquic-test";
     config.peer_ctx = &state;
 
-    check_int_eq(turbo_lsquic_create(&config, &adapter), TURBO_OK);
+    check_equal(turbo_lsquic_create(&config, &adapter), TURBO_OK);
     check_not_null(adapter);
-    check_int_eq(turbo_datagram_get_local_addr(turbo_lsquic_datagram(adapter),
+    check_equal(turbo_datagram_get_local_addr(turbo_lsquic_datagram(adapter),
                                                &local_address), TURBO_OK);
 
     memset(&peer_address, 0, sizeof(peer_address));
@@ -193,8 +193,8 @@ spec("LSQUIC CoroNet adapter") {
       (void)coro_context_run(context, TURBO_RUN_ONCE);
     }
 
-    check_int_eq(state.new_connections, 1);
-    check_int_eq(state.closed_connections, 1);
+    check_equal(state.new_connections, 1);
+    check_equal(state.closed_connections, 1);
 
     turbo_lsquic_destroy(adapter);
     SSL_CTX_free(state.ssl_context);

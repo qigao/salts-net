@@ -21,19 +21,19 @@ spec("ber_features") {
         };
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_SEQUENCE);
-            check_size_eq(v->value.sequence.count, 2);
+            check_equal(v->type, ASN1_TYPE_SEQUENCE);
+            check_equal(v->value.sequence.count, 2);
             
             // Check first child (INTEGER 42)
-            check_int_eq(v->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
-            check_int_eq((int)v->value.sequence.children[0]->value.integer, 42);
+            check_equal(v->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+            check_equal((int)v->value.sequence.children[0]->value.integer, 42);
             
             // Check second child (BOOLEAN TRUE)
-            check_int_eq(v->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
+            check_equal(v->value.sequence.children[1]->type, ASN1_TYPE_BOOLEAN);
             check(v->value.sequence.children[1]->value.boolean);
             
             asn1_free(v);
@@ -52,21 +52,21 @@ spec("ber_features") {
         };
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_SEQUENCE);
-            check_size_eq(v->value.sequence.count, 1);
+            check_equal(v->type, ASN1_TYPE_SEQUENCE);
+            check_equal(v->value.sequence.count, 1);
             
             // Check nested sequence
             asn1_value_t *inner = v->value.sequence.children[0];
-            check_int_eq(inner->type, ASN1_TYPE_SEQUENCE);
-            check_size_eq(inner->value.sequence.count, 1);
+            check_equal(inner->type, ASN1_TYPE_SEQUENCE);
+            check_equal(inner->value.sequence.count, 1);
             
             // Check integer inside nested sequence
-            check_int_eq(inner->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
-            check_int_eq((int)inner->value.sequence.children[0]->value.integer, 1);
+            check_equal(inner->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+            check_equal((int)inner->value.sequence.children[0]->value.integer, 1);
             
             asn1_free(v);
         }
@@ -85,19 +85,19 @@ spec("ber_features") {
         };
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_OCTET_STRING);
-            check_size_eq(v->value.octet_string.length, 5); // 3 + 2 bytes
+            check_equal(v->type, ASN1_TYPE_OCTET_STRING);
+            check_equal(v->value.octet_string.length, 5); // 3 + 2 bytes
             
             // Check concatenated content
-            check_int_eq(v->value.octet_string.data[0], 0xAB);
-            check_int_eq(v->value.octet_string.data[1], 0xCD);
-            check_int_eq(v->value.octet_string.data[2], 0xEF);
-            check_int_eq(v->value.octet_string.data[3], 0x12);
-            check_int_eq(v->value.octet_string.data[4], 0x34);
+            check_equal(v->value.octet_string.data[0], 0xAB);
+            check_equal(v->value.octet_string.data[1], 0xCD);
+            check_equal(v->value.octet_string.data[2], 0xEF);
+            check_equal(v->value.octet_string.data[3], 0x12);
+            check_equal(v->value.octet_string.data[4], 0x34);
             
             asn1_free(v);
         }
@@ -114,19 +114,19 @@ spec("ber_features") {
         };
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_BIT_STRING);
-            check_size_eq(v->value.octet_string.length, 4); // unused bits + 3 data bytes
+            check_equal(v->type, ASN1_TYPE_BIT_STRING);
+            check_equal(v->value.octet_string.length, 4); // unused bits + 3 data bytes
             
             // Check unused bits (from first chunk only)
-            check_int_eq(v->value.octet_string.data[0], 0x00);
+            check_equal(v->value.octet_string.data[0], 0x00);
             // Check concatenated data
-            check_int_eq(v->value.octet_string.data[1], 0xAB);
-            check_int_eq(v->value.octet_string.data[2], 0xCD);
-            check_int_eq(v->value.octet_string.data[3], 0xEF);
+            check_equal(v->value.octet_string.data[1], 0xAB);
+            check_equal(v->value.octet_string.data[2], 0xCD);
+            check_equal(v->value.octet_string.data[3], 0xEF);
             
             asn1_free(v);
         }
@@ -145,21 +145,21 @@ spec("ber_features") {
         };
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_SEQUENCE);
-            check_size_eq(v->value.sequence.count, 1);
+            check_equal(v->type, ASN1_TYPE_SEQUENCE);
+            check_equal(v->value.sequence.count, 1);
             
             // Check inner sequence
             asn1_value_t *inner = v->value.sequence.children[0];
-            check_int_eq(inner->type, ASN1_TYPE_SEQUENCE);
-            check_size_eq(inner->value.sequence.count, 1);
+            check_equal(inner->type, ASN1_TYPE_SEQUENCE);
+            check_equal(inner->value.sequence.count, 1);
             
             // Check integer
-            check_int_eq(inner->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
-            check_int_eq((int)inner->value.sequence.children[0]->value.integer, 123);
+            check_equal(inner->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+            check_equal((int)inner->value.sequence.children[0]->value.integer, 123);
             
             asn1_free(v);
         }
@@ -181,16 +181,16 @@ spec("ber_features") {
         }
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_OCTET_STRING);
-            check_size_eq(v->value.octet_string.length, 200);
+            check_equal(v->type, ASN1_TYPE_OCTET_STRING);
+            check_equal(v->value.octet_string.length, 200);
             
             // Check first and last bytes
-            check_int_eq(v->value.octet_string.data[0], 0xFF);
-            check_int_eq(v->value.octet_string.data[199], 0xFF);
+            check_equal(v->value.octet_string.data[0], 0xFF);
+            check_equal(v->value.octet_string.data[199], 0xFF);
             
             asn1_free(v);
         }
@@ -237,12 +237,12 @@ spec("ber_features") {
         uint8_t data[] = {0x30, 0x06, 0x02, 0x01, 0x2A, 0x01, 0x01, 0xFF};
         
         asn1_value_t *v = NULL;
-        check_int_eq(scan_binary_asn1(data, sizeof(data), &v), 0);
+        check_equal(scan_binary_asn1(data, sizeof(data), &v), 0);
         check_not_null(v);
         
         if (v) {
-            check_int_eq(v->type, ASN1_TYPE_SEQUENCE);
-            check_size_eq(v->value.sequence.count, 2);
+            check_equal(v->type, ASN1_TYPE_SEQUENCE);
+            check_equal(v->value.sequence.count, 2);
             
             asn1_free(v);
         }

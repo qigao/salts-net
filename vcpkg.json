@@ -18,10 +18,6 @@
       "platform": "linux & !android"
     },
     {
-      "name": "llhttp",
-      "version>=": "9.1.3"
-    },
-    {
       "name": "pkgconf",
       "host": true
     },

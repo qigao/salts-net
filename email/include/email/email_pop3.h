@@ -50,25 +50,25 @@ typedef struct pop3_client_s pop3_client_t;
 /**
  * Create POP3 client
  */
-CXX_C_API pop3_client_t *pop3_client_create(coro_context_t *ctx,
+pop3_client_t *pop3_client_create(coro_context_t *ctx,
                                              const pop3_config_t *config);
 
 /**
  * Free POP3 client
  */
-CXX_C_API void pop3_client_free(pop3_client_t *client);
+void pop3_client_free(pop3_client_t *client);
 
 /* ── Connection ────────────────────────────────────────────────────── */
 
 /**
  * Connect and login to POP3 server
  */
-CXX_C_API int pop3_connect(pop3_client_t *client);
+int pop3_connect(pop3_client_t *client);
 
 /**
  * Quit and disconnect
  */
-CXX_C_API void pop3_disconnect(pop3_client_t *client);
+void pop3_disconnect(pop3_client_t *client);
 
 /**
  * Interrupt the client's current CoroNet socket wait from another thread.
@@ -77,7 +77,7 @@ CXX_C_API void pop3_disconnect(pop3_client_t *client);
  * normal disconnect/free path. Returns TURBO_ENOTCONN when no socket is
  * currently published.
  */
-CXX_C_API int pop3_interrupt(pop3_client_t *client, int status);
+int pop3_interrupt(pop3_client_t *client, int status);
 
 /* ── Mailbox Operations ────────────────────────────────────────────── */
 
@@ -85,19 +85,19 @@ CXX_C_API int pop3_interrupt(pop3_client_t *client, int status);
  * Get mailbox statistics
  * Returns number of messages, sets total_size if not NULL
  */
-CXX_C_API int pop3_stat(pop3_client_t *client, int *total_size);
+int pop3_stat(pop3_client_t *client, int *total_size);
 
 /**
  * List all messages
  * Returns array of message info (caller must free)
  */
-CXX_C_API pop3_message_info_t *pop3_list(pop3_client_t *client, int *count);
+pop3_message_info_t *pop3_list(pop3_client_t *client, int *count);
 
 /**
  * Get unique IDs for all messages
  * Returns array of UIDLs (caller must free)
  */
-CXX_C_API char **pop3_uidl(pop3_client_t *client, int *count);
+char **pop3_uidl(pop3_client_t *client, int *count);
 
 /* ── Message Operations ────────────────────────────────────────────── */
 
@@ -107,37 +107,37 @@ CXX_C_API char **pop3_uidl(pop3_client_t *client, int *count);
  * On success, `*data` is NUL-terminated, `*len` excludes that terminator,
  * and the caller owns the buffer and must release it with free().
  */
-CXX_C_API int pop3_retrieve_raw(pop3_client_t *client, int msg_num,
+int pop3_retrieve_raw(pop3_client_t *client, int msg_num,
                                 char **data, size_t *len);
 
 /**
  * Retrieve message by number
  */
-CXX_C_API email_message_t *pop3_retrieve_message(pop3_client_t *client,
+email_message_t *pop3_retrieve_message(pop3_client_t *client,
                                                   int msg_num);
 
 /**
  * Retrieve message headers only
  */
-CXX_C_API email_message_t *pop3_retrieve_headers(pop3_client_t *client,
+email_message_t *pop3_retrieve_headers(pop3_client_t *client,
                                                   int msg_num);
 
 /**
  * Delete message
  */
-CXX_C_API int pop3_delete_message(pop3_client_t *client, int msg_num);
+int pop3_delete_message(pop3_client_t *client, int msg_num);
 
 /**
  * Reset deleted messages (unmark for deletion)
  */
-CXX_C_API int pop3_reset(pop3_client_t *client);
+int pop3_reset(pop3_client_t *client);
 
 /* ── Error Handling ────────────────────────────────────────────────── */
 
 /**
  * Get last error message
  */
-CXX_C_API const char *pop3_get_error(pop3_client_t *client);
+const char *pop3_get_error(pop3_client_t *client);
 
 #ifdef __cplusplus
 }

@@ -78,7 +78,7 @@ spec("mime_parser") {
       const char *boundary = mime_extract_boundary(ct, strlen(ct), &boundary_len);
 
       check(boundary != NULL);
-      check_int_eq(boundary_len, 15);
+      check_equal(boundary_len, 15);
       check(memcmp(boundary, "----Boundary123", 15) == 0);
     }
 
@@ -88,7 +88,7 @@ spec("mime_parser") {
       const char *boundary = mime_extract_boundary(ct, strlen(ct), &boundary_len);
 
       check(boundary != NULL);
-      check_int_eq(boundary_len, 22);
+      check_equal(boundary_len, 22);
       check(memcmp(boundary, "----WebKitFormBoundary", 22) == 0);
     }
 
@@ -124,7 +124,7 @@ spec("mime_parser") {
       const char *boundary = "------Boundary";
       int pos = mime_find_boundary(data, strlen(data), boundary, strlen(boundary));
 
-      check_int_eq(pos, 11);
+      check_equal(pos, 11);
     }
 
     it("should return -1 if boundary not found") {
@@ -132,7 +132,7 @@ spec("mime_parser") {
       const char *boundary = "------Boundary";
       int pos = mime_find_boundary(data, strlen(data), boundary, strlen(boundary));
 
-      check_int_eq(pos, -1);
+      check_equal(pos, -1);
     }
   }
 
@@ -161,15 +161,15 @@ spec("mime_parser") {
 
       mime_errno_t err = mime_parse(&parser, message, strlen(message));
 
-      check_int_eq(err, MIME_OK);
-      check_int_eq(ctx.header_count, 4); // 2 fields + 2 values
-      check_str_eq(ctx.headers[0], "Content-Type");
-      check_str_eq(ctx.headers[1], "text/plain");
-      check_str_eq(ctx.headers[2], "Content-Length");
-      check_str_eq(ctx.headers[3], "11");
-      check_int_eq(ctx.body_count, 1);
-      check_str_eq(ctx.bodies[0], "Hello World");
-      check_int_eq(ctx.message_complete, 1);
+      check_equal(err, MIME_OK);
+      check_equal(ctx.header_count, 4); // 2 fields + 2 values
+      check_equal(ctx.headers[0], "Content-Type");
+      check_equal(ctx.headers[1], "text/plain");
+      check_equal(ctx.headers[2], "Content-Length");
+      check_equal(ctx.headers[3], "11");
+      check_equal(ctx.body_count, 1);
+      check_equal(ctx.bodies[0], "Hello World");
+      check_equal(ctx.message_complete, 1);
 
       mem_destroy(pool);
     }
@@ -210,10 +210,10 @@ spec("mime_parser") {
 
       mime_errno_t err = mime_parse(&parser, message, strlen(message));
 
-      check_int_eq(err, MIME_OK);
-      check_int_eq(ctx.parts_begun, 2);
-      check_int_eq(ctx.parts_completed, 2);
-      check_int_eq(ctx.message_complete, 1);
+      check_equal(err, MIME_OK);
+      check_equal(ctx.parts_begun, 2);
+      check_equal(ctx.parts_completed, 2);
+      check_equal(ctx.message_complete, 1);
 
       mem_destroy(pool);
     }
@@ -234,7 +234,7 @@ spec("mime_parser") {
       const char *message = "Content-Type: multipart/mixed; boundary=abc\r\n\r\n";
       mime_errno_t err = mime_parse(&parser, message, strlen(message));
 
-      check_int_eq(err, MIME_ERROR_NESTED_TOO_DEEP);
+      check_equal(err, MIME_ERROR_NESTED_TOO_DEEP);
 
       mem_destroy(pool);
     }

@@ -17,7 +17,7 @@ spec("crypto_random") {
       memset(buf, 0, sizeof(buf));
 
       int ret = crypto_random_bytes(buf, 32);
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
 
       // Verify buffer is not all zeros (extremely unlikely with CSPRNG)
       bool all_zero = true;
@@ -33,8 +33,8 @@ spec("crypto_random") {
     it("should produce different results on consecutive calls") {
       uint8_t buf1[32], buf2[32];
 
-      check_int_eq(crypto_random_bytes(buf1, 32), 0);
-      check_int_eq(crypto_random_bytes(buf2, 32), 0);
+      check_equal(crypto_random_bytes(buf1, 32), 0);
+      check_equal(crypto_random_bytes(buf2, 32), 0);
 
       // Two consecutive calls should produce different results
       check(memcmp(buf1, buf2, 32) != 0);
@@ -45,18 +45,18 @@ spec("crypto_random") {
     it("should successfully generate random bytes for various buffer sizes") {
       uint8_t buf1[1], buf16[16], buf64[64], buf256[256];
 
-      check_int_eq(crypto_random_bytes(buf1, 1), 0);
-      check_int_eq(crypto_random_bytes(buf16, 16), 0);
-      check_int_eq(crypto_random_bytes(buf64, 64), 0);
-      check_int_eq(crypto_random_bytes(buf256, 256), 0);
+      check_equal(crypto_random_bytes(buf1, 1), 0);
+      check_equal(crypto_random_bytes(buf16, 16), 0);
+      check_equal(crypto_random_bytes(buf64, 64), 0);
+      check_equal(crypto_random_bytes(buf256, 256), 0);
     }
   }
 
   describe("Edge Cases") {
      it("should return -1 when given a NULL buffer or zero length") {
       uint8_t buf[32];
-      check_int_eq(crypto_random_bytes(NULL, 32), -1);
-      check_int_eq(crypto_random_bytes(buf, 0), -1);
+      check_equal(crypto_random_bytes(NULL, 32), -1);
+      check_equal(crypto_random_bytes(buf, 0), -1);
     }
   }
 }

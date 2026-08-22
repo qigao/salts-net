@@ -271,7 +271,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
     tls_config.verify_peer = s->tls_verify_peer;
     rc = turbo_stream_tls_set_client_config(tls_stream, &tls_config);
     if (rc != 0) {
-      TLOG_ERROR("TLS upgrade client configuration failed rc={}", rc);
+      TLOG_ERRORF("TLS upgrade client configuration failed rc={}", rc);
       turbo_stream_destroy(tls_stream);
       return rc;
     }
@@ -283,7 +283,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
                                    (const char *const *)s->tls_alpn_protos,
                                    s->tls_alpn_proto_count);
     if (rc != 0) {
-      TLOG_ERROR("TLS upgrade ALPN configuration failed rc={}", rc);
+      TLOG_ERRORF("TLS upgrade ALPN configuration failed rc={}", rc);
       turbo_stream_destroy(tls_stream);
       return rc;
     }
@@ -298,7 +298,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
     rc = coro_socket_apply_stream_options(s);
     s->handle.stream = saved;
     if (rc != 0) {
-      TLOG_ERROR("TLS upgrade stream option application failed rc={}", rc);
+      TLOG_ERRORF("TLS upgrade stream option application failed rc={}", rc);
       turbo_stream_set_user_data(tls_stream, NULL);
       tls_stream->managed = 0;
       turbo_stream_destroy(tls_stream);
@@ -320,7 +320,7 @@ int coro_socket_upgrade_tls(coro_socket_t *s, const char *hostname) {
     if (rc == 0) {
       turbo_stream_tls_note_wrap_client_time(turbo_hrtime() - wrap_start_ns);
     } else {
-      TLOG_ERROR("TLS upgrade attach failed rc={} tcp_kind={} tcp_connected={}", rc,
+      TLOG_ERRORF("TLS upgrade attach failed rc={} tcp_kind={} tcp_connected={}", rc,
                  (int)tcp_stream->kind, tcp_stream->connected);
     }
   }
@@ -388,7 +388,7 @@ int coro_socket_wrap_accepted_tls_server(coro_socket_t *s,
   if (rc != 0) {
     s->co_wait = NULL;
     release_client(s);
-    TLOG_ERROR("tls server wrap failed rc={}", rc);
+    TLOG_ERRORF("tls server wrap failed rc={}", rc);
     turbo_stream_set_user_data(tls_stream, NULL);
     tls_stream->managed = 0;
     turbo_stream_destroy(tls_stream);

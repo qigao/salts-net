@@ -70,8 +70,8 @@ spec("Coro Pipe Async") {
     g_pipe_async_server_rc = TURBO_EBUSY;
     g_pipe_async_handler_hits = 0;
 
-    check_int_eq(coro_context_spawn(ctx, delayed_pipe_server, &state), 0);
-    check_int_eq(coro_context_spawn(ctx, pipe_async_client, &state), 0);
+    check_equal(coro_context_spawn(ctx, delayed_pipe_server, &state), 0);
+    check_equal(coro_context_spawn(ctx, pipe_async_client, &state), 0);
 
     while ((g_pipe_async_client_rc == TURBO_EBUSY || g_pipe_async_server_rc == TURBO_EBUSY) &&
            limit-- > 0) {
@@ -81,8 +81,8 @@ spec("Coro Pipe Async") {
 #endif
     }
 
-    check_int_eq(g_pipe_async_server_rc, 0);
-    check_int_eq(g_pipe_async_client_rc, 0);
+    check_equal(g_pipe_async_server_rc, 0);
+    check_equal(g_pipe_async_client_rc, 0);
 
     limit = 1000;
     while (g_pipe_async_handler_hits == 0 && limit-- > 0) {
@@ -92,7 +92,7 @@ spec("Coro Pipe Async") {
 #endif
     }
 
-    check_int_eq(g_pipe_async_handler_hits, 1);
+    check_equal(g_pipe_async_handler_hits, 1);
 
     if (state.server) {
       coro_socket_destroy(state.server);

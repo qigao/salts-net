@@ -11,6 +11,8 @@
 #ifndef TURBO_CONNECTION_POOL_H
 #define TURBO_CONNECTION_POOL_H
 
+
+#include "coronet_api.h"
 #include "platform.h"
 #include "turbo_coro_socket.h"
 #include "turbo_coro_context.h"
@@ -52,7 +54,7 @@ typedef struct coro_pool_config_s {
  * @param config  Configuration (NULL for defaults)
  * @return Pool handle or NULL on failure
  */
-CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
+CORONET_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
                                                       const coro_pool_config_t *config);
 
 /**
@@ -60,7 +62,7 @@ CXX_C_API coro_pool_t *coro_pool_create(coro_context_t *ctx,
  *
  * Must be called before coro_pool_open(). Passing NULL or DIRECT clears it.
  */
-CXX_C_API int coro_pool_set_proxy(coro_pool_t *pool,
+CORONET_C_API int coro_pool_set_proxy(coro_pool_t *pool,
                                   const coro_proxy_config_t *config);
 
 /**
@@ -69,7 +71,7 @@ CXX_C_API int coro_pool_set_proxy(coro_pool_t *pool,
  * Must be called before opening the pool. The callback and user data are
  * borrowed and must remain valid until the pool is destroyed.
  */
-CXX_C_API int coro_pool_set_connection_initializer(coro_pool_t *pool,
+CORONET_C_API int coro_pool_set_connection_initializer(coro_pool_t *pool,
                                                     coro_pool_connection_init_fn initializer,
                                                     void *user_data);
 
@@ -84,7 +86,7 @@ CXX_C_API int coro_pool_set_connection_initializer(coro_pool_t *pool,
  * @param socket_type  Socket type (CORO_SOCKET_TCP_V4, etc.)
  * @return 0 on success, negative TURBO_* error code on failure
  */
-CXX_C_API int coro_pool_open(coro_pool_t *pool, const char *host, int port,
+CORONET_C_API int coro_pool_open(coro_pool_t *pool, const char *host, int port,
                               coro_socket_type_t socket_type);
 
 /**
@@ -103,7 +105,7 @@ CXX_C_API int coro_pool_open(coro_pool_t *pool, const char *host, int port,
  * @param subprotocol   Optional Sec-WebSocket-Protocol value, or NULL
  * @return 0 on success, negative TURBO_* error code on failure
  */
-CXX_C_API int coro_pool_open_ws_host_ex(coro_pool_t *pool, const char *connect_host, int port,
+CORONET_C_API int coro_pool_open_ws_host_ex(coro_pool_t *pool, const char *connect_host, int port,
                                         coro_socket_type_t socket_type,
                                         const char *request_host, const char *path, int is_tls,
                                         const char *subprotocol);
@@ -115,13 +117,13 @@ CXX_C_API int coro_pool_open_ws_host_ex(coro_pool_t *pool, const char *connect_h
  *
  * @param pool  Pool handle
  */
-CXX_C_API void coro_pool_close(coro_pool_t *pool);
+CORONET_C_API void coro_pool_close(coro_pool_t *pool);
 
 /**
  * @brief Destroy the pool and free all resources.
  * @param pool  Pool handle (NULL-safe)
  */
-CXX_C_API void coro_pool_destroy(coro_pool_t *pool);
+CORONET_C_API void coro_pool_destroy(coro_pool_t *pool);
 
 /* ── Borrow / Return ──────────────────────────────────────── */
 
@@ -138,7 +140,7 @@ CXX_C_API void coro_pool_destroy(coro_pool_t *pool);
  * @param[out] out  Receives the borrowed client pointer
  * @return 0 on success, TURBO_ETIMEDOUT on timeout, negative on error
  */
-CXX_C_API int coro_pool_borrow(coro_pool_t *pool, coro_socket_t **out);
+CORONET_C_API int coro_pool_borrow(coro_pool_t *pool, coro_socket_t **out);
 
 /**
  * @brief Return a connection to the pool.
@@ -150,7 +152,7 @@ CXX_C_API int coro_pool_borrow(coro_pool_t *pool, coro_socket_t **out);
  * @param pool    Pool handle
  * @param client  Client to return (must have been borrowed from this pool)
  */
-CXX_C_API void coro_pool_return(coro_pool_t *pool, coro_socket_t *client);
+CORONET_C_API void coro_pool_return(coro_pool_t *pool, coro_socket_t *client);
 
 /**
  * Destroy a borrowed connection instead of returning it to the idle set.
@@ -158,21 +160,21 @@ CXX_C_API void coro_pool_return(coro_pool_t *pool, coro_socket_t *client);
  * Use this when a protocol parser or handshake determines that the byte stream
  * is no longer reusable even if the transport still appears connected.
  */
-CXX_C_API int coro_pool_discard(coro_pool_t *pool, coro_socket_t *client);
+CORONET_C_API int coro_pool_discard(coro_pool_t *pool, coro_socket_t *client);
 
 /* ── Query ────────────────────────────────────────────────── */
 
 /** Number of idle (available) connections */
-CXX_C_API size_t coro_pool_idle_count(const coro_pool_t *pool);
+CORONET_C_API size_t coro_pool_idle_count(const coro_pool_t *pool);
 
 /** Number of currently borrowed connections */
-CXX_C_API size_t coro_pool_borrowed_count(const coro_pool_t *pool);
+CORONET_C_API size_t coro_pool_borrowed_count(const coro_pool_t *pool);
 
 /** Total alive connections (idle + borrowed) */
-CXX_C_API size_t coro_pool_size(const coro_pool_t *pool);
+CORONET_C_API size_t coro_pool_size(const coro_pool_t *pool);
 
 /** Check if the pool is open and connected to an endpoint */
-CXX_C_API int coro_pool_is_open(const coro_pool_t *pool);
+CORONET_C_API int coro_pool_is_open(const coro_pool_t *pool);
 
 #ifdef __cplusplus
 }

@@ -31,12 +31,12 @@ typedef enum {
 /**
  * Parse Content-Transfer-Encoding header value
  */
-CXX_C_API mime_encoding_t mime_parse_encoding(const char *encoding_str, size_t len);
+mime_encoding_t mime_parse_encoding(const char *encoding_str, size_t len);
 
 /**
  * Get encoding name string
  */
-CXX_C_API const char *mime_encoding_name(mime_encoding_t encoding);
+const char *mime_encoding_name(mime_encoding_t encoding);
 
 /* ── Decoding functions ────────────────────────────────────────────── */
 
@@ -45,7 +45,7 @@ CXX_C_API const char *mime_encoding_name(mime_encoding_t encoding);
  * Allocates output buffer using pool
  * Returns 0 on success, -1 on error
  */
-CXX_C_API int mime_decode_body(mem_pool_t *pool,
+int mime_decode_body(mem_pool_t *pool,
                                 const char *input, size_t input_len,
                                 mime_encoding_t encoding,
                                 char **output, size_t *output_len);
@@ -53,14 +53,14 @@ CXX_C_API int mime_decode_body(mem_pool_t *pool,
 /**
  * Decode Base64 content (wrapper around base64_utils)
  */
-CXX_C_API int mime_decode_base64(mem_pool_t *pool,
+int mime_decode_base64(mem_pool_t *pool,
                                   const char *input, size_t input_len,
                                   uint8_t **output, size_t *output_len);
 
 /**
  * Decode Quoted-Printable content
  */
-CXX_C_API int mime_decode_quoted_printable(mem_pool_t *pool,
+int mime_decode_quoted_printable(mem_pool_t *pool,
                                             const char *input, size_t input_len,
                                             char **output, size_t *output_len);
 
@@ -81,7 +81,7 @@ typedef struct {
  * Parse Content-Type header value
  * Returns 0 on success, -1 on error
  */
-CXX_C_API int mime_parse_content_type(const char *content_type, size_t len,
+int mime_parse_content_type(const char *content_type, size_t len,
                                        mime_content_type_t *result);
 
 #ifdef __cplusplus

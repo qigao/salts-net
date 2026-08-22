@@ -79,7 +79,7 @@ add_library(
                         ${ASN1_BINARY_GRAMMAR_GEN})
 
 add_library(TurboNet::Asn1Parser ALIAS ${TARGET_NAME})
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+cmake_config_api(${TARGET_NAME} TURBONET_ASN1_C_API)
 
 target_include_directories(
   ${TARGET_NAME}

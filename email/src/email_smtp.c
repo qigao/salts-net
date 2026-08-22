@@ -76,7 +76,7 @@ static int smtp_read_line(smtp_client_t *client, char **line) {
     size_t len = 0;
     int result = coro_socket_recv(client->socket, &data, &len);
     if (result != 0 || !data || len == 0) {
-      fmt(client->error_msg, sizeof(client->error_msg), "Failed to read SMTP response");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read SMTP response");
       if (data) {
         coro_socket_free_recv(data);
       }
@@ -86,7 +86,7 @@ static int smtp_read_line(smtp_client_t *client, char **line) {
     size_t space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
     if (len > space) {
       coro_socket_free_recv(data);
-      fmt(client->error_msg, sizeof(client->error_msg), "SMTP response too large");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "SMTP response too large");
       return -1;
     }
 
@@ -148,9 +148,9 @@ static int smtp_read_response(smtp_client_t *client, int *code) {
 static int smtp_send_command(smtp_client_t *client, const char *cmd) {
   if (!client || !client->socket || !cmd) return -1;
 
-  tstr_t wire_cmd = tstr_format("{}\r\n", cmd);
+  tstr wire_cmd = tstr_format("{}\r\n", cmd);
   if (!wire_cmd) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to allocate SMTP command");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to allocate SMTP command");
     return -1;
   }
 
@@ -169,9 +169,9 @@ static int smtp_send_hello(smtp_client_t *client, int extended) {
   const char *ehlo_domain = client->config.client_hostname
                             ? client->config.client_hostname
                             : "[127.0.0.1]";
-  tstr_t hello_cmd = tstr_format("{} {}", extended ? "EHLO" : "HELO", ehlo_domain);
+  tstr hello_cmd = tstr_format("{} {}", extended ? "EHLO" : "HELO", ehlo_domain);
   if (!hello_cmd) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to allocate SMTP hello command");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to allocate SMTP hello command");
     return -1;
   }
 
@@ -199,7 +199,7 @@ static int smtp_send_dotted_body(smtp_client_t *client, const char *data, size_t
   if (data[0] == '.') {
     int rc = coro_socket_send(client->socket, ".", 1);
     if (rc != 0) {
-      fmt(client->error_msg, sizeof(client->error_msg), "Failed to send dot escape");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to send dot escape");
       return -1;
     }
   }
@@ -212,14 +212,14 @@ static int smtp_send_dotted_body(smtp_client_t *client, const char *data, size_t
       if (chunk_len > 0) {
         int rc = coro_socket_send(client->socket, data + last_pos, chunk_len);
         if (rc != 0) {
-          fmt(client->error_msg, sizeof(client->error_msg), "Failed to send chunk");
+          fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to send chunk");
           return -1;
         }
       }
       // Send the extra escape dot
       int rc = coro_socket_send(client->socket, ".", 1);
       if (rc != 0) {
-        fmt(client->error_msg, sizeof(client->error_msg), "Failed to send dot escape");
+        fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to send dot escape");
         return -1;
       }
       last_pos = i + 2; // Next chunk starts at the original '.'
@@ -233,7 +233,7 @@ static int smtp_send_dotted_body(smtp_client_t *client, const char *data, size_t
   if (len - last_pos > 0) {
     int rc = coro_socket_send(client->socket, data + last_pos, len - last_pos);
     if (rc != 0) {
-      fmt(client->error_msg, sizeof(client->error_msg), "Failed to send remainder");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to send remainder");
       return -1;
     }
   }
@@ -296,7 +296,7 @@ int smtp_connect(smtp_client_t *client) {
     if (socket) smtp_socket_publish(client, socket);
   }
   if (!client->socket) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
     return -1;
   }
 
@@ -342,7 +342,7 @@ int smtp_connect(smtp_client_t *client) {
     }
 
     if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      fmt(client->error_msg, sizeof(client->error_msg), "Failed to upgrade SMTP connection to TLS");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to upgrade SMTP connection to TLS");
       smtp_disconnect(client);
       return -1;
     }
@@ -386,7 +386,7 @@ int smtp_connect(smtp_client_t *client) {
         return -1;
       }
 
-      tstr_t auth_cmd = tstr_format("AUTH PLAIN {}", auth_b64);
+      tstr auth_cmd = tstr_format("AUTH PLAIN {}", auth_b64);
       free(auth_b64);
       if (!auth_cmd) {
         smtp_disconnect(client);
@@ -456,7 +456,7 @@ int smtp_connect(smtp_client_t *client) {
         return -1;
       }
     } else if (client->config.auth_method == SMTP_AUTH_CRAM_MD5) {
-      fmt(client->error_msg, sizeof(client->error_msg), "CRAM-MD5 authentication is not implemented");
+      fmt_text(client->error_msg, sizeof(client->error_msg), "CRAM-MD5 authentication is not implemented");
       smtp_disconnect(client);
       return -1;
     }
@@ -512,7 +512,7 @@ int smtp_send_raw(smtp_client_t *client,
   }
 
   // MAIL FROM
-  tstr_t mail_from = tstr_format("MAIL FROM:<{}>", from_email);
+  tstr mail_from = tstr_format("MAIL FROM:<{}>", from_email);
   if (!mail_from) return -1;
   if (smtp_send_command(client, mail_from) != 0) {
     tstr_free(mail_from);
@@ -523,7 +523,7 @@ int smtp_send_raw(smtp_client_t *client,
 
   // RCPT TO (for each recipient, accepting 250/251/252)
   for (int i = 0; i < to_count; i++) {
-    tstr_t rcpt_to = tstr_format("RCPT TO:<{}>", to_emails[i]);
+    tstr rcpt_to = tstr_format("RCPT TO:<{}>", to_emails[i]);
     if (!rcpt_to) return -1;
     if (smtp_send_command(client, rcpt_to) != 0) {
       tstr_free(rcpt_to);
@@ -579,7 +579,7 @@ int smtp_send_message(smtp_client_t *client, email_message_t *msg) {
   }
 
   if (to_count == 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "No recipients specified");
+    fmt_text(client->error_msg, sizeof(client->error_msg), "No recipients specified");
     return -1;
   }
 
@@ -606,7 +606,7 @@ int smtp_send_message(smtp_client_t *client, email_message_t *msg) {
   }
 
   // Serialize message
-  tstr_t raw_msg = email_message_to_string(msg);
+  tstr raw_msg = email_message_to_string(msg);
   if (!raw_msg) {
     free(to_emails);
     return -1;

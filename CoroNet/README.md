@@ -505,7 +505,6 @@ ctest --preset linux-dev-user -R test_vsock --output-on-failure
 
 - c-ares (DNS resolution; built as a static library by the repository vcpkg overlay)
 - KCP
-- llhttp 
 - OpenSSL
 
 ## Examples

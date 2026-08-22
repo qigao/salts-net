@@ -304,7 +304,7 @@ turbo_rule_action_type_t coro_rule_evaluate(coro_rule_engine_t *engine,
     // DNS Sniffing: If host is an IP, try to find original domain
     const char *sniffed_domain = lookup_dns(engine, host);
     const char *eval_host = sniffed_domain ? sniffed_domain : host;
-    if (sniffed_domain) TLOG_INFO("[Rule] Sniffed domain {} for IP {}", sniffed_domain, host);
+    if (sniffed_domain) TLOG_INFOF("[Rule] Sniffed domain {} for IP {}", sniffed_domain, host);
 
     turbo_rule_entry_t *curr = engine->head;
     while (curr) {
@@ -616,6 +616,6 @@ int coro_rule_geoip_load(coro_rule_engine_t *engine, const char *path) {
         qsort(engine->geoip_db, engine->geoip_count, sizeof(geoip_range_t), compare_geoip);
     }
     
-    TLOG_INFO("[Rule] Loaded {} GeoIP ranges from {}", engine->geoip_count, path);
+    TLOG_INFOF("[Rule] Loaded {} GeoIP ranges from {}", engine->geoip_count, path);
     return 0;
 }

@@ -185,14 +185,14 @@ spec("KCP Transport") {
     kcp = turbo_kcp_create(ctx);
     check(kcp != NULL);
 
-    check_int_eq(turbo_kcp_get_config(kcp, &cfg), 0);
-    check_int_eq(cfg.pre_shared_key[0], 0);
-    check_int_eq(cfg.mtu, 1200);
-    check_int_eq(cfg.fec.backend, TURBO_KCP_FEC_BACKEND_REED_SOLOMON);
-    check_int_eq(cfg.fec.data_shards, 8);
-    check_int_eq(cfg.fec.parity_shards, 2);
-    check_int_eq(cfg.fec.max_payload_size, 1248);
-    check_int_eq(cfg.fec.receive_group_count, 16);
+    check_equal(turbo_kcp_get_config(kcp, &cfg), 0);
+    check_equal(cfg.pre_shared_key[0], 0);
+    check_equal(cfg.mtu, 1200);
+    check_equal(cfg.fec.backend, TURBO_KCP_FEC_BACKEND_REED_SOLOMON);
+    check_equal(cfg.fec.data_shards, 8);
+    check_equal(cfg.fec.parity_shards, 2);
+    check_equal(cfg.fec.max_payload_size, 1248);
+    check_equal(cfg.fec.receive_group_count, 16);
 
     turbo_kcp_destroy(kcp);
     kcp_test_destroy_context_robust(ctx);
@@ -208,16 +208,16 @@ spec("KCP Transport") {
     check(kcp != NULL);
 
     turbo_kcp_config_default(&cfg);
-    check_int_eq(turbo_kcp_set_config(kcp, &cfg), TURBO_EINVAL);
-    check_int_eq(coro_context_get_last_error(ctx), TURBO_EINVAL);
+    check_equal(turbo_kcp_set_config(kcp, &cfg), TURBO_EINVAL);
+    check_equal(coro_context_get_last_error(ctx), TURBO_EINVAL);
     turbo_kcp_destroy(kcp);
     kcp_test_destroy_context_robust(ctx);
 
     ctx = coro_context_create(NULL);
     kcp = turbo_kcp_create(ctx);
     cfg = kcp_test_config();
-    check_int_eq(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_REED_SOLOMON), 1);
-    check_int_eq(turbo_kcp_set_config(kcp, &cfg), 0);
+    check_equal(turbo_kcp_fec_backend_available(TURBO_KCP_FEC_BACKEND_REED_SOLOMON), 1);
+    check_equal(turbo_kcp_set_config(kcp, &cfg), 0);
 
     turbo_kcp_destroy(kcp);
     kcp_test_destroy_context_robust(ctx);
@@ -242,13 +242,13 @@ spec("KCP Transport") {
     cfg.parity_shards = 1;
     cfg.max_payload_size = 32;
 
-    check_int_eq(turbo_kcp_fec_open(&cfg, &fec), 0);
+    check_equal(turbo_kcp_fec_open(&cfg, &fec), 0);
     check_not_null(fec);
-    check_int_eq(turbo_kcp_fec_set_session(fec, 17U, KCP_TEST_PSK), 0);
-    check_int_eq(turbo_kcp_fec_build_data_frame_for_test(&cfg, 17U, KCP_TEST_PSK, 7, 1, packets[1],
+    check_equal(turbo_kcp_fec_set_session(fec, 17U, KCP_TEST_PSK), 0);
+    check_equal(turbo_kcp_fec_build_data_frame_for_test(&cfg, 17U, KCP_TEST_PSK, 7, 1, packets[1],
                                                          packet_lens[1], &data_frame),
                  0);
-    check_int_eq(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
+    check_equal(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
                      &cfg, 17U, KCP_TEST_PSK, 7, 0, packets, packet_lens, 2, &parity_frame),
                  0);
 
@@ -256,19 +256,19 @@ spec("KCP Transport") {
     slice.data = data_frame->data;
     slice.length = data_frame->used;
     slice.buffer = data_frame;
-    check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
-    check_int_eq(cap.count, 1);
-    check_size_eq(cap.lens[0], 5);
-    check_str_eq(cap.payloads[0], "bravo");
+    check_equal(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
+    check_equal(cap.count, 1);
+    check_equal(cap.lens[0], 5);
+    check_equal(cap.payloads[0], "bravo");
 
     memset(&slice, 0, sizeof(slice));
     slice.data = parity_frame->data;
     slice.length = parity_frame->used;
     slice.buffer = parity_frame;
-    check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
-    check_int_eq(cap.count, 2);
-    check_size_eq(cap.lens[1], 5);
-    check_str_eq(cap.payloads[1], "alpha");
+    check_equal(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
+    check_equal(cap.count, 2);
+    check_equal(cap.lens[1], 5);
+    check_equal(cap.payloads[1], "alpha");
 
     mem_unref(parity_frame);
     mem_unref(data_frame);
@@ -294,19 +294,19 @@ spec("KCP Transport") {
     cfg.parity_shards = 3;
     cfg.max_payload_size = 32;
 
-    check_int_eq(turbo_kcp_fec_open(&cfg, &fec), 0);
+    check_equal(turbo_kcp_fec_open(&cfg, &fec), 0);
     check_not_null(fec);
-    check_int_eq(turbo_kcp_fec_set_session(fec, 19U, KCP_TEST_PSK), 0);
+    check_equal(turbo_kcp_fec_set_session(fec, 19U, KCP_TEST_PSK), 0);
     for (i = 0; i < 3; ++i) {
-      check_int_eq(turbo_kcp_fec_build_data_frame_for_test(&cfg, 19U, KCP_TEST_PSK, 11,
+      check_equal(turbo_kcp_fec_build_data_frame_for_test(&cfg, 19U, KCP_TEST_PSK, 11,
                                                            (uint16_t)(i + 2), packets[i + 2],
                                                            packet_lens[i + 2], &frames[i]),
                    0);
     }
-    check_int_eq(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
+    check_equal(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
                      &cfg, 19U, KCP_TEST_PSK, 11, 1, packets, packet_lens, 5, &frames[3]),
                  0);
-    check_int_eq(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
+    check_equal(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
                      &cfg, 19U, KCP_TEST_PSK, 11, 2, packets, packet_lens, 5, &frames[4]),
                  0);
 
@@ -315,14 +315,14 @@ spec("KCP Transport") {
       slice.data = frames[i]->data;
       slice.length = frames[i]->used;
       slice.buffer = frames[i];
-      check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
+      check_equal(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), 0);
     }
-    check_int_eq(cap.count, 5);
-    check_str_eq(cap.payloads[0], "two");
-    check_str_eq(cap.payloads[1], "three");
-    check_str_eq(cap.payloads[2], "four");
-    check_str_eq(cap.payloads[3], "zero");
-    check_str_eq(cap.payloads[4], "one");
+    check_equal(cap.count, 5);
+    check_equal(cap.payloads[0], "two");
+    check_equal(cap.payloads[1], "three");
+    check_equal(cap.payloads[2], "four");
+    check_equal(cap.payloads[3], "zero");
+    check_equal(cap.payloads[4], "one");
 
     for (i = 0; i < 5; ++i)
       mem_unref(frames[i]);
@@ -343,30 +343,30 @@ spec("KCP Transport") {
 
     memcpy(wrong_key, KCP_TEST_PSK, sizeof(wrong_key));
     wrong_key[0] ^= 0x80U;
-    check_int_eq(turbo_kcp_secure_init(&client, TURBO_KCP_SECURE_CLIENT, KCP_TEST_PSK), TURBO_OK);
-    check_int_eq(turbo_kcp_secure_init(&server, TURBO_KCP_SECURE_SERVER, KCP_TEST_PSK), TURBO_OK);
-    check_int_eq(turbo_kcp_secure_init(&wrong_server, TURBO_KCP_SECURE_SERVER, wrong_key),
+    check_equal(turbo_kcp_secure_init(&client, TURBO_KCP_SECURE_CLIENT, KCP_TEST_PSK), TURBO_OK);
+    check_equal(turbo_kcp_secure_init(&server, TURBO_KCP_SECURE_SERVER, KCP_TEST_PSK), TURBO_OK);
+    check_equal(turbo_kcp_secure_init(&wrong_server, TURBO_KCP_SECURE_SERVER, wrong_key),
                  TURBO_OK);
-    check_int_eq(turbo_kcp_secure_build_client_hello(&client, hello), TURBO_OK);
-    check_int_eq(turbo_kcp_secure_accept_client_hello(&wrong_server, hello, sizeof(hello), ack),
+    check_equal(turbo_kcp_secure_build_client_hello(&client, hello), TURBO_OK);
+    check_equal(turbo_kcp_secure_accept_client_hello(&wrong_server, hello, sizeof(hello), ack),
                  TURBO_EPERM);
-    check_int_eq(turbo_kcp_secure_accept_client_hello(&server, hello, sizeof(hello), ack),
+    check_equal(turbo_kcp_secure_accept_client_hello(&server, hello, sizeof(hello), ack),
                  TURBO_OK);
-    check_int_eq(turbo_kcp_secure_accept_server_hello(&client, ack, sizeof(ack)), TURBO_OK);
-    check_int_eq(turbo_kcp_secure_seal(&client, "packet", 6U, record, sizeof(record), &record_size),
+    check_equal(turbo_kcp_secure_accept_server_hello(&client, ack, sizeof(ack)), TURBO_OK);
+    check_equal(turbo_kcp_secure_seal(&client, "packet", 6U, record, sizeof(record), &record_size),
                  TURBO_OK);
-    check_int_eq(
+    check_equal(
         turbo_kcp_secure_open(&server, record, record_size, plain, sizeof(plain), &plain_size),
         TURBO_OK);
-    check_size_eq(plain_size, 6U);
-    check_int_eq(memcmp(plain, "packet", 6U), 0);
-    check_int_eq(
+    check_equal(plain_size, 6U);
+    check_equal(memcmp(plain, "packet", 6U), 0);
+    check_equal(
         turbo_kcp_secure_open(&server, record, record_size, plain, sizeof(plain), &plain_size),
         TURBO_EALREADY);
-    check_int_eq(turbo_kcp_secure_seal(&client, "tamper", 6U, record, sizeof(record), &record_size),
+    check_equal(turbo_kcp_secure_seal(&client, "tamper", 6U, record, sizeof(record), &record_size),
                  TURBO_OK);
     record[32] ^= 0x01;
-    check_int_eq(
+    check_equal(
         turbo_kcp_secure_open(&server, record, record_size, plain, sizeof(plain), &plain_size),
         TURBO_EPERM);
     turbo_kcp_secure_wipe(&wrong_server);
@@ -388,9 +388,9 @@ spec("KCP Transport") {
     cfg.data_shards = 2U;
     cfg.parity_shards = 1U;
     cfg.max_payload_size = 32U;
-    check_int_eq(turbo_kcp_fec_open(&cfg, &fec), TURBO_OK);
-    check_int_eq(turbo_kcp_fec_set_session(fec, 23U, KCP_TEST_PSK), TURBO_OK);
-    check_int_eq(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
+    check_equal(turbo_kcp_fec_open(&cfg, &fec), TURBO_OK);
+    check_equal(turbo_kcp_fec_set_session(fec, 23U, KCP_TEST_PSK), TURBO_OK);
+    check_equal(turbo_kcp_fec_build_reed_solomon_parity_frame_for_test(
                      &cfg, 23U, KCP_TEST_PSK, 9U, 0U, packets, packet_lens, 2U, &parity),
                  TURBO_OK);
     parity->data[parity->used - 1U] ^= 0x01;
@@ -398,8 +398,8 @@ spec("KCP Transport") {
     slice.data = parity->data;
     slice.length = parity->used;
     slice.buffer = parity;
-    check_int_eq(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), TURBO_EPERM);
-    check_int_eq(cap.count, 0);
+    check_equal(turbo_kcp_fec_receive_frame(fec, &slice, on_fec_deliver, &cap), TURBO_EPERM);
+    check_equal(cap.count, 0);
     mem_unref(parity);
     turbo_kcp_fec_close(fec);
   }
@@ -411,10 +411,10 @@ spec("KCP Transport") {
     turbo_kcp_t *client = turbo_kcp_create(ctx);
     turbo_kcp_config_t config = kcp_test_config();
     check(client != NULL);
-    check_int_eq(turbo_kcp_set_config(client, &config), 0);
+    check_equal(turbo_kcp_set_config(client, &config), 0);
 
     int r = turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv);
-    check_int_eq(r, 0);
+    check_equal(r, 0);
 
     turbo_kcp_destroy(client);
 
@@ -439,8 +439,8 @@ spec("KCP Transport") {
       if (!client) {
         break;
       }
-      check_int_eq(turbo_kcp_set_config(client, &config), TURBO_OK);
-      check_int_eq(turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv),
+      check_equal(turbo_kcp_set_config(client, &config), TURBO_OK);
+      check_equal(turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv),
                    TURBO_OK);
 
       /* Destroy at the initial tick boundary so the timer producer and the
@@ -467,11 +467,11 @@ spec("KCP Transport") {
     turbo_kcp_t *client = turbo_kcp_create(ctx);
     turbo_kcp_config_t config = kcp_test_config();
     check(client != NULL);
-    check_int_eq(turbo_kcp_set_config(client, &config), 0);
+    check_equal(turbo_kcp_set_config(client, &config), 0);
 
-    check_int_eq(turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv),
+    check_equal(turbo_kcp_connect(client, "127.0.0.1", 9999, on_kcp_connect, on_kcp_recv),
                  TURBO_EPROTONOSUPPORT);
-    check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+    check_equal(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
     turbo_kcp_destroy(client);
     kcp_test_destroy_context_robust(ctx);
@@ -483,18 +483,18 @@ spec("KCP Transport") {
     turbo_kcp_t *server = turbo_kcp_create(ctx);
     turbo_kcp_t *client = turbo_kcp_create(ctx);
     turbo_kcp_config_t config = kcp_test_config();
-    check_int_eq(turbo_kcp_set_config(server, &config), 0);
-    check_int_eq(turbo_kcp_set_config(client, &config), 0);
+    check_equal(turbo_kcp_set_config(server, &config), 0);
+    check_equal(turbo_kcp_set_config(client, &config), 0);
 
     s_kcp_recv_count = 0;
 
     /* 1. Bind server to dynamic port */
-    check_int_eq(turbo_kcp_bind(server, "127.0.0.1", 0, on_kcp_recv), 0);
+    check_equal(turbo_kcp_bind(server, "127.0.0.1", 0, on_kcp_recv), 0);
 
     /* 2. Get server port */
     struct sockaddr_storage server_addr;
     turbo_datagram_t *s_dg = turbo_kcp_get_datagram(server);
-    check_int_eq(turbo_datagram_get_local_addr(s_dg, &server_addr), 0);
+    check_equal(turbo_datagram_get_local_addr(s_dg, &server_addr), 0);
 
     unsigned short port = 0;
     if (server_addr.ss_family == AF_INET) {
@@ -503,7 +503,7 @@ spec("KCP Transport") {
 
     /* 3. Connect client to server */
     s_kcp_connect_count = 0;
-    check_int_eq(turbo_kcp_connect(client, "127.0.0.1", port, on_kcp_connect, on_kcp_recv), 0);
+    check_equal(turbo_kcp_connect(client, "127.0.0.1", port, on_kcp_connect, on_kcp_recv), 0);
     while (s_kcp_connect_count < 1 && coro_context_alive(ctx)) {
       coro_context_run(ctx, TURBO_RUN_ONCE);
     }
@@ -511,7 +511,7 @@ spec("KCP Transport") {
     /* 4. Send data: client -> server */
     /* Note: ikcp_send is just putting it in the send queue. We need to run loop to actually output.
      */
-    check_int_eq(turbo_kcp_send(client, "world", 5), 0);
+    check_equal(turbo_kcp_send(client, "world", 5), 0);
 
     /* 5. Run loop until server receives it */
     uint64_t wait_start = coro_context_now(ctx);
@@ -520,7 +520,7 @@ spec("KCP Transport") {
       coro_context_run(ctx, TURBO_RUN_ONCE);
     }
 
-    check_int_gt(s_kcp_recv_count, 0);
+    check_greater(s_kcp_recv_count, 0);
 
     turbo_kcp_destroy(client);
     turbo_kcp_destroy(server);
@@ -551,29 +551,29 @@ spec("KCP Transport") {
     check(client != NULL);
 
     config = kcp_test_config();
-    check_int_eq(turbo_kcp_set_config(server, &config), 0);
-    check_int_eq(turbo_kcp_set_config(client, &config), 0);
+    check_equal(turbo_kcp_set_config(server, &config), 0);
+    check_equal(turbo_kcp_set_config(client, &config), 0);
 
     s_kcp_recv_count = 0;
-    check_int_eq(turbo_kcp_bind(server, "127.0.0.1", 0, on_kcp_recv), 0);
+    check_equal(turbo_kcp_bind(server, "127.0.0.1", 0, on_kcp_recv), 0);
     s_dg = turbo_kcp_get_datagram(server);
-    check_int_eq(turbo_datagram_get_local_addr(s_dg, &server_addr), 0);
+    check_equal(turbo_datagram_get_local_addr(s_dg, &server_addr), 0);
     if (server_addr.ss_family == AF_INET) {
       port = ntohs(((struct sockaddr_in *)&server_addr)->sin_port);
     }
     s_kcp_connect_count = 0;
-    check_int_eq(turbo_kcp_connect(client, "127.0.0.1", port, on_kcp_connect, on_kcp_recv), 0);
+    check_equal(turbo_kcp_connect(client, "127.0.0.1", port, on_kcp_connect, on_kcp_recv), 0);
     while (s_kcp_connect_count < 1 && coro_context_alive(ctx)) {
       coro_context_run(ctx, TURBO_RUN_ONCE);
     }
-    check_int_eq(turbo_kcp_send(client, "world", 5), 0);
+    check_equal(turbo_kcp_send(client, "world", 5), 0);
 
     wait_start = coro_context_now(ctx);
     while (s_kcp_recv_count < 1 && coro_context_alive(ctx) &&
            (coro_context_now(ctx) - wait_start < 2000)) {
       coro_context_run(ctx, TURBO_RUN_ONCE);
     }
-    check_int_gt(s_kcp_recv_count, 0);
+    check_greater(s_kcp_recv_count, 0);
 
     turbo_kcp_destroy(client);
     turbo_kcp_destroy(server);
@@ -601,8 +601,8 @@ spec("KCP Transport") {
     server2 = coro_socket_create_kcp(ctx);
     check_not_null(server1);
     check_not_null(server2);
-    check_int_eq(coro_socket_set_kcp_config(server1, &config), 0);
-    check_int_eq(coro_socket_set_kcp_config(server2, &config), 0);
+    check_equal(coro_socket_set_kcp_config(server1, &config), 0);
+    check_equal(coro_socket_set_kcp_config(server2, &config), 0);
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -614,9 +614,9 @@ spec("KCP Transport") {
 
     r = coro_socket_bind(server1, (struct sockaddr *)&addr);
     if (r == 0) {
-      check_int_eq(coro_socket_get_local_address(server1, &local_addr), 0);
+      check_equal(coro_socket_get_local_address(server1, &local_addr), 0);
       addr.sin_port = ((const struct sockaddr_in *)&local_addr)->sin_port;
-      check_int_eq(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
+      check_equal(coro_socket_bind(server2, (struct sockaddr *)&addr), 0);
     } else {
       check(r != 0);
     }
@@ -636,13 +636,13 @@ spec("KCP Transport") {
     sock = coro_socket_create_kcp(ctx);
     check_not_null(sock);
 
-    check_int_eq(coro_socket_get_kcp_config(sock, &got), 0);
-    check_int_eq(got.pre_shared_key[0], 0);
+    check_equal(coro_socket_get_kcp_config(sock, &got), 0);
+    check_equal(got.pre_shared_key[0], 0);
 
     cfg = kcp_test_config();
-    check_int_eq(coro_socket_set_kcp_config(sock, &cfg), 0);
-    check_int_eq(coro_socket_get_kcp_config(sock, &got), 0);
-    check_int_eq(memcmp(got.pre_shared_key, KCP_TEST_PSK, TURBO_KCP_PSK_SIZE), 0);
+    check_equal(coro_socket_set_kcp_config(sock, &cfg), 0);
+    check_equal(coro_socket_get_kcp_config(sock, &got), 0);
+    check_equal(memcmp(got.pre_shared_key, KCP_TEST_PSK, TURBO_KCP_PSK_SIZE), 0);
 
     coro_socket_destroy(sock);
     kcp_test_destroy_context_robust(ctx);
@@ -655,22 +655,22 @@ spec("KCP Transport") {
     coro_socket_t *server = coro_socket_create_kcp(ctx);
     turbo_kcp_config_t config = kcp_test_config();
     check_not_null(server);
-    check_int_eq(coro_socket_set_kcp_config(server, &config), 0);
+    check_equal(coro_socket_set_kcp_config(server, &config), 0);
 
     kcp_socket_echo_state_t state = {.ctx = ctx, .server = server};
 
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", 28652, kcp_socket_echo_handler, &state),
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", 28652, kcp_socket_echo_handler, &state),
                  0);
-    check_int_eq(coro_context_spawn(ctx, kcp_socket_echo_client, &state), 0);
+    check_equal(coro_context_spawn(ctx, kcp_socket_echo_client, &state), 0);
 
     coro_context_run(ctx, TURBO_RUN_DEFAULT);
 
-    check_int_eq(state.client_done, 1);
-    check_int_eq(state.server_done, 1);
-    check_int_eq(state.server_waiting, 1);
-    check_int_eq(state.server_stopped, 1);
-    check_int_eq(state.handler_status, TURBO_EOF);
-    check_int_eq(state.ok, 1);
+    check_equal(state.client_done, 1);
+    check_equal(state.server_done, 1);
+    check_equal(state.server_waiting, 1);
+    check_equal(state.server_stopped, 1);
+    check_equal(state.handler_status, TURBO_EOF);
+    check_equal(state.ok, 1);
 
     coro_socket_destroy(server);
     kcp_test_destroy_context_robust(ctx);
@@ -684,7 +684,7 @@ spec("KCP Transport") {
     coro_socket_t *server = coro_socket_create_kcp(ctx);
     turbo_kcp_config_t config = kcp_test_config();
     check_not_null(server);
-    check_int_eq(coro_socket_set_kcp_config(server, &config), 0);
+    check_equal(coro_socket_set_kcp_config(server, &config), 0);
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -692,8 +692,8 @@ spec("KCP Transport") {
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(0);
 
-    check_int_eq(coro_socket_bind(server, (struct sockaddr *)&addr), TURBO_EPROTONOSUPPORT);
-    check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+    check_equal(coro_socket_bind(server, (struct sockaddr *)&addr), TURBO_EPROTONOSUPPORT);
+    check_equal(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
     coro_socket_destroy(server);
     kcp_test_destroy_context_robust(ctx);

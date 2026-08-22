@@ -115,15 +115,15 @@ spec("coro_post") {
     atomic_init(&count, 0);
 
     for (int i = 0; i < TEST_POST_USABLE_CAPACITY; ++i) {
-      check_int_eq(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
+      check_equal(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
     }
-    check_int_eq(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_ENOMEM);
+    check_equal(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_ENOMEM);
 
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(atomic_load_explicit(&count, memory_order_acquire), TEST_POST_USABLE_CAPACITY);
-    check_int_eq(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
+    check_equal(atomic_load_explicit(&count, memory_order_acquire), TEST_POST_USABLE_CAPACITY);
+    check_equal(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(atomic_load_explicit(&count, memory_order_acquire), TEST_POST_USABLE_CAPACITY + 1);
+    check_equal(atomic_load_explicit(&count, memory_order_acquire), TEST_POST_USABLE_CAPACITY + 1);
     coro_context_destroy(ctx);
   }
 
@@ -137,15 +137,15 @@ spec("coro_post") {
     state.count = &count;
     atomic_init(&state.repost_rc, TURBO_EALREADY);
 
-    check_int_eq(coro_post(ctx, reentrant_post, &state, NULL), TURBO_OK);
+    check_equal(coro_post(ctx, reentrant_post, &state, NULL), TURBO_OK);
     for (int i = 1; i < TEST_POST_USABLE_CAPACITY; ++i) {
-      check_int_eq(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
+      check_equal(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
     }
-    check_int_eq(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_ENOMEM);
+    check_equal(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_ENOMEM);
 
     (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
-    check_int_eq(atomic_load_explicit(&state.repost_rc, memory_order_acquire), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&count, memory_order_acquire), TEST_POST_USABLE_CAPACITY + 1);
+    check_equal(atomic_load_explicit(&state.repost_rc, memory_order_acquire), TURBO_OK);
+    check_equal(atomic_load_explicit(&count, memory_order_acquire), TEST_POST_USABLE_CAPACITY + 1);
     coro_context_destroy(ctx);
   }
 
@@ -156,16 +156,16 @@ spec("coro_post") {
     check_not_null(ctx);
     atomic_init(&count, 0);
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
+    check_equal(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
 
     for (int i = 1; i <= TEST_POST_WAKE_ROUNDS; ++i) {
-      check_int_eq(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
-      check_int_eq(wait_for_value(&count, i), TURBO_OK);
+      check_equal(coro_post(ctx, count_post, (void *)&count, NULL), TURBO_OK);
+      check_equal(wait_for_value(&count, i), TURBO_OK);
     }
 
     coro_context_set_persistent(ctx, 0);
     coro_context_stop(ctx);
-    check_int_eq(turbo_thread_join(&context_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&context_thread), TURBO_OK);
     turbo_thread_destroy(&context_thread);
     coro_context_destroy(ctx);
   }
@@ -180,17 +180,17 @@ spec("coro_post") {
     atomic_init(&state.marker, 0);
     atomic_init(&state.exited, 0);
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(turbo_thread_create(&context_thread, idle_exit_context_runner, &state),
+    check_equal(turbo_thread_create(&context_thread, idle_exit_context_runner, &state),
                  TURBO_OK);
-    check_int_eq(coro_post(ctx, mark_loop_running, &state, NULL), TURBO_OK);
-    check_int_eq(wait_for_value(&state.marker, 1), TURBO_OK);
+    check_equal(coro_post(ctx, mark_loop_running, &state, NULL), TURBO_OK);
+    check_equal(wait_for_value(&state.marker, 1), TURBO_OK);
     turbo_sleep_ms(10u);
 
     coro_context_set_persistent(ctx, 0);
     exit_rc = wait_for_idle_exit(&state, &context_thread);
     coro_context_destroy(ctx);
 
-    check_int_eq(exit_rc, TURBO_OK);
+    check_equal(exit_rc, TURBO_OK);
   }
 
   it("wakes an idle default run when its last external reference is released") {
@@ -203,17 +203,17 @@ spec("coro_post") {
     atomic_init(&state.marker, 0);
     atomic_init(&state.exited, 0);
     coro_context_acquire_external(ctx);
-    check_int_eq(turbo_thread_create(&context_thread, idle_exit_context_runner, &state),
+    check_equal(turbo_thread_create(&context_thread, idle_exit_context_runner, &state),
                  TURBO_OK);
-    check_int_eq(coro_post(ctx, mark_loop_running, &state, NULL), TURBO_OK);
-    check_int_eq(wait_for_value(&state.marker, 1), TURBO_OK);
+    check_equal(coro_post(ctx, mark_loop_running, &state, NULL), TURBO_OK);
+    check_equal(wait_for_value(&state.marker, 1), TURBO_OK);
     turbo_sleep_ms(10u);
 
     coro_context_release_external(ctx);
     exit_rc = wait_for_idle_exit(&state, &context_thread);
     coro_context_destroy(ctx);
 
-    check_int_eq(exit_rc, TURBO_OK);
+    check_equal(exit_rc, TURBO_OK);
   }
 
   it("delivers all callbacks from four concurrent producers") {
@@ -229,23 +229,23 @@ spec("coro_post") {
     atomic_init(&done, 0);
     atomic_init(&error, TURBO_OK);
     coro_context_set_persistent(ctx, 1);
-    check_int_eq(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
+    check_equal(turbo_thread_create(&context_thread, context_runner, ctx), TURBO_OK);
 
     for (int i = 0; i < TEST_POST_PRODUCERS; ++i) {
       states[i] = (producer_state_t){ctx, &count, &done, &error};
-      check_int_eq(turbo_thread_create(&producers[i], post_producer, &states[i]), TURBO_OK);
+      check_equal(turbo_thread_create(&producers[i], post_producer, &states[i]), TURBO_OK);
     }
-    check_int_eq(wait_for_value(&done, TEST_POST_PRODUCERS), TURBO_OK);
-    check_int_eq(atomic_load_explicit(&error, memory_order_acquire), TURBO_OK);
-    check_int_eq(wait_for_value(&count, TEST_POST_TOTAL), TURBO_OK);
+    check_equal(wait_for_value(&done, TEST_POST_PRODUCERS), TURBO_OK);
+    check_equal(atomic_load_explicit(&error, memory_order_acquire), TURBO_OK);
+    check_equal(wait_for_value(&count, TEST_POST_TOTAL), TURBO_OK);
 
     for (int i = 0; i < TEST_POST_PRODUCERS; ++i) {
-      check_int_eq(turbo_thread_join(&producers[i]), TURBO_OK);
+      check_equal(turbo_thread_join(&producers[i]), TURBO_OK);
       turbo_thread_destroy(&producers[i]);
     }
     coro_context_set_persistent(ctx, 0);
     coro_context_stop(ctx);
-    check_int_eq(turbo_thread_join(&context_thread), TURBO_OK);
+    check_equal(turbo_thread_join(&context_thread), TURBO_OK);
     turbo_thread_destroy(&context_thread);
     coro_context_destroy(ctx);
   }

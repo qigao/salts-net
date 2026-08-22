@@ -9,7 +9,7 @@ file(GLOB_RECURSE HEADERS include/*.h)
 # Library
 add_library(${TARGET_NAME} SHARED ${SOURCES} ${HEADERS})
 add_library(TurboNet::LDAP ALIAS ${TARGET_NAME})
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+cmake_config_api(${TARGET_NAME} TURBONET_LDAP_C_API)
 
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

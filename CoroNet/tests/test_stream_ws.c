@@ -454,9 +454,9 @@ spec("Stream WebSocket Client") {
     server.listen_socket = TEST_INVALID_SOCKET;
     turbo_stream_tls_reset_client_session_cache();
 
-    check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+    check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
 
     ctx = coro_context_create(NULL);
     check(ctx != NULL);
@@ -466,7 +466,7 @@ spec("Stream WebSocket Client") {
     memset(&tls_config, 0, sizeof(tls_config));
     tls_config.ca_file = ca_file;
     tls_config.verify_peer = 1;
-    check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+    check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
 
     turbo_stream_ws_set_path_host(s, "/chat", "localhost");
 
@@ -480,18 +480,18 @@ spec("Stream WebSocket Client") {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
+    check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
 
     ws_test_run_until(ctx, 3000, ws_test_connected_ready, &connected);
-    check_int_eq(s_ws_connected, 0);
+    check_equal(s_ws_connected, 0);
 
-    check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
-    check_int_eq(turbo_stream_send(s, msg, strlen(msg)), 0);
-    check_int_eq(turbo_stream_flush(s), 0);
+    check_equal(turbo_stream_recv_start(s, on_ws_recv), 0);
+    check_equal(turbo_stream_send(s, msg, strlen(msg)), 0);
+    check_equal(turbo_stream_flush(s), 0);
 
     ws_test_run_until(ctx, 3000, ws_test_rx_contains, (void *)msg);
 
-    check_int_eq(s_ws_connected, 0);
+    check_equal(s_ws_connected, 0);
     check(s_ws_rx_len > 0);
     check(strstr(s_ws_rx_buf, msg) != NULL);
 
@@ -500,9 +500,9 @@ spec("Stream WebSocket Client") {
 
     ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
 
-    check_int_eq(turbo_thread_join(&server.thread), 0);
+    check_equal(turbo_thread_join(&server.thread), 0);
 
-    check_int_eq(server.status, 0);
+    check_equal(server.status, 0);
     check(server.handshake_ok == 1);
     check(server.saw_echo == 1);
 
@@ -528,9 +528,9 @@ spec("Stream WebSocket Client") {
     server.send_invalid_handshake_response = 1;
     turbo_stream_tls_reset_client_session_cache();
 
-    check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+    check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
 
     ctx = coro_context_create(NULL);
     check(ctx != NULL);
@@ -540,7 +540,7 @@ spec("Stream WebSocket Client") {
     memset(&tls_config, 0, sizeof(tls_config));
     tls_config.ca_file = ca_file;
     tls_config.verify_peer = 1;
-    check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+    check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
     turbo_stream_ws_set_path_host(s, "/chat", "localhost");
 
     s_ws_connected = -1;
@@ -553,17 +553,17 @@ spec("Stream WebSocket Client") {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+    check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
                                            on_ws_connect, on_ws_close), 0);
 
     ws_test_run_until(ctx, 1000, ws_test_connect_finished, NULL);
-    check_int_eq(s_ws_connected, TURBO_EPROTONOSUPPORT);
+    check_equal(s_ws_connected, TURBO_EPROTONOSUPPORT);
 
     turbo_stream_close(s);
     turbo_stream_destroy(s);
 
-    check_int_eq(turbo_thread_join(&server.thread), 0);
-    check_int_eq(server.status, 0);
+    check_equal(turbo_thread_join(&server.thread), 0);
+    check_equal(server.status, 0);
 
     ws_test_run_until_idle(ctx, 1000);
 
@@ -594,9 +594,9 @@ spec("Stream WebSocket Client") {
       atomic_init(&server.release_after_handshake, 0);
       turbo_stream_tls_reset_client_session_cache();
 
-      check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-      check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-      check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+      check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+      check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+      check_equal(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
 
       ctx = coro_context_create(NULL);
       check_not_null(ctx);
@@ -606,7 +606,7 @@ spec("Stream WebSocket Client") {
       memset(&tls_config, 0, sizeof(tls_config));
       tls_config.ca_file = ca_file;
       tls_config.verify_peer = 1;
-      check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+      check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
       turbo_stream_ws_set_path_host(s, "/chat", "localhost");
 
       s_ws_connected = -1;
@@ -619,21 +619,21 @@ spec("Stream WebSocket Client") {
       addr.sin_port = htons(port);
       addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-      check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+      check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
                                              on_ws_connect, on_ws_close), 0);
       ws_test_run_until(ctx, 3000, ws_test_connected_ready, &connected);
-      check_int_eq(s_ws_connected, 0);
+      check_equal(s_ws_connected, 0);
 
-      check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
+      check_equal(turbo_stream_recv_start(s, on_ws_recv), 0);
       turbo_stream_close(s);
       turbo_stream_destroy(s);
       atomic_store_explicit(&server.release_after_handshake, 1,
                             memory_order_release);
 
       ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
-      check_int_eq(turbo_thread_join(&server.thread), 0);
-      check_int_eq(server.status, 0);
-      check_int_eq(server.handshake_ok, 1);
+      check_equal(turbo_thread_join(&server.thread), 0);
+      check_equal(server.status, 0);
+      check_equal(server.handshake_ok, 1);
 
       ws_test_run_until_idle(ctx, 1000);
 
@@ -668,9 +668,9 @@ spec("Stream WebSocket Client") {
       atomic_init(&server.release_after_handshake, 0);
       turbo_stream_tls_reset_client_session_cache();
 
-      check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-      check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-      check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+      check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+      check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+      check_equal(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
 
       ctx = coro_context_create(NULL);
       check_not_null(ctx);
@@ -680,7 +680,7 @@ spec("Stream WebSocket Client") {
       memset(&tls_config, 0, sizeof(tls_config));
       tls_config.ca_file = ca_file;
       tls_config.verify_peer = 1;
-      check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+      check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
       turbo_stream_ws_set_path_host(s, "/chat", "localhost");
 
       s_ws_connected = -1;
@@ -693,13 +693,13 @@ spec("Stream WebSocket Client") {
       addr.sin_port = htons(port);
       addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-      check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
+      check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr,
                                              on_ws_connect, on_ws_close), 0);
       ws_test_run_until(ctx, 3000, ws_test_connected_ready, &connected);
-      check_int_eq(s_ws_connected, 0);
+      check_equal(s_ws_connected, 0);
 
       for (j = 0; j < WSS_SEND_BURST; ++j) {
-        check_int_eq(turbo_stream_send(s, s_ws_send_payload, sizeof(s_ws_send_payload)), 0);
+        check_equal(turbo_stream_send(s, s_ws_send_payload, sizeof(s_ws_send_payload)), 0);
       }
 
       turbo_stream_close(s);
@@ -708,9 +708,9 @@ spec("Stream WebSocket Client") {
                             memory_order_release);
 
       ws_test_run_until(ctx, 1000, ws_test_closed_ready, NULL);
-      check_int_eq(turbo_thread_join(&server.thread), 0);
-      check_int_eq(server.status, 0);
-      check_int_eq(server.handshake_ok, 1);
+      check_equal(turbo_thread_join(&server.thread), 0);
+      check_equal(server.status, 0);
+      check_equal(server.handshake_ok, 1);
 
       ws_test_run_until_idle(ctx, 1000);
 
@@ -736,9 +736,9 @@ spec("Stream WebSocket Client") {
     server.send_invalid_opcode = 1;
     turbo_stream_tls_reset_client_session_cache();
 
-    check_int_eq(tls_test_prepare_listener(&server.listen_socket, &port), 0);
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
+    check_equal(tls_test_prepare_listener(&server.listen_socket, &port), 0);
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(turbo_thread_create(&server.thread, wss_test_server_main, &server), 0);
 
     ctx = coro_context_create(NULL);
     check(ctx != NULL);
@@ -748,7 +748,7 @@ spec("Stream WebSocket Client") {
     memset(&tls_config, 0, sizeof(tls_config));
     tls_config.ca_file = ca_file;
     tls_config.verify_peer = 1;
-    check_int_eq(turbo_stream_tls_set_client_config(s, &tls_config), 0);
+    check_equal(turbo_stream_tls_set_client_config(s, &tls_config), 0);
     turbo_stream_ws_set_path_host(s, "/chat", "localhost");
 
     s_ws_connected = -1;
@@ -761,22 +761,22 @@ spec("Stream WebSocket Client") {
     addr.sin_port = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 
-    check_int_eq(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
+    check_equal(turbo_stream_connect_addr(s, (const struct sockaddr *)&addr, on_ws_connect, on_ws_close), 0);
 
     ws_test_run_until(ctx, 3000, ws_test_connected_ready, &connected);
-    check_int_eq(s_ws_connected, 0);
+    check_equal(s_ws_connected, 0);
 
-    check_int_eq(turbo_stream_recv_start(s, on_ws_recv), 0);
+    check_equal(turbo_stream_recv_start(s, on_ws_recv), 0);
 
     ws_test_run_until(ctx, 3000, ws_test_closed_ready, NULL);
 
-    check_int_eq(turbo_thread_join(&server.thread), 0);
+    check_equal(turbo_thread_join(&server.thread), 0);
 
-    check_int_eq(s_ws_closed, 1);
-    check_int_eq(server.status, 0);
-    check_int_eq(server.handshake_ok, 1);
-    check_int_eq(server.saw_close, 1);
-    check_int_eq(s_ws_rx_len, 0);
+    check_equal(s_ws_closed, 1);
+    check_equal(server.status, 0);
+    check_equal(server.handshake_ok, 1);
+    check_equal(server.saw_close, 1);
+    check_equal(s_ws_rx_len, 0);
 
     turbo_stream_destroy(s);
 

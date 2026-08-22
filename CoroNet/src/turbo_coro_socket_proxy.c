@@ -434,7 +434,7 @@ static int http_connect_read_response(coro_socket_t *s, uint64_t deadline_ms) {
   }
 }
 
-static tstr_t http_connect_authority(const char *host, uint16_t port) {
+static tstr http_connect_authority(const char *host, uint16_t port) {
   size_t length = strlen(host);
 
   if (length >= 2U && host[0] == '[' && host[length - 1U] == ']') {
@@ -447,11 +447,11 @@ static tstr_t http_connect_authority(const char *host, uint16_t port) {
 static int http_connect(coro_socket_t *s, const char *target_host, uint16_t target_port,
                         uint64_t deadline_ms) {
   const coro_proxy_settings_t *proxy = &s->proxy;
-  tstr_t authority = NULL;
-  tstr_t request = NULL;
-  tstr_t userpass = NULL;
+  tstr authority = NULL;
+  tstr request = NULL;
+  tstr userpass = NULL;
   tn_base64_string_result_t encoded;
-  tstr_t updated;
+  tstr updated;
   int rc = TURBO_ENOMEM;
 
   memset(&encoded, 0, sizeof(encoded));

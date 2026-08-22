@@ -64,26 +64,26 @@ typedef struct {
  * @param result Output structure (zero-copy pointers)
  * @return 0 on success, -1 on error
  */
-CXX_C_API int mime_parse_content_disposition(const char *value, size_t len,
+int mime_parse_content_disposition(const char *value, size_t len,
                                               mime_content_disposition_t *result);
 
 /**
  * Get disposition type name
  */
-CXX_C_API const char *mime_disposition_type_name(mime_disposition_type_t type);
+const char *mime_disposition_type_name(mime_disposition_type_t type);
 
 /**
  * Copy filename to pool-allocated string (handles RFC 2231 encoding if needed)
  * Returns NULL-terminated string or NULL on error
  */
-CXX_C_API char *mime_disposition_get_filename(mem_pool_t *pool,
+char *mime_disposition_get_filename(mem_pool_t *pool,
                                                const mime_content_disposition_t *disp);
 
 /**
  * Copy name to pool-allocated string
  * Returns NULL-terminated string or NULL on error
  */
-CXX_C_API char *mime_disposition_get_name(mem_pool_t *pool,
+char *mime_disposition_get_name(mem_pool_t *pool,
                                           const mime_content_disposition_t *disp);
 
 #ifdef __cplusplus

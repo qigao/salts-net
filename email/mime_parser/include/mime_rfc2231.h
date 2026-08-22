@@ -43,7 +43,7 @@ typedef struct {
  * Check if parameter name indicates RFC 2231 encoding
  * Returns 1 if name ends with * or *N* (where N is digit)
  */
-CXX_C_API int mime_is_rfc2231_param(const char *param_name, size_t len);
+int mime_is_rfc2231_param(const char *param_name, size_t len);
 
 /**
  * Parse RFC 2231 encoded parameter value
@@ -57,7 +57,7 @@ CXX_C_API int mime_is_rfc2231_param(const char *param_name, size_t len);
  *
  * Returns 0 on success, -1 on error
  */
-CXX_C_API int mime_parse_rfc2231_value(const char *value, size_t len,
+int mime_parse_rfc2231_value(const char *value, size_t len,
                                         mime_rfc2231_param_t *result);
 
 /**
@@ -65,7 +65,7 @@ CXX_C_API int mime_parse_rfc2231_value(const char *value, size_t len,
  * Allocates decoded string using pool
  * Returns NULL on error
  */
-CXX_C_API char *mime_decode_rfc2231_value(mem_pool_t *pool,
+char *mime_decode_rfc2231_value(mem_pool_t *pool,
                                            const mime_rfc2231_param_t *param);
 
 /**
@@ -73,7 +73,7 @@ CXX_C_API char *mime_decode_rfc2231_value(mem_pool_t *pool,
  * Convenience function combining parse + decode
  * Returns NULL on error
  */
-CXX_C_API char *mime_decode_rfc2231(mem_pool_t *pool,
+char *mime_decode_rfc2231(mem_pool_t *pool,
                                      const char *value, size_t len);
 
 /**
@@ -81,7 +81,7 @@ CXX_C_API char *mime_decode_rfc2231(mem_pool_t *pool,
  * Example: "filename*0*" -> "filename"
  * Writes to output buffer, returns length
  */
-CXX_C_API size_t mime_rfc2231_base_name(const char *param_name, size_t len,
+size_t mime_rfc2231_base_name(const char *param_name, size_t len,
                                          char *output, size_t output_size);
 
 /**
@@ -89,7 +89,7 @@ CXX_C_API size_t mime_rfc2231_base_name(const char *param_name, size_t len,
  * Example: "filename*0*" -> 0, "filename*1*" -> 1
  * Returns -1 if not a continuation parameter
  */
-CXX_C_API int mime_rfc2231_continuation_index(const char *param_name, size_t len);
+int mime_rfc2231_continuation_index(const char *param_name, size_t len);
 
 /* ── Helper for Content-Disposition ────────────────────────────────── */
 
@@ -98,7 +98,7 @@ CXX_C_API int mime_rfc2231_continuation_index(const char *param_name, size_t len
  * Tries filename* first, falls back to filename
  * Returns pool-allocated string or NULL
  */
-CXX_C_API char *mime_get_filename_rfc2231(mem_pool_t *pool,
+char *mime_get_filename_rfc2231(mem_pool_t *pool,
                                            const char *content_disposition,
                                            size_t len);
 
@@ -114,7 +114,7 @@ CXX_C_API char *mime_get_filename_rfc2231(mem_pool_t *pool,
  * Only characters that are safe RFC 2231 attr-chars are left unencoded;
  * all others (including space, quotes, and bytes > 0x7F) are percent-encoded.
  */
-CXX_C_API char *mime_encode_rfc2231_filename(mem_pool_t *pool,
+char *mime_encode_rfc2231_filename(mem_pool_t *pool,
                                               const char *filename, size_t len);
 
 #ifdef __cplusplus

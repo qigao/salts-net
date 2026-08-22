@@ -1,6 +1,8 @@
 #ifndef WEBSOCKET_CRYPTO_H
 #define WEBSOCKET_CRYPTO_H
 
+
+#include "coronet_api.h"
 #include <stddef.h>
 #include <stdint.h>
 #include "platform.h"
@@ -21,7 +23,7 @@ typedef struct {
  void sha1_final(sha1_context_t *ctx, uint8_t digest[20]);
 
 /* Compatibility wrapper; new code should call turbo_secure_random(). */
-CXX_C_API int secure_random(uint8_t *buffer, size_t length);
+CORONET_C_API int secure_random(uint8_t *buffer, size_t length);
 
 /* UTF-8 Validation */
  int validate_utf8(const uint8_t *data, size_t len);

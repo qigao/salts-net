@@ -1340,7 +1340,7 @@ spec("coronet_coro_bench") {
       int resumed = 0;
       check_not_null(created);
       check_not_null(counters);
-      check_int_eq(create_batch(created, counters, total, bench_immediate_coro), 0);
+      check_equal(create_batch(created, counters, total, bench_immediate_coro), 0);
 
       benchmark("steady_precreated_resume_immediate_500x50", 1, total) {
         for (size_t i = 0; i < total; ++i) {
@@ -1382,7 +1382,7 @@ spec("coronet_coro_bench") {
       int resumed = 0;
       check_not_null(created);
       check_not_null(counters);
-      check_int_eq(create_batch(created, counters, coro_total, bench_single_yield_coro), 0);
+      check_equal(create_batch(created, counters, coro_total, bench_single_yield_coro), 0);
 
       benchmark("steady_precreated_resume_single_yield_500x50", 1, resume_total) {
         for (size_t i = 0; i < coro_total; ++i) {
@@ -1558,7 +1558,7 @@ spec("coronet_coro_bench") {
           }
         }
         if (!failed) {
-          check_int_eq(bench_wait_for_count(ctx, &counter.completed, counter.total,
+          check_equal(bench_wait_for_count(ctx, &counter.completed, counter.total,
                                             TURBO_RUN_NOWAIT, BENCH_CONTEXT_WAIT_TIMEOUT_MS), 0);
         }
         g_bench_sink = counter.completed + failed;
@@ -1575,7 +1575,7 @@ spec("coronet_coro_bench") {
           }
         }
         if (!failed) {
-          check_int_eq(bench_wait_for_count(ctx, &counter.completed, counter.total,
+          check_equal(bench_wait_for_count(ctx, &counter.completed, counter.total,
                                             TURBO_RUN_NOWAIT, BENCH_CONTEXT_WAIT_TIMEOUT_MS), 0);
         }
         g_bench_sink = counter.completed + failed;
@@ -1601,21 +1601,21 @@ spec("coronet_transport_bench") {
       coro_socket_t *server = coro_socket_create_tcpv4(ctx);
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port,
+      check_equal(coro_socket_listen_on(server, "127.0.0.1", port,
                                          tcp_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
       benchmark("tcp_echo_single_exchange_hot", BENCH_TRANSPORT_ITERATIONS, 1) {
         echo_state_t state = {ctx, port, "ping", 4, 1, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, tcp_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, tcp_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
 
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 
@@ -1625,22 +1625,22 @@ spec("coronet_transport_bench") {
       coro_socket_t *server = coro_socket_create_tcpv4(ctx);
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port,
+      check_equal(coro_socket_listen_on(server, "127.0.0.1", port,
                                          tcp_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
       benchmark("tcp_echo_1k_16exchanges_hot", BENCH_TRANSPORT_ITERATIONS, BENCH_TRANSPORT_ROUNDTRIPS) {
         echo_state_t state = {ctx, port, payload, sizeof(payload),
                               BENCH_TRANSPORT_ROUNDTRIPS, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, tcp_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, tcp_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
 
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 
@@ -1656,7 +1656,7 @@ spec("coronet_transport_bench") {
       fill_bench_payload(profile_payload, sizeof(profile_payload));
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_on(server, "127.0.0.1", port,
+      check_equal(coro_socket_listen_on(server, "127.0.0.1", port,
                                          tcp_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
       client = create_staged_client(ctx, "127.0.0.1", "127.0.0.1", port, 0, 0, 0);
@@ -1664,11 +1664,11 @@ spec("coronet_transport_bench") {
 
       warmup = (persistent_echo_state_t){client, profile_payload, sizeof(profile_payload),
                                          BENCH_IOCP_PROFILE_WARMUP_ROUNDTRIPS, 0, 0, 0};
-      check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &warmup), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &warmup.done, TURBO_RUN_ONCE,
+      check_equal(coro_context_spawn(ctx, persistent_echo_client, &warmup), 0);
+      check_equal(bench_wait_for_flag(ctx, &warmup.done, TURBO_RUN_ONCE,
                                        BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(warmup.rc, 0);
-      check_int_eq(warmup.ok, 1);
+      check_equal(warmup.rc, 0);
+      check_equal(warmup.ok, 1);
 
       turbo_coro_send_profile_reset();
       turbo_coro_send_profile_set_enabled(1);
@@ -1676,22 +1676,22 @@ spec("coronet_transport_bench") {
                     BENCH_IOCP_PROFILE_ROUNDTRIPS) {
         persistent_echo_state_t state = {client, profile_payload, sizeof(profile_payload),
                                          BENCH_IOCP_PROFILE_ROUNDTRIPS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE,
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE,
                                          BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         g_bench_sink = state.ok;
       }
       turbo_coro_send_profile_set_enabled(0);
-      check_int_eq(turbo_coro_send_profile_snapshot(&profile), TURBO_OK);
-      check_uint_eq(profile.samples, (uint64_t)BENCH_IOCP_PROFILE_ROUNDTRIPS * 2u);
-      check_uint_eq(profile.resume_samples, profile.samples);
+      check_equal(turbo_coro_send_profile_snapshot(&profile), TURBO_OK);
+      check_equal(profile.samples, (uint64_t)BENCH_IOCP_PROFILE_ROUNDTRIPS * 2u);
+      check_equal(profile.resume_samples, profile.samples);
       bench_print_iocp_send_profile(&profile);
 
       coro_socket_destroy(client);
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 #endif
@@ -1703,12 +1703,12 @@ spec("coronet_transport_bench") {
       echo_state_t state = {iter_ctx, port, payload, sizeof(payload), 1, 0, 0};
       check_not_null(iter_ctx);
       check_not_null(iter_server);
-      check_int_eq(coro_socket_listen_on(iter_server, "127.0.0.1", port,
+      check_equal(coro_socket_listen_on(iter_server, "127.0.0.1", port,
                                          tcp_echo_server_handler, NULL), 0);
-      check_int_eq(coro_context_spawn(iter_ctx, tcp_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(iter_ctx, &state.done, TURBO_RUN_ONCE,
+      check_equal(coro_context_spawn(iter_ctx, tcp_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(iter_ctx, &state.done, TURBO_RUN_ONCE,
                                        BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.ok, 1);
+      check_equal(state.ok, 1);
       bench_run_ticks(iter_ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
       coro_socket_destroy(iter_server);
       bench_run_ticks(iter_ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
@@ -1728,15 +1728,15 @@ spec("coronet_transport_bench") {
     coro_socket_t *server = coro_socket_create_udpv4(ctx);
     check_not_null(ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, "127.0.0.1", BENCH_UDP_PORT,
+    check_equal(coro_socket_listen_on(server, "127.0.0.1", BENCH_UDP_PORT,
                                        udp_echo_server_handler, NULL), 0);
     bench_prime_listener(ctx);
 
     benchmark("udp_echo_single_exchange_hot", BENCH_TRANSPORT_ITERATIONS, 1) {
       echo_state_t state = {ctx, BENCH_UDP_PORT, "ping", 4, 1, 0, 0};
-      check_int_eq(coro_context_spawn(ctx, udp_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.ok, 1);
+      check_equal(coro_context_spawn(ctx, udp_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.ok, 1);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
       g_bench_sink = state.ok;
     }
@@ -1744,9 +1744,9 @@ spec("coronet_transport_bench") {
     benchmark("udp_echo_1k_16exchanges_hot", BENCH_TRANSPORT_ITERATIONS, BENCH_TRANSPORT_ROUNDTRIPS) {
       echo_state_t state = {ctx, BENCH_UDP_PORT, payload, sizeof(payload),
                             BENCH_TRANSPORT_ROUNDTRIPS, 0, 0};
-      check_int_eq(coro_context_spawn(ctx, udp_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.ok, 1);
+      check_equal(coro_context_spawn(ctx, udp_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.ok, 1);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
       g_bench_sink = state.ok;
     }
@@ -1770,13 +1770,13 @@ spec("coronet_transport_bench") {
       coro_socket_t *server = coro_socket_create_kcp(ctx);
       turbo_kcp_config_t config = bench_kcp_config();
       check_not_null(server);
-      check_int_eq(coro_socket_set_kcp_config(server, &config), 0);
-      check_int_eq(coro_socket_listen_on(server, "127.0.0.1", BENCH_KCP_PORT,
+      check_equal(coro_socket_set_kcp_config(server, &config), 0);
+      check_equal(coro_socket_listen_on(server, "127.0.0.1", BENCH_KCP_PORT,
                                          kcp_echo_server_handler, &server_cfg), 0);
       echo_state_t state = {ctx, BENCH_KCP_PORT, "ping", 4, 1, 0, 0};
-      check_int_eq(coro_context_spawn(ctx, kcp_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.ok, 1);
+      check_equal(coro_context_spawn(ctx, kcp_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.ok, 1);
       coro_socket_destroy(server);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
       g_bench_sink = state.ok;
@@ -1787,14 +1787,14 @@ spec("coronet_transport_bench") {
       coro_socket_t *server = coro_socket_create_kcp(ctx);
       turbo_kcp_config_t config = bench_kcp_config();
       check_not_null(server);
-      check_int_eq(coro_socket_set_kcp_config(server, &config), 0);
-      check_int_eq(coro_socket_listen_on(server, "127.0.0.1", BENCH_KCP_PORT,
+      check_equal(coro_socket_set_kcp_config(server, &config), 0);
+      check_equal(coro_socket_listen_on(server, "127.0.0.1", BENCH_KCP_PORT,
                                          kcp_echo_server_handler, &server_cfg), 0);
       echo_state_t state = {ctx, BENCH_KCP_PORT, payload, sizeof(payload),
                             BENCH_TRANSPORT_ROUNDTRIPS, 0, 0};
-      check_int_eq(coro_context_spawn(ctx, kcp_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.ok, 1);
+      check_equal(coro_context_spawn(ctx, kcp_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.ok, 1);
       coro_socket_destroy(server);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_DRAIN_TICKS);
       g_bench_sink = state.ok;
@@ -1817,9 +1817,9 @@ spec("coronet_transport_bench") {
     check_not_null(ctx);
     check_not_null(connect_server);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(connect_server, "127.0.0.1", connect_port,
+    check_equal(coro_socket_listen_on(connect_server, "127.0.0.1", connect_port,
                                        bench_counting_close_handler, &connect_accept_state), 0);
-    check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
+    check_equal(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
                                        bench_counting_close_handler, &ws_accept_state), 0);
     bench_prime_listener(ctx);
 
@@ -1829,7 +1829,7 @@ spec("coronet_transport_bench") {
           create_staged_client(ctx, "127.0.0.1", "127.0.0.1", connect_port, 0, 0, 0);
       check_not_null(client);
       coro_socket_destroy(client);
-      check_int_eq(bench_wait_for_count(ctx, &connect_accept_state.hits, target_hits,
+      check_equal(bench_wait_for_count(ctx, &connect_accept_state.hits, target_hits,
                                         TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
       g_bench_sink = 1;
@@ -1841,7 +1841,7 @@ spec("coronet_transport_bench") {
           create_staged_client(ctx, "127.0.0.1", "127.0.0.1", ws_port, 0, 1,
                                BENCH_WS_CONNECT_SETTLE_TICKS);
       check_not_null(client);
-      check_int_eq(bench_wait_for_count(ctx, &ws_accept_state.hits, target_hits,
+      check_equal(bench_wait_for_count(ctx, &ws_accept_state.hits, target_hits,
                                         TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
@@ -1851,7 +1851,7 @@ spec("coronet_transport_bench") {
     coro_socket_destroy(connect_server);
     bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
     coro_socket_destroy(server);
-    check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+    check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
     coro_context_destroy(ctx);
     }
   }
@@ -1867,7 +1867,7 @@ spec("coronet_transport_bench") {
       coro_socket_t *server = coro_socket_create_tcpv4(ctx);
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
+      check_equal(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
                                          ws_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
@@ -1877,17 +1877,17 @@ spec("coronet_transport_bench") {
                                         BENCH_WS_CONNECT_SETTLE_TICKS);
         persistent_echo_state_t state = {client, "ping", 4, 1, 0, 0, 0};
         check_not_null(client);
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         coro_socket_destroy(client);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
 
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 
@@ -1897,7 +1897,7 @@ spec("coronet_transport_bench") {
       coro_socket_t *server = coro_socket_create_tcpv4(ctx);
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
+      check_equal(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
                                          ws_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
@@ -1908,17 +1908,17 @@ spec("coronet_transport_bench") {
         persistent_echo_state_t state = {client, payload, sizeof(payload),
                                          BENCH_TRANSPORT_ROUNDTRIPS, 0, 0, 0};
         check_not_null(client);
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         coro_socket_destroy(client);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
 
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 
@@ -1929,7 +1929,7 @@ spec("coronet_transport_bench") {
       coro_socket_t *client;
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
+      check_equal(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
                                          ws_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
@@ -1939,10 +1939,10 @@ spec("coronet_transport_bench") {
 
       benchmark("ws_echo_single_exchange_persistent", 1, BENCH_TRANSPORT_ITERATIONS) {
         persistent_echo_state_t state = {client, "ping", 4, BENCH_TRANSPORT_ITERATIONS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -1950,7 +1950,7 @@ spec("coronet_transport_bench") {
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 
@@ -1961,7 +1961,7 @@ spec("coronet_transport_bench") {
       coro_socket_t *client;
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
+      check_equal(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
                                          ws_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
@@ -1973,10 +1973,10 @@ spec("coronet_transport_bench") {
         persistent_echo_state_t state = {
             client, payload, sizeof(payload),
             BENCH_TRANSPORT_ITERATIONS * BENCH_TRANSPORT_ROUNDTRIPS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -1984,7 +1984,7 @@ spec("coronet_transport_bench") {
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
 
@@ -1995,7 +1995,7 @@ spec("coronet_transport_bench") {
       coro_pool_t *pool;
       check_not_null(ctx);
       check_not_null(server);
-      check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
+      check_equal(coro_socket_listen_ws(server, "127.0.0.1", ws_port, 0,
                                          ws_echo_server_handler, NULL), 0);
       bench_prime_listener(ctx);
 
@@ -2005,10 +2005,10 @@ spec("coronet_transport_bench") {
 
       benchmark("ws_echo_single_exchange_pooled", BENCH_TRANSPORT_ITERATIONS, 1) {
         pooled_echo_state_t state = {pool, "ping", 4, 1, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -2016,10 +2016,10 @@ spec("coronet_transport_bench") {
       benchmark("ws_echo_1k_16exchanges_pooled", BENCH_TRANSPORT_ITERATIONS, BENCH_TRANSPORT_ROUNDTRIPS) {
         pooled_echo_state_t state = {pool, payload, sizeof(payload),
                                      BENCH_TRANSPORT_ROUNDTRIPS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -2027,7 +2027,7 @@ spec("coronet_transport_bench") {
       coro_pool_destroy(pool);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WS_DRAIN_TICKS);
       coro_socket_destroy(server);
-      check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_context_destroy(ctx);
     }
     }
@@ -2055,7 +2055,7 @@ spec("coronet_transport_bench") {
     bench_accept_state_t tls_accept_state = {0};
     bench_accept_state_t ws_accept_state = {0};
 
-    check_int_eq(bench_tls_env_setup(&tls_env), 0);
+    check_equal(bench_tls_env_setup(&tls_env), 0);
 
     tcp_ctx = coro_context_create(NULL);
     ctx = coro_context_create(NULL);
@@ -2067,15 +2067,15 @@ spec("coronet_transport_bench") {
     check_not_null(tcp_connect_server);
     check_not_null(tls_connect_server);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(tcp_connect_server, "127.0.0.1", tcp_connect_port,
+    check_equal(coro_socket_listen_on(tcp_connect_server, "127.0.0.1", tcp_connect_port,
                                        bench_counting_close_handler, NULL), 0);
     bench_prime_listener(tcp_ctx);
-    check_int_eq(coro_socket_listen_on(tls_connect_server, "127.0.0.1", tls_connect_port,
+    check_equal(coro_socket_listen_on(tls_connect_server, "127.0.0.1", tls_connect_port,
                                        bench_counting_close_handler, &tls_accept_state), 0);
-    check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", wss_port, 1,
+    check_equal(coro_socket_listen_ws(server, "127.0.0.1", wss_port, 1,
                                        bench_counting_close_handler, &ws_accept_state), 0);
     bench_prime_listener(ctx);
-    check_int_eq(bench_prime_tls_session_cache(ctx, tls_connect_port, &tls_accept_state), 0);
+    check_equal(bench_prime_tls_session_cache(ctx, tls_connect_port, &tls_accept_state), 0);
     turbo_stream_tls_reset_metrics();
     turbo_stream_tls_get_metrics(&metrics_before);
 
@@ -2101,7 +2101,7 @@ spec("coronet_transport_bench") {
       check_not_null(client);
       tls_stage_ns += timings.tls_upgrade_ns;
       tls_stage_count++;
-      check_int_eq(bench_wait_for_count(ctx, &tls_accept_state.hits, target_hits,
+      check_equal(bench_wait_for_count(ctx, &tls_accept_state.hits, target_hits,
                                         TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
@@ -2117,7 +2117,7 @@ spec("coronet_transport_bench") {
       check_not_null(client);
       ws_stage_ns += timings.ws_upgrade_ns;
       ws_stage_count++;
-      check_int_eq(bench_wait_for_count(ctx, &ws_accept_state.hits, target_hits,
+      check_equal(bench_wait_for_count(ctx, &ws_accept_state.hits, target_hits,
                                         TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
@@ -2125,11 +2125,11 @@ spec("coronet_transport_bench") {
     }
 
     turbo_stream_tls_get_metrics(&metrics_after);
-    check_size_gt(
+    check_greater(
         bench_metric_delta_u64(metrics_before.client_session_cache_attempts,
                                metrics_after.client_session_cache_attempts),
         0);
-    check_size_gt(bench_metric_delta_u64(metrics_before.client_session_reused,
+    check_greater(bench_metric_delta_u64(metrics_before.client_session_reused,
                                          metrics_after.client_session_reused),
                   0);
     bench_print_tls_metric_summary("default", &metrics_before, &metrics_after);
@@ -2141,12 +2141,12 @@ spec("coronet_transport_bench") {
                                ws_stage_ns, ws_stage_count);
 
     coro_socket_destroy(tcp_connect_server);
-    check_int_eq(bench_drain_until_idle(tcp_ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+    check_equal(bench_drain_until_idle(tcp_ctx, BENCH_WAIT_TIMEOUT_MS), 0);
     coro_context_destroy(tcp_ctx);
     coro_socket_destroy(tls_connect_server);
     bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
     coro_socket_destroy(server);
-    check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+    check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
     coro_context_destroy(ctx);
     bench_tls_env_cleanup(&tls_env);
     }
@@ -2163,7 +2163,7 @@ spec("coronet_transport_bench") {
     int wss_port = next_bench_port();
     fill_bench_payload(payload, sizeof(payload));
 
-    check_int_eq(bench_tls_env_setup(&tls_env), 0);
+    check_equal(bench_tls_env_setup(&tls_env), 0);
 
     coro_context_t *ctx = coro_context_create(NULL);
     coro_socket_t *tls_server = coro_socket_create(ctx, CORO_SOCKET_TLS);
@@ -2171,12 +2171,12 @@ spec("coronet_transport_bench") {
     check_not_null(ctx);
     check_not_null(tls_server);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(tls_server, "127.0.0.1", tls_prime_port,
+    check_equal(coro_socket_listen_on(tls_server, "127.0.0.1", tls_prime_port,
                                        bench_counting_close_handler, &tls_accept_state), 0);
-    check_int_eq(coro_socket_listen_ws(server, "127.0.0.1", wss_port, 1,
+    check_equal(coro_socket_listen_ws(server, "127.0.0.1", wss_port, 1,
                                        ws_echo_server_handler, NULL), 0);
     bench_prime_listener(ctx);
-    check_int_eq(bench_prime_tls_session_cache(ctx, tls_prime_port, &tls_accept_state), 0);
+    check_equal(bench_prime_tls_session_cache(ctx, tls_prime_port, &tls_accept_state), 0);
     coro_socket_destroy(tls_server);
     bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
     turbo_stream_tls_reset_metrics();
@@ -2188,10 +2188,10 @@ spec("coronet_transport_bench") {
                                          wss_port, 1, BENCH_WSS_CONNECT_SETTLE_TICKS);
       persistent_echo_state_t state = {client, "ping", 4, 1, 0, 0, 0};
       check_not_null(client);
-      check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.rc, 0);
-      check_int_eq(state.ok, 1);
+      check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.rc, 0);
+      check_equal(state.ok, 1);
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
       g_bench_sink = state.ok;
@@ -2204,10 +2204,10 @@ spec("coronet_transport_bench") {
       persistent_echo_state_t state = {client, payload, sizeof(payload),
                                        BENCH_TRANSPORT_ROUNDTRIPS, 0, 0, 0};
       check_not_null(client);
-      check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.rc, 0);
-      check_int_eq(state.ok, 1);
+      check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.rc, 0);
+      check_equal(state.ok, 1);
       coro_socket_destroy(client);
       bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
       g_bench_sink = state.ok;
@@ -2228,9 +2228,9 @@ spec("coronet_transport_bench") {
       capture(hot_attempts, "%zu");
       capture(hot_reused, "%zu");
       capture(hot_stores, "%zu");
-      check_size_eq(hot_handshakes, (size_t)(BENCH_TRANSPORT_ITERATIONS * 2));
-      check_size_gt(hot_attempts, 0);
-      check_size_gt(hot_reused, 0);
+      check_equal(hot_handshakes, (size_t)(BENCH_TRANSPORT_ITERATIONS * 2));
+      check_greater(hot_attempts, 0);
+      check_greater(hot_reused, 0);
     }
     bench_print_tls_metric_summary("default", &hot_metrics_before, &hot_metrics_after);
 
@@ -2242,10 +2242,10 @@ spec("coronet_transport_bench") {
 
       benchmark("wss_echo_single_exchange_persistent", 1, BENCH_TRANSPORT_ITERATIONS) {
         persistent_echo_state_t state = {client, "ping", 4, BENCH_TRANSPORT_ITERATIONS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -2264,10 +2264,10 @@ spec("coronet_transport_bench") {
         persistent_echo_state_t state = {
             client, payload, sizeof(payload),
             BENCH_TRANSPORT_ITERATIONS * BENCH_TRANSPORT_ROUNDTRIPS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, persistent_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -2284,10 +2284,10 @@ spec("coronet_transport_bench") {
 
       benchmark("wss_echo_single_exchange_pooled", BENCH_TRANSPORT_ITERATIONS, 1) {
         pooled_echo_state_t state = {pool, "ping", 4, 1, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -2295,10 +2295,10 @@ spec("coronet_transport_bench") {
       benchmark("wss_echo_1k_16exchanges_pooled", BENCH_TRANSPORT_ITERATIONS, BENCH_TRANSPORT_ROUNDTRIPS) {
         pooled_echo_state_t state = {pool, payload, sizeof(payload),
                                      BENCH_TRANSPORT_ROUNDTRIPS, 0, 0, 0};
-        check_int_eq(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
-        check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-        check_int_eq(state.rc, 0);
-        check_int_eq(state.ok, 1);
+        check_equal(coro_context_spawn(ctx, pooled_echo_client, &state), 0);
+        check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+        check_equal(state.rc, 0);
+        check_equal(state.ok, 1);
         bench_run_ticks(ctx, TURBO_RUN_NOWAIT, BENCH_WSS_DRAIN_TICKS);
         g_bench_sink = state.ok;
       }
@@ -2308,7 +2308,7 @@ spec("coronet_transport_bench") {
     }
 
     coro_socket_destroy(server);
-    check_int_eq(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
+    check_equal(bench_drain_until_idle(ctx, BENCH_WAIT_TIMEOUT_MS), 0);
     coro_context_destroy(ctx);
     bench_tls_env_cleanup(&tls_env);
     }
@@ -2328,7 +2328,7 @@ spec("coronet_transport_bench") {
     coro_socket_t *server = coro_socket_create_pipe(ctx);
     check_not_null(ctx);
     check_not_null(server);
-    check_int_eq(coro_socket_listen_on(server, BENCH_PIPE_NAME, 0,
+    check_equal(coro_socket_listen_on(server, BENCH_PIPE_NAME, 0,
                                        pipe_echo_server_handler, NULL), 0);
 #ifdef _WIN32
     Sleep(BENCH_PIPE_LISTENER_WAIT_MS);
@@ -2337,12 +2337,12 @@ spec("coronet_transport_bench") {
 
     benchmark("pipe_echo_single_exchange_hot", BENCH_TRANSPORT_ITERATIONS, 1) {
       echo_state_t state = {ctx, 0, "ping", 4, 1, 0, 0};
-      check_int_eq(coro_context_spawn(ctx, pipe_echo_client, &state), 0);
+      check_equal(coro_context_spawn(ctx, pipe_echo_client, &state), 0);
       /* Pump generously: pw_close() inside the client destroy can block
        * for ~500ms per iteration waiting on worker thread exit; give the
        * loop enough ticks to let everything settle. */
-      check_int_eq(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
-      check_int_eq(state.ok, 1);
+      check_equal(bench_wait_for_flag(ctx, &state.done, TURBO_RUN_ONCE, BENCH_WAIT_TIMEOUT_MS), 0);
+      check_equal(state.ok, 1);
       /* Drain cleanup for a limited number of ticks. */
       for (int _d = 0; _d < 100; _d++) {
         if (coro_context_run(ctx, TURBO_RUN_NOWAIT) == 0) break;
@@ -2367,9 +2367,9 @@ spec("coronet_coro_bench_validation") {
     int counter = 0;
     coro_t *co = coro_create(bench_single_yield_coro, &counter, NULL);
     check_not_null(co);
-    check_int_eq(coro_resume(co), 0);
-    check_int_eq(coro_resume(co), 0);
-    check_int_eq(counter, 2);
+    check_equal(coro_resume(co), 0);
+    check_equal(coro_resume(co), 0);
+    check_equal(counter, 2);
     coro_destroy(co);
   }
 
@@ -2379,7 +2379,7 @@ spec("coronet_coro_bench_validation") {
     check_not_null(sched);
     check_not_null(coro_spawn(sched, bench_managed_single_yield, &counter, NULL));
     coro_scheduler_run(sched);
-    check_int_eq(counter.completed, 2);
+    check_equal(counter.completed, 2);
     coro_scheduler_destroy(sched);
   }
 
@@ -2398,7 +2398,7 @@ spec("coronet_coro_bench_validation") {
     check_not_null(sched);
     check_not_null(coro_spawn_pooled(sched, pool, bench_managed_single_yield, &counter));
     coro_scheduler_run(sched);
-    check_int_eq(counter.completed, 2);
+    check_equal(counter.completed, 2);
     coro_scheduler_destroy(sched);
     coro_object_pool_destroy(pool);
     coro_context_destroy(ctx);
@@ -2409,10 +2409,10 @@ spec("coronet_coro_bench_validation") {
     counter.total = 2;
     coro_context_t *ctx = coro_context_create(NULL);
     check_not_null(ctx);
-    check_int_eq(coro_context_spawn(ctx, bench_managed_single_yield, &counter), 0);
-    check_int_eq(bench_wait_for_count(ctx, &counter.completed, counter.total,
+    check_equal(coro_context_spawn(ctx, bench_managed_single_yield, &counter), 0);
+    check_equal(bench_wait_for_count(ctx, &counter.completed, counter.total,
                                       TURBO_RUN_NOWAIT, BENCH_CONTEXT_WAIT_TIMEOUT_MS), 0);
-    check_int_eq(counter.completed, 2);
+    check_equal(counter.completed, 2);
     coro_context_destroy(ctx);
   }
 }

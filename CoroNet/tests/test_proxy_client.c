@@ -406,7 +406,7 @@ static void run_proxy_case(int kind, int require_auth, int reject) {
   test_case.use_websocket = kind == MOCK_PROXY_HTTP_WEBSOCKET;
   test_case.use_tls = kind == MOCK_PROXY_HTTP_TLS;
   if (test_case.use_tls) {
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
     test_case.ca_file = ca_file;
   }
   test_case.expected_result =
@@ -414,24 +414,24 @@ static void run_proxy_case(int kind, int require_auth, int reject) {
 
   check_not_null(ctx);
   rc = turbo_thread_create(&thread, mock_proxy_thread, &server);
-  check_int_eq(rc, 0);
+  check_equal(rc, 0);
   while (!atomic_load(&server.ready))
     turbo_sleep_ms(1U);
-  check_int_eq(atomic_load(&server.failed), 0);
-  check_int_ne(atomic_load(&server.port), 0);
+  check_equal(atomic_load(&server.failed), 0);
+  check_not_equal(atomic_load(&server.port), 0);
 
   rc = coro_context_spawn(ctx, proxy_client_coro, &test_case);
-  check_int_eq(rc, 0);
+  check_equal(rc, 0);
   coro_context_run(ctx, TURBO_RUN_DEFAULT);
   turbo_thread_join(&thread);
 
-  check_int_eq(test_case.connect_result, test_case.expected_result);
-  if (!reject && !test_case.use_websocket) check_int_eq(test_case.recv_result, 0);
-  check_int_eq(test_case.result, test_case.expected_result);
-  check_int_eq(atomic_load(&server.failed), 0);
-  check_int_eq(atomic_load(&server.handshake_ok), 1);
-  if (!reject && !test_case.use_websocket) check_int_eq(test_case.payload_ok, 1);
-  if (!reject && test_case.use_tls) check_int_eq(test_case.eof_result, TURBO_EOF);
+  check_equal(test_case.connect_result, test_case.expected_result);
+  if (!reject && !test_case.use_websocket) check_equal(test_case.recv_result, 0);
+  check_equal(test_case.result, test_case.expected_result);
+  check_equal(atomic_load(&server.failed), 0);
+  check_equal(atomic_load(&server.handshake_ok), 1);
+  if (!reject && !test_case.use_websocket) check_equal(test_case.payload_ok, 1);
+  if (!reject && test_case.use_tls) check_equal(test_case.eof_result, TURBO_EOF);
   coro_context_destroy(ctx);
   tls_test_remove_file(ca_file);
 }
@@ -456,20 +456,20 @@ static void run_proxy_pool_case(void) {
 
   check_not_null(ctx);
   rc = turbo_thread_create(&thread, mock_proxy_thread, &server);
-  check_int_eq(rc, 0);
+  check_equal(rc, 0);
   while (!atomic_load(&server.ready))
     turbo_sleep_ms(1U);
-  check_int_eq(atomic_load(&server.failed), 0);
+  check_equal(atomic_load(&server.failed), 0);
 
   rc = coro_context_spawn(ctx, proxy_pool_coro, &test_case);
-  check_int_eq(rc, 0);
+  check_equal(rc, 0);
   coro_context_run(ctx, TURBO_RUN_DEFAULT);
   turbo_thread_join(&thread);
 
-  check_int_eq(test_case.result, 0);
-  check_int_eq(test_case.payload_ok, 1);
-  check_int_eq(atomic_load(&server.failed), 0);
-  check_int_eq(atomic_load(&server.handshake_ok), 1);
+  check_equal(test_case.result, 0);
+  check_equal(test_case.payload_ok, 1);
+  check_equal(atomic_load(&server.failed), 0);
+  check_equal(atomic_load(&server.handshake_ok), 1);
   coro_context_destroy(ctx);
 }
 
@@ -483,11 +483,11 @@ spec("CoroNet outbound stream proxy") {
     check_not_null(ctx);
     check_not_null(tcp);
     check_not_null(udp);
-    check_int_eq(coro_socket_set_proxy(tcp, &proxy), TURBO_EINVAL);
+    check_equal(coro_socket_set_proxy(tcp, &proxy), TURBO_EINVAL);
     proxy.password = "pass";
-    check_int_eq(coro_socket_set_proxy(tcp, &proxy), 0);
-    check_int_eq(coro_socket_clear_proxy(tcp), 0);
-    check_int_eq(coro_socket_set_proxy(udp, &proxy), TURBO_ENOTSUP);
+    check_equal(coro_socket_set_proxy(tcp, &proxy), 0);
+    check_equal(coro_socket_clear_proxy(tcp), 0);
+    check_equal(coro_socket_set_proxy(udp, &proxy), TURBO_ENOTSUP);
 
     coro_socket_destroy(udp);
     coro_socket_destroy(tcp);

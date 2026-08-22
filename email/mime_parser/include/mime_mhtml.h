@@ -62,14 +62,14 @@ typedef struct {
  * Parse MHTML document from multipart/related message
  * Returns document structure (caller must free with mime_mhtml_document_free)
  */
-CXX_C_API mime_mhtml_document_t *mime_parse_mhtml(mem_pool_t *pool,
+mime_mhtml_document_t *mime_parse_mhtml(mem_pool_t *pool,
                                                    const char *mhtml_data,
                                                    size_t len);
 
 /**
  * Free MHTML document
  */
-CXX_C_API void mime_mhtml_document_free(mime_mhtml_document_t *doc);
+void mime_mhtml_document_free(mime_mhtml_document_t *doc);
 
 /* ── Resource lookup ───────────────────────────────────────────────── */
 
@@ -77,7 +77,7 @@ CXX_C_API void mime_mhtml_document_free(mime_mhtml_document_t *doc);
  * Find resource by Content-Location
  * Returns NULL if not found
  */
-CXX_C_API mime_mhtml_resource_t *mime_mhtml_find_by_location(
+mime_mhtml_resource_t *mime_mhtml_find_by_location(
     mime_mhtml_document_t *doc,
     const char *location);
 
@@ -86,7 +86,7 @@ CXX_C_API mime_mhtml_resource_t *mime_mhtml_find_by_location(
  * Example: find_by_cid(doc, "photo@example.com") or find_by_cid(doc, "cid:photo@example.com")
  * Returns NULL if not found
  */
-CXX_C_API mime_mhtml_resource_t *mime_mhtml_find_by_cid(
+mime_mhtml_resource_t *mime_mhtml_find_by_cid(
     mime_mhtml_document_t *doc,
     const char *cid);
 
@@ -95,12 +95,12 @@ CXX_C_API mime_mhtml_resource_t *mime_mhtml_find_by_cid(
 /**
  * Create new MHTML document builder
  */
-CXX_C_API mime_mhtml_document_t *mime_mhtml_document_create(mem_pool_t *pool);
+mime_mhtml_document_t *mime_mhtml_document_create(mem_pool_t *pool);
 
 /**
  * Set root HTML content
  */
-CXX_C_API int mime_mhtml_set_html(mime_mhtml_document_t *doc,
+int mime_mhtml_set_html(mime_mhtml_document_t *doc,
                                    const char *html, size_t len,
                                    const char *charset);
 
@@ -108,7 +108,7 @@ CXX_C_API int mime_mhtml_set_html(mime_mhtml_document_t *doc,
  * Add resource to MHTML document
  * data is copied if copy_data is true, otherwise zero-copy pointer is used
  */
-CXX_C_API int mime_mhtml_add_resource(mime_mhtml_document_t *doc,
+int mime_mhtml_add_resource(mime_mhtml_document_t *doc,
                                        const char *content_type,
                                        const char *content_location,
                                        const char *content_id,
@@ -119,7 +119,7 @@ CXX_C_API int mime_mhtml_add_resource(mime_mhtml_document_t *doc,
  * Serialize MHTML document to multipart/related format
  * Returns serialized data (caller must free)
  */
-CXX_C_API char *mime_mhtml_serialize(mime_mhtml_document_t *doc,
+char *mime_mhtml_serialize(mime_mhtml_document_t *doc,
                                       size_t *output_len);
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
@@ -127,26 +127,26 @@ CXX_C_API char *mime_mhtml_serialize(mime_mhtml_document_t *doc,
 /**
  * Check if Content-Type is multipart/related with type=text/html
  */
-CXX_C_API int mime_is_mhtml(const char *content_type, size_t len);
+int mime_is_mhtml(const char *content_type, size_t len);
 
 /**
  * Extract Content-Location from header
  */
-CXX_C_API char *mime_extract_content_location(mem_pool_t *pool,
+char *mime_extract_content_location(mem_pool_t *pool,
                                                const char *headers, size_t len);
 
 /**
  * Extract Content-ID from header
  * Strips angle brackets if present
  */
-CXX_C_API char *mime_extract_content_id(mem_pool_t *pool,
+char *mime_extract_content_id(mem_pool_t *pool,
                                          const char *headers, size_t len);
 
 /**
  * Resolve relative URL in MHTML context
  * Example: resolve("image.png", "http://example.com/page.html") -> "http://example.com/image.png"
  */
-CXX_C_API char *mime_mhtml_resolve_url(mem_pool_t *pool,
+char *mime_mhtml_resolve_url(mem_pool_t *pool,
                                         const char *relative_url,
                                         const char *base_url);
 

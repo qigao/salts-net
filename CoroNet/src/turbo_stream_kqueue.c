@@ -232,7 +232,7 @@ static void on_kqueue_event_bounce(void *arg1, void *arg2) {
                 case SEP_OP_ERROR: {
                     if (st->is_listener) {
                         turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
-                        TLOG_ERROR("kqueue listener accept failed: {:d}", ev->status);
+                        TLOG_ERRORF("kqueue listener accept failed: {:d}", ev->status);
                         turbo_stream_listener_close(l);
                     }
                     break;

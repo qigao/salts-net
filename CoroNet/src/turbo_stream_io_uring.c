@@ -468,7 +468,7 @@ static int stream_uring_submit_command(stream_uring_reactor_t *reactor,
     return 0;
 
   case STREAM_URING_OP_CLOSE:
-    TLOG_DEBUG("uring[{:p}] close command: fd={:d} inflight={:d}", (void *)base,
+    TLOG_DEBUGF("uring[{:p}] close command: fd={:d} inflight={:d}", (void *)base,
                base->fd,
                (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
     base->stopping = 1;
@@ -564,7 +564,7 @@ static void stream_uring_process_cqe(stream_uring_reactor_t *reactor,
     return;
   }
   if (op->result < 0 || op->kind == STREAM_URING_OP_ACCEPT) {
-    TLOG_DEBUG("uring[{:p}] completion op={:s} result={:d} inflight={:d}", (void *)base,
+    TLOG_DEBUGF("uring[{:p}] completion op={:s} result={:d} inflight={:d}", (void *)base,
                stream_uring_op_name(op->kind), (int)op->result,
                (int)__atomic_load_n(&base->inflight_count, __ATOMIC_RELAXED));
   }
@@ -584,7 +584,7 @@ static void stream_uring_reactor_worker(void *arg) {
 
   (void)stream_uring_submit_wake(reactor);
   (void)io_uring_submit(&reactor->ring);
-  TLOG_DEBUG("uring-reactor[{:p}] worker-start wake_fd={:d}", (void *)reactor,
+  TLOG_DEBUGF("uring-reactor[{:p}] worker-start wake_fd={:d}", (void *)reactor,
              reactor->wake_fd);
 
   for (;;) {
@@ -612,7 +612,7 @@ static void stream_uring_reactor_worker(void *arg) {
     }
   }
 
-  TLOG_DEBUG("uring-reactor[{:p}] worker-exit", (void *)reactor);
+  TLOG_DEBUGF("uring-reactor[{:p}] worker-exit", (void *)reactor);
 }
 
 static int stream_uring_reactor_create(coro_context_t *ctx,
@@ -783,7 +783,7 @@ static void stream_uring_stream_cleanup_task(void *arg1, void *arg2) {
   st = (stream_uring_state_t *)arg1;
   s = (turbo_stream_t *)arg2;
 
-  TLOG_DEBUG("uring[{:p}] stream-cleanup-task stream={:p}", (void *)st, (void *)s);
+  TLOG_DEBUGF("uring[{:p}] stream-cleanup-task stream={:p}", (void *)st, (void *)s);
   stream_uring_destroy_base(&st->base);
   free(st);
   s->backend_data = NULL;
@@ -797,7 +797,7 @@ static void stream_uring_listener_cleanup_task(void *arg1, void *arg2) {
   st = (stream_uring_server_state_t *)arg1;
   l = (turbo_stream_listener_t *)arg2;
 
-  TLOG_DEBUG("uring[{:p}] listener-cleanup-task listener={:p}", (void *)st, (void *)l);
+  TLOG_DEBUGF("uring[{:p}] listener-cleanup-task listener={:p}", (void *)st, (void *)l);
   stream_uring_destroy_base(&st->base);
   free(st);
   turbo_stream_listener_notify_backend_released(l);
@@ -832,7 +832,7 @@ static int stream_uring_submit_recv(turbo_stream_t *s) {
   }
 
   st->recv_inflight = 1;
-  TLOG_DEBUG("uring[{:p}] submit-recv stream={:p} fd={:d}", (void *)&st->base, (void *)s,
+  TLOG_DEBUGF("uring[{:p}] submit-recv stream={:p} fd={:d}", (void *)&st->base, (void *)s,
              st->base.fd);
 
   if (stream_uring_queue_push(&st->base, op) != 0) {
@@ -906,7 +906,7 @@ static int stream_uring_submit_accept(turbo_stream_listener_t *l) {
   op->kind = STREAM_URING_OP_ACCEPT;
   op->owner = l;
   op->fd = -1;
-  TLOG_DEBUG("uring[{:p}] submit-accept listener={:p} fd={:d} posted={:d}", (void *)&st->base,
+  TLOG_DEBUGF("uring[{:p}] submit-accept listener={:p} fd={:d} posted={:d}", (void *)&st->base,
              (void *)l, st->base.fd, st->accepts_posted);
 
   __atomic_add_fetch(&st->accepts_posted, 1, __ATOMIC_RELAXED);
@@ -1013,7 +1013,7 @@ static void stream_uring_handle_recv(stream_uring_op_t *op) {
 
   st->recv_inflight = 0;
   if (!buf || result <= 0) {
-    TLOG_DEBUG("uring[{:p}] recv-complete stream={:p} result={:d} closing={:d}", (void *)&st->base,
+    TLOG_DEBUGF("uring[{:p}] recv-complete stream={:p} result={:d} closing={:d}", (void *)&st->base,
                (void *)s, (int)result, s->closing);
     if (s->on_recv) {
       s->on_recv(s, NULL, NULL);
@@ -1075,7 +1075,7 @@ static void stream_uring_handle_accept(stream_uring_op_t *op) {
       close(client_fd);
     }
   }
-  TLOG_DEBUG("uring[{:p}] accept-complete listener={:p} client_fd={:d} accepts_posted={:d}",
+  TLOG_DEBUGF("uring[{:p}] accept-complete listener={:p} client_fd={:d} accepts_posted={:d}",
              (void *)&st->base, (void *)l, client_fd, st->accepts_posted);
 
   free(op);
@@ -1285,7 +1285,7 @@ static void uring_close(turbo_stream_t *s) {
     return;
   }
 
-  TLOG_DEBUG("uring[{:p}] stream-close stream={:p} fd={:d} recv_inflight={:d} send_inflight={:d} connect_inflight={:d} inflight={:d}",
+  TLOG_DEBUGF("uring[{:p}] stream-close stream={:p} fd={:d} recv_inflight={:d} send_inflight={:d} connect_inflight={:d} inflight={:d}",
              (void *)&st->base, (void *)s, st->base.fd, st->recv_inflight, st->send_inflight,
              st->connect_inflight,
              (int)__atomic_load_n(&st->base.inflight_count, __ATOMIC_RELAXED));
@@ -1460,7 +1460,7 @@ static void uring_listener_close(turbo_stream_listener_t *l) {
     return;
   }
 
-  TLOG_DEBUG("uring[{:p}] listener-close listener={:p} fd={:d} accepts_posted={:d} inflight={:d}",
+  TLOG_DEBUGF("uring[{:p}] listener-close listener={:p} fd={:d} accepts_posted={:d} inflight={:d}",
              (void *)&st->base, (void *)l, st->base.fd, st->accepts_posted,
              (int)__atomic_load_n(&st->base.inflight_count, __ATOMIC_RELAXED));
 

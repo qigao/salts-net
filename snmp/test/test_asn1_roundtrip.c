@@ -23,27 +23,27 @@ spec("asn1_roundtrip") {
         size_t buffer_len = sizeof(buffer);
         
         int encode_result = asn1_der_encode(seq, buffer, &buffer_len);
-        check_int_eq(encode_result, 0);
+        check_equal(encode_result, 0);
         check(buffer_len > 0);
         
         if (encode_result == 0) {
             // Decode it back
             asn1_value_t *decoded = NULL;
             int decode_result = scan_binary_asn1(buffer, buffer_len, &decoded);
-            check_int_eq(decode_result, 0);
+            check_equal(decode_result, 0);
             check_not_null(decoded);
             
             if (decode_result == 0 && decoded) {
-                check_int_eq(decoded->type, ASN1_TYPE_SEQUENCE);
-                check_size_eq(decoded->value.sequence.count, 2);
+                check_equal(decoded->type, ASN1_TYPE_SEQUENCE);
+                check_equal(decoded->value.sequence.count, 2);
                 
                 if (decoded->value.sequence.count >= 2) {
-                    check_int_eq(decoded->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
-                    check_int_eq((int)decoded->value.sequence.children[0]->value.integer, 42);
+                    check_equal(decoded->value.sequence.children[0]->type, ASN1_TYPE_INTEGER);
+                    check_equal((int)decoded->value.sequence.children[0]->value.integer, 42);
                     
-                    check_int_eq(decoded->value.sequence.children[1]->type, ASN1_TYPE_OCTET_STRING);
-                    check_size_eq(decoded->value.sequence.children[1]->value.octet_string.length, 4);
-                    check_mem_eq(decoded->value.sequence.children[1]->value.octet_string.data, "test", 4);
+                    check_equal(decoded->value.sequence.children[1]->type, ASN1_TYPE_OCTET_STRING);
+                    check_equal(decoded->value.sequence.children[1]->value.octet_string.length, 4);
+                    check_equal(decoded->value.sequence.children[1]->value.octet_string.data, "test", 4);
                 }
                 
                 asn1_free(decoded);

@@ -95,9 +95,9 @@ static int resolve_mdns_hostname(ice_candidate_t *candidate) {
   rc = getaddrinfo(candidate->mdns_name, NULL, &hints, &results);
   if (rc != 0 || !results) {
 #ifdef _WIN32
-    TLOG_WARN("Failed to resolve mDNS candidate {}: {}", candidate->mdns_name, rc);
+    TLOG_WARNF("Failed to resolve mDNS candidate {}: {}", candidate->mdns_name, rc);
 #else
-    TLOG_WARN("Failed to resolve mDNS candidate {}: {}", candidate->mdns_name,
+    TLOG_WARNF("Failed to resolve mDNS candidate {}: {}", candidate->mdns_name,
               gai_strerror(rc));
 #endif
     if (results) {
@@ -127,11 +127,11 @@ static int resolve_mdns_hostname(ice_candidate_t *candidate) {
   freeaddrinfo(results);
 
   if (candidate->ip[0] == '\0') {
-    TLOG_WARN("mDNS candidate {} resolved without a usable IP address", candidate->mdns_name);
+    TLOG_WARNF("mDNS candidate {} resolved without a usable IP address", candidate->mdns_name);
     return -1;
   }
 
-  TLOG_INFO("Resolved mDNS candidate {} -> {}", candidate->mdns_name, candidate->ip);
+  TLOG_INFOF("Resolved mDNS candidate {} -> {}", candidate->mdns_name, candidate->ip);
   return 0;
 }
 
@@ -340,7 +340,7 @@ static void set_state(turbo_ice_agent_t *agent, ice_state_t new_state) {
     }
 
     if (agent->callbacks.on_state_change) {
-      TLOG_INFO("State change: {} -> {}", ice_state_name(old_state), ice_state_name(new_state));
+      TLOG_INFOF("State change: {} -> {}", ice_state_name(old_state), ice_state_name(new_state));
       agent->callbacks.on_state_change(agent, old_state, new_state, agent->callbacks.user_data);
     }
   }
@@ -888,7 +888,7 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
       if (result == 0) {
         break;
       }
-      TLOG_WARN("TURN allocate failed server={} port={} attempt={} rc={}", host, port,
+      TLOG_WARNF("TURN allocate failed server={} port={} attempt={} rc={}", host, port,
                 attempt + 1, result);
       if (agent->ctx && attempt + 1 < 3) {
         coro_sleep(agent->ctx, 200);
@@ -919,13 +919,13 @@ static void gather_relay_candidates(turbo_ice_agent_t *agent) {
       cand->socket = NULL;
 
       agent->local_candidate_count++;
-      TLOG_INFO("Gathered relay candidate {}:{} via {}", cand->ip, cand->port, host);
+      TLOG_INFOF("Gathered relay candidate {}:{} via {}", cand->ip, cand->port, host);
 
       if (agent->callbacks.on_candidate) {
         agent->callbacks.on_candidate(agent, cand, agent->callbacks.user_data);
       }
     } else if (result != 0) {
-      TLOG_WARN("TURN relay candidate unavailable server={} port={} rc={}", host, port, result);
+      TLOG_WARNF("TURN relay candidate unavailable server={} port={} rc={}", host, port, result);
     }
   }
 }
@@ -1412,11 +1412,11 @@ static int send_connectivity_check_internal(turbo_ice_agent_t *agent, ice_candid
                                    nominate);
 
   if (len < 0) {
-    TLOG_DEBUG("%s", "Failed to build STUN request");
+    TLOG_DEBUG("Failed to build STUN request");
     return -1;
   }
 
-  TLOG_DEBUG("Outgoing BINDING REQUEST to {}:{} (txn: {})", pair->remote->ip,
+  TLOG_DEBUGF("Outgoing BINDING REQUEST to {}:{} (txn: {})", pair->remote->ip,
             pair->remote->port, STUN_TRANSACTION_ID_LEN, active_txn->id);
 
   /* Send via suitable transport */
@@ -1444,11 +1444,11 @@ static int send_connectivity_check_internal(turbo_ice_agent_t *agent, ice_candid
       pair->last_check_time = turbo_monotonic_ms();
       agent->current_check_nominating = nominate;
     }
-    TLOG_DEBUG("ICE check sent {}:{} -> {}:{} nominate={} pair_state={}",
+    TLOG_DEBUGF("ICE check sent {}:{} -> {}:{} nominate={} pair_state={}",
                pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port,
                nominate, (int)pair->state);
   } else {
-    TLOG_WARN("ICE check send failed {}:{} -> {}:{} rc={}",
+    TLOG_WARNF("ICE check send failed {}:{} -> {}:{} rc={}",
               pair->local->ip, pair->local->port, pair->remote->ip, pair->remote->port, rc);
     if (track_transaction) {
       pair->state = ICE_PAIR_STATE_FAILED;
@@ -1532,7 +1532,7 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
   memcpy(rx_txn_id.id, data + 8, STUN_TRANSACTION_ID_LEN);
 
   if (stun_parse_ice_request(data, len, username, &priority, &use_candidate) != 0) {
-    TLOG_WARN("%s", "Failed to parse incoming STUN request");
+    TLOG_WARN("Failed to parse incoming STUN request");
     ice_tracef("handle_stun_request parse_failed len=%zu local=%s:%u", len, local_cand->ip,
                (unsigned int)local_cand->port);
     return;
@@ -1542,7 +1542,7 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
   char expected_username[256];
   fmt(expected_username, sizeof(expected_username), "{}:{}", agent->local_ufrag, agent->remote_ufrag);
   if (strcmp(username, expected_username) != 0) {
-    TLOG_WARN("STUN username mismatch got='{}' expected='{}'", username, expected_username);
+    TLOG_WARNF("STUN username mismatch got='{}' expected='{}'", username, expected_username);
     ice_tracef("handle_stun_request username_mismatch got=%s expected=%s local=%s:%u", username,
                expected_username, local_cand->ip, (unsigned int)local_cand->port);
     return; /* Username mismatch */
@@ -1550,7 +1550,7 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
 
   /* Validate MESSAGE-INTEGRITY */
   if (stun_validate_message_integrity(data, len, agent->local_pwd) != 0) {
-    TLOG_WARN("%s", "STUN request integrity validation failed");
+    TLOG_WARN("STUN request integrity validation failed");
     ice_tracef("handle_stun_request integrity_failed user=%s local=%s:%u", username,
                local_cand->ip, (unsigned int)local_cand->port);
     return; /* Invalid authentication */
@@ -1573,9 +1573,9 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
 
   /* Build and send response using our local ICE password. The peer validates
    * the response against the credentials we advertised in signaling. */
-  TLOG_DEBUG("Incoming BINDING REQUEST from {}:{} (txn: {})", remote_ip, remote_port,
+  TLOG_DEBUGF("Incoming BINDING REQUEST from {}:{} (txn: {})", remote_ip, remote_port,
             STUN_TRANSACTION_ID_LEN, rx_txn_id.id);
-  TLOG_DEBUG("Incoming STUN request from {}:{} to {}:{} use_candidate={}",
+  TLOG_DEBUGF("Incoming STUN request from {}:{} to {}:{} use_candidate={}",
              remote_ip, remote_port, local_cand->ip, local_cand->port, use_candidate);
   ice_tracef("handle_stun_request accepted from=%s:%u to=%s:%u use_candidate=%d", remote_ip,
              (unsigned int)remote_port, local_cand->ip, (unsigned int)local_cand->port,
@@ -1598,7 +1598,7 @@ static void handle_stun_request(turbo_ice_agent_t *agent, const uint8_t *data, s
     ice_tracef("handle_stun_request response rc=%d from=%s:%u to=%s:%u", send_rc, local_cand->ip,
                (unsigned int)local_cand->port, remote_ip, (unsigned int)remote_port);
   } else {
-    TLOG_DEBUG("%s", "Failed to build STUN response");
+    TLOG_DEBUG("Failed to build STUN response");
     ice_tracef("handle_stun_request build_response_failed from=%s:%u to=%s:%u", local_cand->ip,
                (unsigned int)local_cand->port, remote_ip, (unsigned int)remote_port);
   }
@@ -1718,7 +1718,7 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
       ice_tracef("handle_stun_response ignored_untracked_response state=%d selected=%p",
                  (int)agent->state, (void *)agent->selected_pair);
     } else {
-      TLOG_WARN("%s", "STUN txn mismatch while waiting for response");
+      TLOG_WARN("STUN txn mismatch while waiting for response");
     }
     return; /* Not our transaction */
   }
@@ -1732,7 +1732,7 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
   /* Validate MESSAGE-INTEGRITY with the same peer password used to sign the
    * original connectivity check request. */
   if (stun_validate_message_integrity(data, len, agent->remote_pwd) != 0) {
-    TLOG_WARN("%s", "STUN response integrity validation failed");
+    TLOG_WARN("STUN response integrity validation failed");
     if (agent->current_check_pair >= 0 && agent->current_check_pair < agent->pair_count)
       agent->pairs[agent->current_check_pair].state = ICE_PAIR_STATE_FAILED;
     agent->checks_in_progress = 0;
@@ -1744,7 +1744,7 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
   /* Check for error response */
   int error_code = stun_get_error_code(data, len);
   if (error_code == STUN_ERROR_ROLE_CONFLICT) {
-    TLOG_INFO("%s", "Role conflict detected, switching roles");
+    TLOG_INFO("Role conflict detected, switching roles");
     /* Role conflict - switch roles */
     if (agent->role == ICE_ROLE_CONTROLLING) {
       agent->role = ICE_ROLE_CONTROLLED;
@@ -1763,7 +1763,7 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
   }
 
   if (error_code != 0) {
-    TLOG_DEBUG("STUN error response: {}", error_code);
+    TLOG_DEBUGF("STUN error response: {}", error_code);
     /* Other error - mark current pair as failed */
     if (agent->current_check_pair >= 0 && agent->current_check_pair < agent->pair_count) {
       agent->pairs[agent->current_check_pair].state = ICE_PAIR_STATE_FAILED;
@@ -1779,7 +1779,7 @@ static void handle_stun_response(turbo_ice_agent_t *agent, const uint8_t *data, 
     ice_candidate_pair_t *pair = &agent->pairs[agent->current_check_pair];
 
     if (pair->state != ICE_PAIR_STATE_SUCCEEDED) {
-      TLOG_DEBUG("ICE check succeeded pair={} {}:{} <-> {}:{}",
+      TLOG_DEBUGF("ICE check succeeded pair={} {}:{} <-> {}:{}",
                  agent->current_check_pair, pair->local->ip, pair->local->port,
                  pair->remote->ip, pair->remote->port);
       pair->state = ICE_PAIR_STATE_SUCCEEDED;
@@ -1940,7 +1940,7 @@ static void rebuild_candidate_pairs(turbo_ice_agent_t *agent) {
   }
 
   if (new_pairs_added > 0) {
-    TLOG_DEBUG("Added {} new candidate pairs (total: {})", new_pairs_added,
+    TLOG_DEBUGF("Added {} new candidate pairs (total: {})", new_pairs_added,
               agent->pair_count);
     /* Sort pairs by priority (descending) - simple bubble sort */
     for (int i = 0; i < agent->pair_count - 1; i++) {
@@ -2320,7 +2320,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
 
     /* Check for overall timeout */
     if (elapsed > (uint64_t)agent->config.connectivity_timeout_ms) {
-      TLOG_INFO("%s", "Connectivity check timeout elapsed");
+      TLOG_INFO("Connectivity check timeout elapsed");
       set_state(agent, agent->selected_pair ? ICE_STATE_COMPLETED : ICE_STATE_FAILED);
       break;
     }
@@ -2430,7 +2430,7 @@ static void run_connectivity_checks(turbo_ice_agent_t *agent) {
           }
         }
         if (all_failed) {
-          TLOG_INFO("All %d built pairs failed", agent->pair_count);
+          TLOG_INFOF("All {} built pairs failed", agent->pair_count);
           set_state(agent, ICE_STATE_FAILED);
           break;
         }
@@ -2456,7 +2456,7 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
     return -2;
 
   if (!agent->remote_credentials_set) {
-    TLOG_INFO("%s", "Cannot start checks: remote credentials not set");
+    TLOG_INFO("Cannot start checks: remote credentials not set");
     return -3;
   }
 
@@ -2469,7 +2469,7 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
     return 0;
   }
 
-  TLOG_INFO("Starting checks with {} local and {} remote candidates",
+  TLOG_INFOF("Starting checks with {} local and {} remote candidates",
            agent->local_candidate_count, agent->remote_candidate_count);
   ice_tracef("ice_agent_start_checks begin local=%d remote=%d", agent->local_candidate_count,
              agent->remote_candidate_count);
@@ -2480,9 +2480,9 @@ int ice_agent_start_checks(turbo_ice_agent_t *agent) {
   ice_tracef("ice_agent_start_checks built pair_count=%d", agent->pair_count);
 
   if (agent->pair_count == 0) {
-    TLOG_INFO("%s", "Starting CONNECTIVITY CHECKS with 0 pairs (waiting for remote candidates)");
+    TLOG_INFO("Starting CONNECTIVITY CHECKS with 0 pairs (waiting for remote candidates)");
   } else {
-    TLOG_INFO("Built {} candidate pairs", agent->pair_count);
+    TLOG_INFOF("Built {} candidate pairs", agent->pair_count);
   }
 
   /* Initialize check state */

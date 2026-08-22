@@ -16,8 +16,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.type, MIME_DISPOSITION_ATTACHMENT);
+      check_equal(ret, 0);
+      check_equal(result.type, MIME_DISPOSITION_ATTACHMENT);
     }
 
     it("should parse inline type") {
@@ -26,8 +26,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.type, MIME_DISPOSITION_INLINE);
+      check_equal(ret, 0);
+      check_equal(result.type, MIME_DISPOSITION_INLINE);
     }
 
     it("should parse form-data type") {
@@ -36,8 +36,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.type, MIME_DISPOSITION_FORM_DATA);
+      check_equal(ret, 0);
+      check_equal(result.type, MIME_DISPOSITION_FORM_DATA);
     }
 
     it("should be case insensitive") {
@@ -46,8 +46,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.type, MIME_DISPOSITION_ATTACHMENT);
+      check_equal(ret, 0);
+      check_equal(result.type, MIME_DISPOSITION_ATTACHMENT);
     }
   }
 
@@ -58,9 +58,9 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(result.filename != NULL);
-      check_int_eq(result.filename_len, 12);
+      check_equal(result.filename_len, 12);
       check(memcmp(result.filename, "document.pdf", 12) == 0);
     }
 
@@ -70,9 +70,9 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(result.filename != NULL);
-      check_int_eq(result.filename_len, 10);
+      check_equal(result.filename_len, 10);
       check(memcmp(result.filename, "report.txt", 10) == 0);
     }
 
@@ -82,9 +82,9 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(result.filename != NULL);
-      check_int_eq(result.filename_len, 15);
+      check_equal(result.filename_len, 15);
       check(memcmp(result.filename, "my document.pdf", 15) == 0);
     }
   }
@@ -96,15 +96,15 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.type, MIME_DISPOSITION_FORM_DATA);
+      check_equal(ret, 0);
+      check_equal(result.type, MIME_DISPOSITION_FORM_DATA);
 
       check(result.name != NULL);
-      check_int_eq(result.name_len, 4);
+      check_equal(result.name_len, 4);
       check(memcmp(result.name, "file", 4) == 0);
 
       check(result.filename != NULL);
-      check_int_eq(result.filename_len, 9);
+      check_equal(result.filename_len, 9);
       check(memcmp(result.filename, "photo.jpg", 9) == 0);
     }
 
@@ -114,9 +114,9 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(result.name != NULL);
-      check_int_eq(result.name_len, 8);
+      check_equal(result.name_len, 8);
       check(memcmp(result.name, "username", 8) == 0);
       check(result.filename == NULL);
     }
@@ -129,8 +129,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.size, 12345);
+      check_equal(ret, 0);
+      check_equal(result.size, 12345);
     }
 
     it("should return 0 if size not present") {
@@ -139,8 +139,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.size, 0);
+      check_equal(ret, 0);
+      check_equal(result.size, 0);
     }
   }
 
@@ -156,7 +156,7 @@ spec("mime_content_disposition") {
       char *filename = mime_disposition_get_filename(&pool_storage, &result);
 
       check(filename != NULL);
-      check_str_eq(filename, "test.txt");
+      check_equal(filename, "test.txt");
 
       mem_destroy(&pool_storage);
     }
@@ -172,7 +172,7 @@ spec("mime_content_disposition") {
       char *name = mime_disposition_get_name(&pool_storage, &result);
 
       check(name != NULL);
-      check_str_eq(name, "field");
+      check_equal(name, "field");
 
       mem_destroy(&pool_storage);
     }
@@ -185,10 +185,10 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
+      check_equal(ret, 0);
       check(result.filename != NULL);
-      check_int_eq(result.filename_len, 8);
-      check_int_eq(result.size, 999);
+      check_equal(result.filename_len, 8);
+      check_equal(result.size, 999);
     }
 
     it("should handle real HTTP upload header") {
@@ -197,8 +197,8 @@ spec("mime_content_disposition") {
 
       int ret = mime_parse_content_disposition(value, strlen(value), &result);
 
-      check_int_eq(ret, 0);
-      check_int_eq(result.type, MIME_DISPOSITION_FORM_DATA);
+      check_equal(ret, 0);
+      check_equal(result.type, MIME_DISPOSITION_FORM_DATA);
       check(memcmp(result.name, "upload", 6) == 0);
       check(memcmp(result.filename, "image.png", 9) == 0);
     }

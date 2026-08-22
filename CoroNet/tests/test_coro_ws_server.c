@@ -616,15 +616,15 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
   state.server_binding_rc = TURBO_EBUSY;
   state.client_binding_rc = TURBO_EBUSY;
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
 
   if (state.secure) {
-    check_int_eq(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
-    check_int_eq(tls_test_write_server_files(cert_file, sizeof(cert_file),
+    check_equal(tls_test_write_ca_file(ca_file, sizeof(ca_file)), 0);
+    check_equal(tls_test_write_server_files(cert_file, sizeof(cert_file),
                                              key_file, sizeof(key_file)), 0);
-    check_int_eq(tls_test_set_ca_file_env(ca_file), 0);
-    check_int_eq(tls_test_set_server_env(cert_file, key_file), 0);
+    check_equal(tls_test_set_ca_file_env(ca_file), 0);
+    check_equal(tls_test_set_server_env(cert_file, key_file), 0);
   }
 
   state.ctx = coro_context_create(NULL);
@@ -645,10 +645,10 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
 
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
   check(state.server != NULL);
-  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
                                      state.secure, ws_server_echo_handler, &state),
                0);
-  check_int_eq(coro_context_spawn(state.ctx, ws_server_client_task, &state), 0);
+  check_equal(coro_context_spawn(state.ctx, ws_server_client_task, &state), 0);
 
   ws_server_run_until(state.ctx,
                       state.roundtrips >= WS_DENSE_TINY_ROUNDTRIPS
@@ -665,28 +665,28 @@ static void ws_server_run_case_with_payload(int secure, const char *protocol,
             g_ws_server_handler_hits, g_ws_server_client_roundtrips,
             g_ws_server_handler_roundtrips);
   }
-  check_int_eq(g_ws_server_handler_hits, 1);
-  check_int_eq(g_ws_server_handler_rc, 0);
-  check_int_eq(g_ws_server_client_rc, 0);
-  check_int_eq(g_ws_server_handler_roundtrips, state.roundtrips);
-  check_int_eq(g_ws_server_client_roundtrips, state.roundtrips);
-  check_int_eq(g_ws_server_handler_sends,
+  check_equal(g_ws_server_handler_hits, 1);
+  check_equal(g_ws_server_handler_rc, 0);
+  check_equal(g_ws_server_client_rc, 0);
+  check_equal(g_ws_server_handler_roundtrips, state.roundtrips);
+  check_equal(g_ws_server_client_roundtrips, state.roundtrips);
+  check_equal(g_ws_server_handler_sends,
                state.reply_data != NULL ? state.roundtrips : 0);
-  check_int_eq(g_ws_server_client_sends, state.roundtrips);
+  check_equal(g_ws_server_client_sends, state.roundtrips);
   if (state.reply_data != NULL) {
-    check_int_eq((int)g_ws_server_handler_len, (int)request_len);
+    check_equal((int)g_ws_server_handler_len, (int)request_len);
   }
-  check_int_eq((int)g_ws_server_client_len, (int)reply_len);
+  check_equal((int)g_ws_server_client_len, (int)reply_len);
   if (state.reply_data != NULL && g_ws_server_handler_len == request_len) {
-    check_int_eq(memcmp(g_ws_server_handler_buf, request_data, request_len), 0);
+    check_equal(memcmp(g_ws_server_handler_buf, request_data, request_len), 0);
   }
   if (state.reply_data != NULL && g_ws_server_client_len == reply_len) {
-    check_int_eq(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
+    check_equal(memcmp(g_ws_server_client_buf, reply_data, reply_len), 0);
   }
   if (state.secure) {
-    check_int_eq(state.server_binding_rc, 0);
-    check_int_eq(state.client_binding_rc, 0);
-    check_mem_eq(state.server_binding, state.client_binding,
+    check_equal(state.server_binding_rc, 0);
+    check_equal(state.client_binding_rc, 0);
+    check_equal(state.server_binding, state.client_binding,
                  CORO_TLS_CHANNEL_BINDING_SIZE);
   }
 
@@ -721,7 +721,7 @@ static void ws_server_run_close_case(int pending_recv) {
 
   memset(g_ws_close_send_payload, 'w', sizeof(g_ws_close_send_payload));
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
 
   state.ctx = coro_context_create(NULL);
@@ -729,13 +729,13 @@ static void ws_server_run_close_case(int pending_recv) {
 
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
   check_not_null(state.server);
-  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
                                      0, ws_close_idle_handler, &state), 0);
 
   if (pending_recv) {
-    check_int_eq(coro_context_spawn(state.ctx, ws_close_client_recv_task, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, ws_close_client_recv_task, &state), 0);
   } else {
-    check_int_eq(coro_context_spawn(state.ctx, ws_close_client_send_task, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, ws_close_client_send_task, &state), 0);
   }
 
   ws_server_run_until(state.ctx, 5000, ws_close_case_done, &state);
@@ -748,8 +748,8 @@ static void ws_server_run_close_case(int pending_recv) {
             pending_recv, state.client_connected, state.client_rc,
             state.handler_rc, state.handler_hits);
   }
-  check_int_eq(state.handler_hits, 1);
-  check_int_eq(state.handler_rc, 0);
+  check_equal(state.handler_hits, 1);
+  check_equal(state.handler_rc, 0);
   check(client_rc_expected);
 
   if (state.client) {
@@ -773,25 +773,25 @@ static void ws_server_run_dual_close_case(void) {
   test_socket_t probe = TEST_INVALID_SOCKET;
 
   memset(&state, 0, sizeof(state));
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
 
   state.ctx = coro_context_create(NULL);
   check_not_null(state.ctx);
   state.server = coro_socket_create_tcpv4(state.ctx);
   check_not_null(state.server);
-  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
                                      0, ws_dual_close_handler, &state), 0);
 
   for (int iteration = 0; iteration < WS_DUAL_CLOSE_ITERATIONS; ++iteration) {
     state.client_rc = TURBO_EBUSY;
     state.handler_rc = TURBO_EBUSY;
-    check_int_eq(coro_context_spawn(state.ctx, ws_dual_close_client_task, &state), 0);
+    check_equal(coro_context_spawn(state.ctx, ws_dual_close_client_task, &state), 0);
     ws_server_run_until(state.ctx, 5000, ws_dual_close_case_done, &state);
-    check_int_eq(state.client_rc, 0);
-    check_int_eq(state.handler_rc, 0);
+    check_equal(state.client_rc, 0);
+    check_equal(state.handler_rc, 0);
   }
-  check_int_eq(state.handler_hits, WS_DUAL_CLOSE_ITERATIONS);
+  check_equal(state.handler_hits, WS_DUAL_CLOSE_ITERATIONS);
 
   coro_socket_destroy(state.server);
   ws_close_run_until_idle(state.ctx, 1000);
@@ -809,7 +809,7 @@ static void ws_server_run_two_client_case(void) {
   state.handler_rc[0] = TURBO_EBUSY;
   state.handler_rc[1] = TURBO_EBUSY;
 
-  check_int_eq(tls_test_prepare_listener(&probe, &state.port), 0);
+  check_equal(tls_test_prepare_listener(&probe, &state.port), 0);
   test_close_socket(probe);
 
   state.ctx = coro_context_create(NULL);
@@ -817,14 +817,14 @@ static void ws_server_run_two_client_case(void) {
 
   state.server = coro_socket_create(state.ctx, CORO_SOCKET_TCP_V4);
   check_not_null(state.server);
-  check_int_eq(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
+  check_equal(coro_socket_listen_ws(state.server, "127.0.0.1", state.port,
                                      0, ws_two_client_handler, &state), 0);
 
   state.client_args[0].state = &state;
   state.client_args[0].index = 0;
   state.client_args[1].state = &state;
   state.client_args[1].index = 1;
-  check_int_eq(coro_context_spawn(state.ctx, ws_two_client_task, &state.client_args[0]), 0);
+  check_equal(coro_context_spawn(state.ctx, ws_two_client_task, &state.client_args[0]), 0);
 
   ws_server_run_until(state.ctx, 8000, ws_two_client_first_ready, &state);
   if (!state.first_handler_ready) {
@@ -834,9 +834,9 @@ static void ws_server_run_two_client_case(void) {
             state.client_rc[0], state.handler_rc[0],
             state.handler_hits, state.first_handler_ready);
   }
-  check_int_eq(state.first_handler_ready, 1);
+  check_equal(state.first_handler_ready, 1);
 
-  check_int_eq(coro_context_spawn(state.ctx, ws_two_client_task, &state.client_args[1]), 0);
+  check_equal(coro_context_spawn(state.ctx, ws_two_client_task, &state.client_args[1]), 0);
 
   ws_server_run_until(state.ctx, 8000, ws_two_client_case_done, &state);
 
@@ -853,15 +853,15 @@ static void ws_server_run_two_client_case(void) {
             state.client_roundtrips[0], state.client_roundtrips[1],
             state.handler_roundtrips[0], state.handler_roundtrips[1]);
   }
-  check_int_eq(state.handler_hits, 2);
-  check_int_eq(state.client_rc[0], 0);
-  check_int_eq(state.client_rc[1], 0);
-  check_int_eq(state.handler_rc[0], 0);
-  check_int_eq(state.handler_rc[1], 0);
-  check_int_eq(state.client_roundtrips[0], 1);
-  check_int_eq(state.client_roundtrips[1], 1);
-  check_int_eq(state.handler_roundtrips[0], 1);
-  check_int_eq(state.handler_roundtrips[1], 1);
+  check_equal(state.handler_hits, 2);
+  check_equal(state.client_rc[0], 0);
+  check_equal(state.client_rc[1], 0);
+  check_equal(state.handler_rc[0], 0);
+  check_equal(state.handler_rc[1], 0);
+  check_equal(state.client_roundtrips[0], 1);
+  check_equal(state.client_roundtrips[1], 1);
+  check_equal(state.handler_roundtrips[0], 1);
+  check_equal(state.handler_roundtrips[1], 1);
 
   coro_socket_destroy(state.server);
   deadline = turbo_monotonic_ms() + 1000;

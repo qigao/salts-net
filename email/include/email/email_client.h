@@ -31,39 +31,39 @@ typedef struct {
 /**
  * Create email client with SMTP configuration
  */
-CXX_C_API email_client_t *email_client_create_smtp(coro_context_t *ctx,
+email_client_t *email_client_create_smtp(coro_context_t *ctx,
                                                     const smtp_config_t *config);
 
 /**
  * Create email client with IMAP configuration
  */
-CXX_C_API email_client_t *email_client_create_imap(coro_context_t *ctx,
+email_client_t *email_client_create_imap(coro_context_t *ctx,
                                                     const imap_config_t *config);
 
 /**
  * Create email client with POP3 configuration
  */
-CXX_C_API email_client_t *email_client_create_pop3(coro_context_t *ctx,
+email_client_t *email_client_create_pop3(coro_context_t *ctx,
                                                     const pop3_config_t *config);
 
 /**
  * Create full email client (SMTP + IMAP)
  */
-CXX_C_API email_client_t *email_client_create_full(coro_context_t *ctx,
+email_client_t *email_client_create_full(coro_context_t *ctx,
                                                     const smtp_config_t *smtp_config,
                                                     const imap_config_t *imap_config);
 
 /**
  * Free email client
  */
-CXX_C_API void email_client_free(email_client_t *client);
+void email_client_free(email_client_t *client);
 
 /* ── Quick Send API ────────────────────────────────────────────────── */
 
 /**
  * Send simple text email
  */
-CXX_C_API int email_send_simple(email_client_t *client,
+int email_send_simple(email_client_t *client,
                                  const char *from_name,
                                  const char *from_email,
                                  const char *to_name,
@@ -74,7 +74,7 @@ CXX_C_API int email_send_simple(email_client_t *client,
 /**
  * Send HTML email with text alternative
  */
-CXX_C_API int email_send_html(email_client_t *client,
+int email_send_html(email_client_t *client,
                                const char *from_name,
                                const char *from_email,
                                const char *to_name,

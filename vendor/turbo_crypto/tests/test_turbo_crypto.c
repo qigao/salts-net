@@ -53,8 +53,8 @@ spec("turbo crypto") {
     };
     uint8_t actual[TURBO_CRYPTO_SHA256_SIZE];
 
-    check_int_eq(turbo_crypto_sha256("abc", 3, actual), TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, expected, sizeof(expected));
+    check_equal(turbo_crypto_sha256("abc", 3, actual), TURBO_CRYPTO_OK);
+    check_equal(actual, expected, sizeof(expected));
   }
 
   it("preserves SHA-256 state across incremental updates") {
@@ -62,16 +62,16 @@ spec("turbo crypto") {
     uint8_t actual[TURBO_CRYPTO_SHA256_SIZE];
     turbo_crypto_sha256_ctx_t ctx;
 
-    check_int_eq(turbo_crypto_sha256("streamed content", 16, expected),
+    check_equal(turbo_crypto_sha256("streamed content", 16, expected),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_sha256_init(&ctx), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_sha256_update(&ctx, "streamed ", 9),
+    check_equal(turbo_crypto_sha256_init(&ctx), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_sha256_update(&ctx, "streamed ", 9),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_sha256_update(&ctx, "content", 7),
+    check_equal(turbo_crypto_sha256_update(&ctx, "content", 7),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_sha256_final(&ctx, actual), TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, expected, sizeof(expected));
-    check_int_eq(turbo_crypto_sha256_final(&ctx, actual), TURBO_CRYPTO_ESTATE);
+    check_equal(turbo_crypto_sha256_final(&ctx, actual), TURBO_CRYPTO_OK);
+    check_equal(actual, expected, sizeof(expected));
+    check_equal(turbo_crypto_sha256_final(&ctx, actual), TURBO_CRYPTO_ESTATE);
   }
 
   it("matches RFC 4231 HMAC-SHA256 vectors including a long key") {
@@ -95,16 +95,16 @@ spec("turbo crypto") {
     memset(case1_key, 0x0b, sizeof(case1_key));
     memset(case6_key, 0xaa, sizeof(case6_key));
 
-    check_int_eq(turbo_crypto_hmac_sha256(case1_key, sizeof(case1_key),
+    check_equal(turbo_crypto_hmac_sha256(case1_key, sizeof(case1_key),
                                           "Hi There", 8, actual),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, case1_expected, sizeof(case1_expected));
+    check_equal(actual, case1_expected, sizeof(case1_expected));
 
-    check_int_eq(turbo_crypto_hmac_sha256(case6_key, sizeof(case6_key),
+    check_equal(turbo_crypto_hmac_sha256(case6_key, sizeof(case6_key),
                                           case6_data, sizeof(case6_data) - 1,
                                           actual),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, case6_expected, sizeof(case6_expected));
+    check_equal(actual, case6_expected, sizeof(case6_expected));
   }
 
   it("matches PBKDF2-HMAC-SHA256 vectors and supports multi-block output") {
@@ -123,16 +123,16 @@ spec("turbo crypto") {
     };
     uint8_t actual[40];
 
-    check_int_eq(turbo_crypto_pbkdf2_hmac_sha256(
+    check_equal(turbo_crypto_pbkdf2_hmac_sha256(
                      "password", 8, "salt", 4, 1, actual,
                      TURBO_CRYPTO_SHA256_SIZE),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, iteration1_expected,
+    check_equal(actual, iteration1_expected,
                          sizeof(iteration1_expected));
-    check_int_eq(turbo_crypto_pbkdf2_hmac_sha256(
+    check_equal(turbo_crypto_pbkdf2_hmac_sha256(
                      "password", 8, "salt", 4, 2, actual, sizeof(actual)),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, iteration2_expected,
+    check_equal(actual, iteration2_expected,
                          sizeof(iteration2_expected));
   }
 
@@ -158,7 +158,7 @@ spec("turbo crypto") {
     for (size_t vector_index = 0;
          vector_index < sizeof(vectors) / sizeof(vectors[0]);
          ++vector_index) {
-      check_int_eq(turbo_crypto_md5(vectors[vector_index].input,
+      check_equal(turbo_crypto_md5(vectors[vector_index].input,
                                     strlen(vectors[vector_index].input), actual),
                    TURBO_CRYPTO_OK);
       for (size_t i = 0; i < sizeof(actual); ++i) {
@@ -166,7 +166,7 @@ spec("turbo crypto") {
         actual_hex[i * 2 + 1] = hex_digits[actual[i] & 0x0f];
       }
       actual_hex[TURBO_CRYPTO_MD5_SIZE * 2] = '\0';
-      check_str_eq(actual_hex, vectors[vector_index].expected);
+      check_equal(actual_hex, vectors[vector_index].expected);
     }
   }
 
@@ -190,21 +190,21 @@ spec("turbo crypto") {
     size_t cipher_text_len = 0U;
     size_t plain_text_len = 0U;
 
-    check_int_eq(turbo_crypto_xxtea_encrypt_size(sizeof(plain_text),
+    check_equal(turbo_crypto_xxtea_encrypt_size(sizeof(plain_text),
                                                   &cipher_text_len),
                  TURBO_CRYPTO_OK);
-    check_size_eq(cipher_text_len, sizeof(expected));
-    check_int_eq(turbo_crypto_xxtea_encrypt(
+    check_equal(cipher_text_len, sizeof(expected));
+    check_equal(turbo_crypto_xxtea_encrypt(
                      cipher_text, sizeof(cipher_text), &cipher_text_len,
                      plain_text, sizeof(plain_text), key, sizeof(key)),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(cipher_text, expected, sizeof(expected));
-    check_int_eq(turbo_crypto_xxtea_decrypt(
+    check_equal(cipher_text, expected, sizeof(expected));
+    check_equal(turbo_crypto_xxtea_decrypt(
                      decrypted, sizeof(decrypted), &plain_text_len,
                      cipher_text, cipher_text_len, key, sizeof(key)),
                  TURBO_CRYPTO_OK);
-    check_size_eq(plain_text_len, sizeof(plain_text));
-    check_uint8_array_eq(decrypted, plain_text, sizeof(plain_text));
+    check_equal(plain_text_len, sizeof(plain_text));
+    check_equal(decrypted, plain_text, sizeof(plain_text));
   }
 
   it("rejects invalid XXTEA framing and reports required capacity") {
@@ -214,27 +214,27 @@ spec("turbo crypto") {
     uint8_t decrypted[8];
     size_t output_len = 0U;
 
-    check_int_eq(turbo_crypto_xxtea_encrypt(
+    check_equal(turbo_crypto_xxtea_encrypt(
                      cipher_text, sizeof(cipher_text) - 1U, &output_len,
                      plain_text, sizeof(plain_text), key, sizeof(key)),
                  TURBO_CRYPTO_EBUFFER);
-    check_size_eq(output_len, sizeof(cipher_text));
-    check_int_eq(turbo_crypto_xxtea_encrypt(
+    check_equal(output_len, sizeof(cipher_text));
+    check_equal(turbo_crypto_xxtea_encrypt(
                      cipher_text, sizeof(cipher_text), &output_len,
                      plain_text, sizeof(plain_text), key, sizeof(key)),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_xxtea_decrypt(
+    check_equal(turbo_crypto_xxtea_decrypt(
                      decrypted, sizeof(decrypted) - 1U, &output_len,
                      cipher_text, sizeof(cipher_text), key, sizeof(key)),
                  TURBO_CRYPTO_EBUFFER);
-    check_size_eq(output_len, sizeof(decrypted));
-    check_int_eq(turbo_crypto_xxtea_decrypt(
+    check_equal(output_len, sizeof(decrypted));
+    check_equal(turbo_crypto_xxtea_decrypt(
                      decrypted, sizeof(decrypted), &output_len,
                      cipher_text, sizeof(cipher_text) - 1U, key, sizeof(key)),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_xxtea_encrypt_size(0U, &output_len),
+    check_equal(turbo_crypto_xxtea_encrypt_size(0U, &output_len),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_xxtea_encrypt(
+    check_equal(turbo_crypto_xxtea_encrypt(
                      cipher_text, sizeof(cipher_text), &output_len,
                      plain_text, sizeof(plain_text), key,
                      TURBO_CRYPTO_XXTEA_KEY_SIZE + 1U),
@@ -245,21 +245,21 @@ spec("turbo crypto") {
     uint8_t public_key[TURBO_CRYPTO_ED448_PUBLIC_KEY_SIZE];
     uint8_t signature[TURBO_CRYPTO_ED448_SIGNATURE_SIZE];
 
-    check_int_eq(turbo_crypto_ed448_public_key(ed448_rfc8032_private_key,
+    check_equal(turbo_crypto_ed448_public_key(ed448_rfc8032_private_key,
                                                public_key),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(public_key, ed448_rfc8032_public_key,
+    check_equal(public_key, ed448_rfc8032_public_key,
                          sizeof(public_key));
-    check_int_eq(turbo_crypto_ed448_sign(ed448_rfc8032_private_key, NULL, 0,
+    check_equal(turbo_crypto_ed448_sign(ed448_rfc8032_private_key, NULL, 0,
                                          signature),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(signature, ed448_rfc8032_signature,
+    check_equal(signature, ed448_rfc8032_signature,
                          sizeof(signature));
-    check_int_eq(turbo_crypto_ed448_verify(public_key, NULL, 0, signature),
+    check_equal(turbo_crypto_ed448_verify(public_key, NULL, 0, signature),
                  TURBO_CRYPTO_OK);
 
     signature[0] ^= 0x01U;
-    check_int_eq(turbo_crypto_ed448_verify(public_key, NULL, 0, signature),
+    check_equal(turbo_crypto_ed448_verify(public_key, NULL, 0, signature),
                  TURBO_CRYPTO_EVERIFY);
   }
 
@@ -269,12 +269,12 @@ spec("turbo crypto") {
     uint8_t public_key[TURBO_CRYPTO_ED448_PUBLIC_KEY_SIZE];
     uint8_t signature[TURBO_CRYPTO_ED448_SIGNATURE_SIZE];
 
-    check_int_eq(turbo_crypto_ed448_keygen(private_key, public_key),
+    check_equal(turbo_crypto_ed448_keygen(private_key, public_key),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_ed448_sign(private_key, message,
+    check_equal(turbo_crypto_ed448_sign(private_key, message,
                                          sizeof(message) - 1U, signature),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_ed448_verify(public_key, message,
+    check_equal(turbo_crypto_ed448_verify(public_key, message,
                                            sizeof(message) - 1U, signature),
                  TURBO_CRYPTO_OK);
     turbo_crypto_wipe(private_key, sizeof(private_key));
@@ -287,27 +287,27 @@ spec("turbo crypto") {
     uint8_t overlapping_keys[TURBO_CRYPTO_ED448_PRIVATE_KEY_SIZE + 1U];
     turbo_crypto_sha256_ctx_t ctx;
 
-    check_int_eq(turbo_crypto_sha256(NULL, 1, digest), TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_sha256("", 0, NULL), TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_hmac_sha256(NULL, 1, "", 0, digest),
+    check_equal(turbo_crypto_sha256(NULL, 1, digest), TURBO_CRYPTO_EINVAL);
+    check_equal(turbo_crypto_sha256("", 0, NULL), TURBO_CRYPTO_EINVAL);
+    check_equal(turbo_crypto_hmac_sha256(NULL, 1, "", 0, digest),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_md5(NULL, 1, digest), TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_sha256_init(&ctx), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_sha256_final(&ctx, digest), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_sha256_update(&ctx, "x", 1),
+    check_equal(turbo_crypto_md5(NULL, 1, digest), TURBO_CRYPTO_EINVAL);
+    check_equal(turbo_crypto_sha256_init(&ctx), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_sha256_final(&ctx, digest), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_sha256_update(&ctx, "x", 1),
                  TURBO_CRYPTO_ESTATE);
-    check_int_eq(turbo_crypto_pbkdf2_hmac_sha256(
+    check_equal(turbo_crypto_pbkdf2_hmac_sha256(
                      "password", 8, "salt", 4, 0, digest, sizeof(digest)),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_ed448_public_key(NULL, ed448_public_key),
+    check_equal(turbo_crypto_ed448_public_key(NULL, ed448_public_key),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_ed448_keygen(overlapping_keys,
+    check_equal(turbo_crypto_ed448_keygen(overlapping_keys,
                                            overlapping_keys + 1U),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_ed448_sign(ed448_rfc8032_private_key, NULL, 1,
+    check_equal(turbo_crypto_ed448_sign(ed448_rfc8032_private_key, NULL, 1,
                                          ed448_signature),
                  TURBO_CRYPTO_EINVAL);
-    check_int_eq(turbo_crypto_ed448_verify(ed448_rfc8032_public_key, NULL, 1,
+    check_equal(turbo_crypto_ed448_verify(ed448_rfc8032_public_key, NULL, 1,
                                            ed448_rfc8032_signature),
                  TURBO_CRYPTO_EINVAL);
   }
@@ -316,17 +316,17 @@ spec("turbo crypto") {
     uint8_t first[TURBO_CRYPTO_SHA256_SIZE];
     uint8_t second[TURBO_CRYPTO_SHA256_SIZE];
 
-    check_int_eq(turbo_crypto_random(first, sizeof(first)), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_random(second, sizeof(second)), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_verify(first, first, sizeof(first)),
+    check_equal(turbo_crypto_random(first, sizeof(first)), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_random(second, sizeof(second)), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_verify(first, first, sizeof(first)),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_verify(first, second, sizeof(first)),
+    check_equal(turbo_crypto_verify(first, second, sizeof(first)),
                  TURBO_CRYPTO_EVERIFY);
     memcpy(second, first, sizeof(first));
-    check_int_eq(turbo_crypto_verify(first, second, sizeof(first)),
+    check_equal(turbo_crypto_verify(first, second, sizeof(first)),
                  TURBO_CRYPTO_OK);
     turbo_crypto_wipe(second, sizeof(second));
-    check_int_eq(turbo_crypto_random(NULL, 1), TURBO_CRYPTO_ERANDOM);
+    check_equal(turbo_crypto_random(NULL, 1), TURBO_CRYPTO_ERANDOM);
   }
 
   it("matches the BLAKE2b standard vector") {
@@ -338,9 +338,9 @@ spec("turbo crypto") {
         0xdb, 0xf1, 0x92, 0x5a, 0xb9, 0x23, 0x86, 0xed, 0xd4, 0x00, 0x99, 0x23};
     uint8_t actual[TURBO_CRYPTO_BLAKE2B_MAX_SIZE];
 
-    check_int_eq(turbo_crypto_blake2b(actual, sizeof(actual), "abc", 3U), TURBO_CRYPTO_OK);
-    check_uint8_array_eq(actual, expected, sizeof(expected));
-    check_int_eq(turbo_crypto_blake2b(actual, 0U, "abc", 3U), TURBO_CRYPTO_EINVAL);
+    check_equal(turbo_crypto_blake2b(actual, sizeof(actual), "abc", 3U), TURBO_CRYPTO_OK);
+    check_equal(actual, expected, sizeof(expected));
+    check_equal(turbo_crypto_blake2b(actual, 0U, "abc", 3U), TURBO_CRYPTO_EINVAL);
   }
 
   it("round-trips authenticated encryption and rejects a changed tag") {
@@ -352,18 +352,18 @@ spec("turbo crypto") {
     uint8_t cipher_text[sizeof(plain_text)];
     uint8_t unlocked[sizeof(plain_text)];
 
-    check_int_eq(turbo_crypto_aead_lock(cipher_text, mac, key, nonce, associated_data,
+    check_equal(turbo_crypto_aead_lock(cipher_text, mac, key, nonce, associated_data,
                                         sizeof(associated_data) - 1U, plain_text,
                                         sizeof(plain_text)),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_aead_unlock(unlocked, mac, key, nonce, associated_data,
+    check_equal(turbo_crypto_aead_unlock(unlocked, mac, key, nonce, associated_data,
                                           sizeof(associated_data) - 1U, cipher_text,
                                           sizeof(cipher_text)),
                  TURBO_CRYPTO_OK);
-    check_uint8_array_eq(unlocked, plain_text, sizeof(plain_text));
+    check_equal(unlocked, plain_text, sizeof(plain_text));
 
     mac[0] ^= 0x01U;
-    check_int_eq(turbo_crypto_aead_unlock(unlocked, mac, key, nonce, associated_data,
+    check_equal(turbo_crypto_aead_unlock(unlocked, mac, key, nonce, associated_data,
                                           sizeof(associated_data) - 1U, cipher_text,
                                           sizeof(cipher_text)),
                  TURBO_CRYPTO_EVERIFY);
@@ -377,12 +377,12 @@ spec("turbo crypto") {
     uint8_t alice_shared[TURBO_CRYPTO_CURVE25519_SIZE];
     uint8_t bob_shared[TURBO_CRYPTO_CURVE25519_SIZE];
 
-    check_int_eq(turbo_crypto_x25519_public_key(alice_public, alice_secret), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_x25519_public_key(bob_public, bob_secret), TURBO_CRYPTO_OK);
-    check_mem_ne(alice_public, bob_public, sizeof(alice_public));
-    check_int_eq(turbo_crypto_x25519(alice_shared, alice_secret, bob_public), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_x25519(bob_shared, bob_secret, alice_public), TURBO_CRYPTO_OK);
-    check_uint8_array_eq(alice_shared, bob_shared, sizeof(alice_shared));
+    check_equal(turbo_crypto_x25519_public_key(alice_public, alice_secret), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_x25519_public_key(bob_public, bob_secret), TURBO_CRYPTO_OK);
+    check_not_equal(alice_public, bob_public, sizeof(alice_public));
+    check_equal(turbo_crypto_x25519(alice_shared, alice_secret, bob_public), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_x25519(bob_shared, bob_secret, alice_public), TURBO_CRYPTO_OK);
+    check_equal(alice_shared, bob_shared, sizeof(alice_shared));
   }
 
   it("signs and verifies with the Monocypher EdDSA adapter") {
@@ -392,13 +392,13 @@ spec("turbo crypto") {
     uint8_t public_key[TURBO_CRYPTO_CURVE25519_SIZE];
     uint8_t signature[TURBO_CRYPTO_EDDSA_SIGNATURE_SIZE];
 
-    check_int_eq(turbo_crypto_eddsa_key_pair(secret_key, public_key, seed), TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_eddsa_sign(signature, secret_key, message, sizeof(message) - 1U),
+    check_equal(turbo_crypto_eddsa_key_pair(secret_key, public_key, seed), TURBO_CRYPTO_OK);
+    check_equal(turbo_crypto_eddsa_sign(signature, secret_key, message, sizeof(message) - 1U),
                  TURBO_CRYPTO_OK);
-    check_int_eq(turbo_crypto_eddsa_check(signature, public_key, message, sizeof(message) - 1U),
+    check_equal(turbo_crypto_eddsa_check(signature, public_key, message, sizeof(message) - 1U),
                  TURBO_CRYPTO_OK);
     signature[0] ^= 0x01U;
-    check_int_eq(turbo_crypto_eddsa_check(signature, public_key, message, sizeof(message) - 1U),
+    check_equal(turbo_crypto_eddsa_check(signature, public_key, message, sizeof(message) - 1U),
                  TURBO_CRYPTO_EVERIFY);
     turbo_crypto_wipe(secret_key, sizeof(secret_key));
   }

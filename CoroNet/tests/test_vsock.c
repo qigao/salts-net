@@ -88,8 +88,8 @@ static void vsock_exchange_over_backend(turbo_tcp_backend_t backend) {
 
   check_true(turbo_vsock_is_available());
   check_not_null(ctx);
-  check_int_eq(coro_context_set_tcp_backend(ctx, backend), TURBO_OK);
-  check_int_eq(coro_context_get_tcp_backend(ctx), backend);
+  check_equal(coro_context_set_tcp_backend(ctx, backend), TURBO_OK);
+  check_equal(coro_context_get_tcp_backend(ctx), backend);
   s_vsock_connected = 0;
   s_vsock_accepted = 0;
   s_vsock_closed = 0;
@@ -103,31 +103,31 @@ static void vsock_exchange_over_backend(turbo_tcp_backend_t backend) {
 
   client = turbo_stream_create(ctx, TURBO_STREAM_VSOCK);
   check_not_null(client);
-  check_int_eq(
+  check_equal(
       turbo_stream_connect_vsock(client, &connect_endpoint, vsock_on_connect, vsock_on_close),
       TURBO_OK);
-  check_int_eq(vsock_run_until(ctx, &s_vsock_connected, 1, VSOCK_TEST_TIMEOUT_MS), TURBO_OK);
-  check_int_eq(vsock_run_until(ctx, &s_vsock_accepted, 1, VSOCK_TEST_TIMEOUT_MS), TURBO_OK);
+  check_equal(vsock_run_until(ctx, &s_vsock_connected, 1, VSOCK_TEST_TIMEOUT_MS), TURBO_OK);
+  check_equal(vsock_run_until(ctx, &s_vsock_accepted, 1, VSOCK_TEST_TIMEOUT_MS), TURBO_OK);
   check_not_null(s_vsock_accepted_stream);
-  check_int_eq(turbo_stream_get_peer_vsock_endpoint(client, &peer_endpoint), TURBO_OK);
-  check_uint_eq(peer_endpoint.cid, connect_endpoint.cid);
-  check_uint_eq(peer_endpoint.port, connect_endpoint.port);
+  check_equal(turbo_stream_get_peer_vsock_endpoint(client, &peer_endpoint), TURBO_OK);
+  check_equal(peer_endpoint.cid, connect_endpoint.cid);
+  check_equal(peer_endpoint.port, connect_endpoint.port);
 
-  check_int_eq(turbo_stream_recv_start(s_vsock_accepted_stream, vsock_on_recv), TURBO_OK);
-  check_int_eq(turbo_stream_send(client, payload, sizeof(payload)), TURBO_OK);
+  check_equal(turbo_stream_recv_start(s_vsock_accepted_stream, vsock_on_recv), TURBO_OK);
+  check_equal(turbo_stream_send(client, payload, sizeof(payload)), TURBO_OK);
   {
     uint64_t deadline = turbo_monotonic_ms() + VSOCK_TEST_TIMEOUT_MS;
     while (s_vsock_received != sizeof(payload) && turbo_monotonic_ms() < deadline) {
       coro_context_run(ctx, TURBO_RUN_NOWAIT);
     }
   }
-  check_size_eq(s_vsock_received, sizeof(payload));
+  check_equal(s_vsock_received, sizeof(payload));
 
   turbo_stream_destroy(client);
   turbo_stream_destroy(s_vsock_accepted_stream);
   s_vsock_accepted_stream = NULL;
   turbo_stream_listener_close(listener);
-  check_int_eq(vsock_run_until(ctx, &s_vsock_closed, 1, VSOCK_TEST_TIMEOUT_MS), TURBO_OK);
+  check_equal(vsock_run_until(ctx, &s_vsock_closed, 1, VSOCK_TEST_TIMEOUT_MS), TURBO_OK);
   coro_context_stop(ctx);
   {
     uint64_t deadline = turbo_monotonic_ms() + VSOCK_TEST_TIMEOUT_MS;
@@ -153,8 +153,8 @@ spec("CoroNet VSOCK") {
     check_not_null(ctx);
     socket = coro_socket_create_vsock(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_connect(socket, "2", VSOCK_TEST_PORT), TURBO_ENOTSUP);
-    check_int_eq(coro_context_get_last_error(ctx), TURBO_ENOTSUP);
+    check_equal(coro_socket_connect(socket, "2", VSOCK_TEST_PORT), TURBO_ENOTSUP);
+    check_equal(coro_context_get_last_error(ctx), TURBO_ENOTSUP);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);
@@ -168,8 +168,8 @@ spec("CoroNet VSOCK") {
     check_not_null(ctx);
     socket = coro_socket_create_tcpv4(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_connect_vsock(socket, &endpoint), TURBO_ENOTSUP);
-    check_int_eq(coro_socket_bind_vsock(socket, &endpoint), TURBO_ENOTSUP);
+    check_equal(coro_socket_connect_vsock(socket, &endpoint), TURBO_ENOTSUP);
+    check_equal(coro_socket_bind_vsock(socket, &endpoint), TURBO_ENOTSUP);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);
@@ -186,7 +186,7 @@ spec("CoroNet VSOCK") {
     check_not_null(ctx);
     socket = coro_socket_create_vsock(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_bind(socket, (const struct sockaddr *)&address),
+    check_equal(coro_socket_bind(socket, (const struct sockaddr *)&address),
                  TURBO_EPROTONOSUPPORT);
 
     coro_socket_destroy(socket);
@@ -203,11 +203,11 @@ spec("CoroNet VSOCK") {
     check_not_null(ctx);
     socket = coro_socket_create_vsock(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_set_tcp_keepalive(socket, &keepalive), TURBO_ENOTSUP);
-    check_int_eq(coro_socket_set_linger(socket, &linger), TURBO_OK);
-    check_int_eq(coro_socket_set_recv_buffer_size(socket, VSOCK_TEST_BUFFER_BYTES), TURBO_OK);
-    check_int_eq(coro_socket_set_send_buffer_size(socket, VSOCK_TEST_BUFFER_BYTES), TURBO_OK);
-    check_int_eq(coro_socket_set_send_hwm(socket, VSOCK_TEST_SEND_HWM_BYTES), TURBO_OK);
+    check_equal(coro_socket_set_tcp_keepalive(socket, &keepalive), TURBO_ENOTSUP);
+    check_equal(coro_socket_set_linger(socket, &linger), TURBO_OK);
+    check_equal(coro_socket_set_recv_buffer_size(socket, VSOCK_TEST_BUFFER_BYTES), TURBO_OK);
+    check_equal(coro_socket_set_send_buffer_size(socket, VSOCK_TEST_BUFFER_BYTES), TURBO_OK);
+    check_equal(coro_socket_set_send_hwm(socket, VSOCK_TEST_SEND_HWM_BYTES), TURBO_OK);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);
@@ -222,8 +222,8 @@ spec("CoroNet VSOCK") {
     check_not_null(ctx);
     socket = coro_socket_create_vsock(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_connect_vsock(socket, &cid_any), TURBO_EINVAL);
-    check_int_eq(coro_socket_connect_vsock(socket, &port_any), TURBO_EINVAL);
+    check_equal(coro_socket_connect_vsock(socket, &cid_any), TURBO_EINVAL);
+    check_equal(coro_socket_connect_vsock(socket, &port_any), TURBO_EINVAL);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);
@@ -249,12 +249,12 @@ spec("CoroNet VSOCK") {
 
     check_not_null(ctx);
     check_null(turbo_stream_create(ctx, TURBO_STREAM_VSOCK));
-    check_int_eq(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
+    check_equal(coro_context_get_last_error(ctx), TURBO_EPROTONOSUPPORT);
 
     socket = coro_socket_create_vsock(ctx);
     check_not_null(socket);
-    check_int_eq(coro_socket_bind_vsock(socket, &endpoint), TURBO_EPROTONOSUPPORT);
-    check_int_eq(coro_socket_connect_vsock(socket, &endpoint), TURBO_EPROTONOSUPPORT);
+    check_equal(coro_socket_bind_vsock(socket, &endpoint), TURBO_EPROTONOSUPPORT);
+    check_equal(coro_socket_connect_vsock(socket, &endpoint), TURBO_EPROTONOSUPPORT);
 
     coro_socket_destroy(socket);
     coro_context_destroy(ctx);

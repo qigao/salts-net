@@ -81,7 +81,7 @@ spec("Coroutine Tests") {
         int times = 3;
         coro_t *co = coro_create(counter_coro, &times, NULL);
         check(co != NULL);
-        check_int_eq(coro_state(co), coro_SUSPENDED);
+        check_equal(coro_state(co), coro_SUSPENDED);
         coro_destroy(co);
     }
 
@@ -91,15 +91,15 @@ spec("Coroutine Tests") {
 
         // Resume 3 times
         for (int i = 0; i < 3; i++) {
-            check_int_eq(coro_alive(co), 1);
+            check_equal(coro_alive(co), 1);
             coro_resume(co);
-            check_int_eq(g_counter, i + 1);
+            check_equal(g_counter, i + 1);
         }
 
         // One more resume to finish
         coro_resume(co);
-        check_int_eq(coro_alive(co), 0);
-        check_int_eq(coro_state(co), coro_DEAD);
+        check_equal(coro_alive(co), 0);
+        check_equal(coro_state(co), coro_DEAD);
 
         coro_destroy(co);
     }
@@ -114,7 +114,7 @@ spec("Coroutine Tests") {
         coro_resume(co);
         coro_pop(co, &output, sizeof(int));
 
-        check_int_eq(output, 42);  // 21 * 2
+        check_equal(output, 42);  // 21 * 2
 
         coro_destroy(co);
     }
@@ -124,15 +124,15 @@ spec("Coroutine Tests") {
         coro_t *co = coro_create(nested_coro, &step, NULL);
 
         coro_resume(co);
-        check_int_eq(step, 1);
+        check_equal(step, 1);
 
         coro_resume(co);
-        check_int_eq(step, 2);
+        check_equal(step, 2);
 
         coro_resume(co);
-        check_int_eq(step, 3);
+        check_equal(step, 3);
 
-        check_int_eq(coro_alive(co), 0);
+        check_equal(coro_alive(co), 0);
         coro_destroy(co);
     }
 
@@ -164,7 +164,7 @@ spec("Coroutine Tests") {
 
         for (int i = 0; i < 5; i++) {
             coro_resume(co);
-            check_int_eq(results[i], (i + 1) * 10);
+            check_equal(results[i], (i + 1) * 10);
         }
 
         coro_destroy(co);
@@ -176,13 +176,13 @@ spec("Object Pool Tests") {
         coro_context_t *ctx = coro_context_create(NULL);
 
         check_not_null(ctx);
-        check_size_eq(coro_context_get_stream_recv_buffer_size(ctx),
+        check_equal(coro_context_get_stream_recv_buffer_size(ctx),
                       CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE);
-        check_int_eq(coro_context_set_stream_recv_buffer_size(ctx, 4096u), TURBO_OK);
-        check_size_eq(coro_context_get_stream_recv_buffer_size(ctx), 4096u);
-        check_int_eq(coro_context_set_stream_recv_buffer_size(ctx, 0u), TURBO_EINVAL);
-        check_int_eq(coro_context_set_stream_recv_buffer_size(NULL, 4096u), TURBO_EINVAL);
-        check_size_eq(coro_context_get_stream_recv_buffer_size(NULL),
+        check_equal(coro_context_set_stream_recv_buffer_size(ctx, 4096u), TURBO_OK);
+        check_equal(coro_context_get_stream_recv_buffer_size(ctx), 4096u);
+        check_equal(coro_context_set_stream_recv_buffer_size(ctx, 0u), TURBO_EINVAL);
+        check_equal(coro_context_set_stream_recv_buffer_size(NULL, 4096u), TURBO_EINVAL);
+        check_equal(coro_context_get_stream_recv_buffer_size(NULL),
                       CORO_CONTEXT_DEFAULT_STREAM_RECV_BUFFER_SIZE);
 
         coro_context_destroy(ctx);
@@ -198,11 +198,11 @@ spec("Object Pool Tests") {
         int counter = 0;
 
         check_not_null(ctx);
-        check_int_eq(coro_context_spawn(ctx, sched_fast, &counter), 0);
-        check_int_eq(coro_context_spawn(ctx, sched_fast, &counter), 0);
-        check_int_eq(coro_context_spawn(ctx, sched_fast, &counter), TURBO_ENOMEM);
+        check_equal(coro_context_spawn(ctx, sched_fast, &counter), 0);
+        check_equal(coro_context_spawn(ctx, sched_fast, &counter), 0);
+        check_equal(coro_context_spawn(ctx, sched_fast, &counter), TURBO_ENOMEM);
         while (coro_context_run(ctx, TURBO_RUN_NOWAIT) != 0) {}
-        check_int_eq(counter, 20);
+        check_equal(counter, 20);
         coro_context_destroy(ctx);
 
         config.initial_capacity = 3;
@@ -216,8 +216,8 @@ spec("Object Pool Tests") {
         coro_object_pool_config_t config = CORO_OBJECT_POOL_CONFIG_DEFAULT;
         coro_object_pool_t *pool = coro_object_pool_create(&config, ctx);
         check_not_null(pool);
-        check_int_eq(coro_object_pool_free_count(pool), 16);
-        check_int_eq(coro_object_pool_active_count(pool), 0);
+        check_equal(coro_object_pool_free_count(pool), 16);
+        check_equal(coro_object_pool_active_count(pool), 0);
         coro_object_pool_destroy(pool);
         
         coro_context_destroy(ctx);
@@ -233,13 +233,13 @@ spec("Object Pool Tests") {
         int counter = 0;
         coro_t *co1 = coro_object_pool_acquire(pool, sched_worker, &counter);
         check_not_null(co1);
-        check_int_eq(coro_object_pool_active_count(pool), 1);
-        check_int_eq(coro_object_pool_free_count(pool), 1);
+        check_equal(coro_object_pool_active_count(pool), 1);
+        check_equal(coro_object_pool_free_count(pool), 1);
         
         coro_t *co2 = coro_object_pool_acquire(pool, sched_worker, &counter);
         check_not_null(co2);
-        check_int_eq(coro_object_pool_active_count(pool), 2);
-        check_int_eq(coro_object_pool_free_count(pool), 0);
+        check_equal(coro_object_pool_active_count(pool), 2);
+        check_equal(coro_object_pool_free_count(pool), 0);
         
         /* Run to completion */
         while (coro_alive(co1)) coro_resume(co1);
@@ -248,8 +248,8 @@ spec("Object Pool Tests") {
         coro_object_pool_release(pool, co1);
         coro_object_pool_release(pool, co2);
         
-        check_int_eq(coro_object_pool_active_count(pool), 0);
-        check_int_eq(coro_object_pool_free_count(pool), 2);
+        check_equal(coro_object_pool_active_count(pool), 0);
+        check_equal(coro_object_pool_free_count(pool), 2);
         
         coro_object_pool_destroy(pool);
         coro_context_destroy(ctx);
@@ -301,8 +301,8 @@ spec("Object Pool Tests") {
         while (coro_alive(co2)) coro_resume(co2);
         coro_object_pool_release(pool, co2);
         
-        check_int_eq(c1, 3);
-        check_int_eq(c2, 3);
+        check_equal(c1, 3);
+        check_equal(c2, 3);
         
         coro_object_pool_destroy(pool);
         coro_context_destroy(ctx);
@@ -313,7 +313,7 @@ spec("Scheduler Tests") {
     it("should create and destroy scheduler") {
         coro_scheduler_t *sched = coro_scheduler_create();
         check(sched != NULL);
-        check_int_eq(coro_scheduler_count(sched), 0);
+        check_equal(coro_scheduler_count(sched), 0);
         coro_scheduler_destroy(sched);
     }
 
@@ -323,11 +323,11 @@ spec("Scheduler Tests") {
 
         coro_t *co = coro_spawn(sched, sched_worker, &counter, NULL);
         check(co != NULL);
-        check_int_eq(coro_scheduler_count(sched), 1);
+        check_equal(coro_scheduler_count(sched), 1);
 
         // Run to completion before destroying
         coro_scheduler_run(sched);
-        check_int_eq(coro_scheduler_count(sched), 0);
+        check_equal(coro_scheduler_count(sched), 0);
 
         coro_scheduler_destroy(sched);
     }
@@ -339,8 +339,8 @@ spec("Scheduler Tests") {
         coro_spawn(sched, sched_worker, &counter, NULL);
         coro_scheduler_run(sched);
 
-        check_int_eq(counter, 3);  // 3 iterations
-        check_int_eq(coro_scheduler_count(sched), 0);
+        check_equal(counter, 3);  // 3 iterations
+        check_equal(coro_scheduler_count(sched), 0);
 
         coro_scheduler_destroy(sched);
     }
@@ -353,14 +353,14 @@ spec("Scheduler Tests") {
         coro_spawn(sched, sched_worker, &c2, NULL);
         coro_spawn(sched, sched_worker, &c3, NULL);
 
-        check_int_eq(coro_scheduler_count(sched), 3);
+        check_equal(coro_scheduler_count(sched), 3);
 
         coro_scheduler_run(sched);
 
-        check_int_eq(c1, 3);
-        check_int_eq(c2, 3);
-        check_int_eq(c3, 3);
-        check_int_eq(coro_scheduler_count(sched), 0);
+        check_equal(c1, 3);
+        check_equal(c2, 3);
+        check_equal(c3, 3);
+        check_equal(coro_scheduler_count(sched), 0);
 
         coro_scheduler_destroy(sched);
     }
@@ -374,8 +374,8 @@ spec("Scheduler Tests") {
 
         coro_scheduler_run(sched);
 
-        check_int_eq(counter, 20);  // 10 + 10
-        check_int_eq(coro_scheduler_count(sched), 0);
+        check_equal(counter, 20);  // 10 + 10
+        check_equal(coro_scheduler_count(sched), 0);
 
         coro_scheduler_destroy(sched);
     }
@@ -393,16 +393,16 @@ spec("Scheduler Tests") {
 
         check_not_null(coro_spawn_pooled(sched, pool, sched_worker, &c1));
         check_not_null(coro_spawn_pooled(sched, pool, sched_worker, &c2));
-        check_int_eq(coro_object_pool_active_count(pool), 2);
-        check_int_eq(coro_object_pool_free_count(pool), 0);
+        check_equal(coro_object_pool_active_count(pool), 2);
+        check_equal(coro_object_pool_free_count(pool), 0);
 
         coro_scheduler_run(sched);
 
-        check_int_eq(c1, 3);
-        check_int_eq(c2, 3);
-        check_int_eq(coro_scheduler_count(sched), 0);
-        check_int_eq(coro_object_pool_active_count(pool), 0);
-        check_int_eq(coro_object_pool_free_count(pool), 2);
+        check_equal(c1, 3);
+        check_equal(c2, 3);
+        check_equal(coro_scheduler_count(sched), 0);
+        check_equal(coro_object_pool_active_count(pool), 0);
+        check_equal(coro_object_pool_free_count(pool), 2);
 
         coro_object_pool_destroy(pool);
         coro_scheduler_destroy(sched);
@@ -418,25 +418,25 @@ spec("Scheduler Tests") {
 
         // First tick
         int alive = coro_scheduler_tick(sched);
-        check_int_eq(alive, 2);
-        check_int_eq(c1, 1);
-        check_int_eq(c2, 1);
+        check_equal(alive, 2);
+        check_equal(c1, 1);
+        check_equal(c2, 1);
 
         // Second tick
         alive = coro_scheduler_tick(sched);
-        check_int_eq(alive, 2);
-        check_int_eq(c1, 2);
-        check_int_eq(c2, 2);
+        check_equal(alive, 2);
+        check_equal(c1, 2);
+        check_equal(c2, 2);
 
         // Third tick
         alive = coro_scheduler_tick(sched);
-        check_int_eq(alive, 2);
-        check_int_eq(c1, 3);
-        check_int_eq(c2, 3);
+        check_equal(alive, 2);
+        check_equal(c1, 3);
+        check_equal(c2, 3);
 
         // Fourth tick - coroutines complete
         alive = coro_scheduler_tick(sched);
-        check_int_eq(alive, 0);
+        check_equal(alive, 0);
 
         coro_scheduler_destroy(sched);
     }

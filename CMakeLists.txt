@@ -53,6 +53,7 @@ find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
+find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
 
 # Additional components
 add_subdirectory(tools)
@@ -69,7 +70,6 @@ add_subdirectory(ice)
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 add_subdirectory(email)
-add_subdirectory(redis)
 
 # Package Configuration
 include(CMakePackageConfigHelpers)

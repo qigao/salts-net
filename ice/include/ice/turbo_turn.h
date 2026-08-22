@@ -10,6 +10,8 @@
 #ifndef TURBO_TURN_H
 #define TURBO_TURN_H
 
+
+#include "ice_api.h"
 #include "turbo_stun.h"
 #include "CoroNet.h"
 #include "platform.h"
@@ -181,13 +183,13 @@ struct turbo_turn_client_s {
 /**
  * Create TURN client (coroutine-based).
  */
-CXX_C_API turbo_turn_client_t *turn_client_create(
+TURBONET_ICE_C_API turbo_turn_client_t *turn_client_create(
     coro_context_t *ctx, const turn_client_config_t *config);
 
 /**
  * Destroy TURN client.
  */
-CXX_C_API void turn_client_destroy(turbo_turn_client_t *client);
+TURBONET_ICE_C_API void turn_client_destroy(turbo_turn_client_t *client);
 
 /**
  * Allocate relay address.
@@ -197,34 +199,34 @@ CXX_C_API void turn_client_destroy(turbo_turn_client_t *client);
  *
  * @return 0 on success, negative on error
  */
-CXX_C_API int turn_client_allocate(
+TURBONET_ICE_C_API int turn_client_allocate(
     turbo_turn_client_t *client, turn_allocation_t *allocation_out);
 
 /**
  * Refresh allocation (extend lifetime).
  */
-CXX_C_API int turn_client_refresh(turbo_turn_client_t *client);
+TURBONET_ICE_C_API int turn_client_refresh(turbo_turn_client_t *client);
 
 /** Refresh allocations, permissions, and channels that are nearing expiry. */
-CXX_C_API int turn_client_maintain(turbo_turn_client_t *client);
+TURBONET_ICE_C_API int turn_client_maintain(turbo_turn_client_t *client);
 
 /**
  * Create permission for peer.
  */
-CXX_C_API int turn_client_create_permission(
+TURBONET_ICE_C_API int turn_client_create_permission(
     turbo_turn_client_t *client, const char *peer_ip, uint16_t peer_port);
 
 /**
  * Bind channel for efficient relay.
  */
-CXX_C_API int turn_client_channel_bind(
+TURBONET_ICE_C_API int turn_client_channel_bind(
     turbo_turn_client_t *client, const char *peer_ip, uint16_t peer_port,
     uint16_t *channel_out);
 
 /**
  * Send data through TURN relay.
  */
-CXX_C_API int turn_client_send(
+TURBONET_ICE_C_API int turn_client_send(
     turbo_turn_client_t *client, const char *peer_ip, uint16_t peer_port,
     const void *data, size_t len);
 
@@ -236,20 +238,20 @@ CXX_C_API int turn_client_send(
  *
  * @return 0 on success, negative on error
  */
-CXX_C_API int turn_client_recv(
+TURBONET_ICE_C_API int turn_client_recv(
     turbo_turn_client_t *client, char *peer_ip_out, uint16_t *peer_port_out,
     void **buffer_out, const uint8_t **payload_out, size_t *payload_len_out);
 
 /**
  * Set data callback (optional, for event-style data delivery).
  */
-CXX_C_API void turn_client_set_data_callback(
+TURBONET_ICE_C_API void turn_client_set_data_callback(
     turbo_turn_client_t *client, turn_data_cb callback, void *user_data);
 
 /**
  * Get allocation info.
  */
-CXX_C_API int turn_client_get_allocation(
+TURBONET_ICE_C_API int turn_client_get_allocation(
     turbo_turn_client_t *client, turn_allocation_t *allocation_out);
 
 /* ============================================================================
@@ -259,75 +261,75 @@ CXX_C_API int turn_client_get_allocation(
 /* Legacy builders require a buffer of at least 512 bytes. New code should use
  * the capacity-aware _ex variants. */
 
-CXX_C_API int turn_build_allocate_request_ex(
+TURBONET_ICE_C_API int turn_build_allocate_request_ex(
     uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, int transport);
 
-CXX_C_API int turn_build_allocate_request(
+TURBONET_ICE_C_API int turn_build_allocate_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, int transport);
 
-CXX_C_API int turn_build_refresh_request_ex(
+TURBONET_ICE_C_API int turn_build_refresh_request_ex(
     uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, uint32_t lifetime);
 
-CXX_C_API int turn_build_refresh_request(
+TURBONET_ICE_C_API int turn_build_refresh_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, uint32_t lifetime);
 
-CXX_C_API int turn_build_create_permission_request_ex(
+TURBONET_ICE_C_API int turn_build_create_permission_request_ex(
     uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, const char *peer_ip, uint16_t peer_port);
 
-CXX_C_API int turn_build_create_permission_request(
+TURBONET_ICE_C_API int turn_build_create_permission_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, const char *peer_ip, uint16_t peer_port);
 
-CXX_C_API int turn_build_channel_bind_request_ex(
+TURBONET_ICE_C_API int turn_build_channel_bind_request_ex(
     uint8_t *buffer, size_t buffer_capacity, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, uint16_t channel_number,
     const char *peer_ip, uint16_t peer_port);
 
-CXX_C_API int turn_build_channel_bind_request(
+TURBONET_ICE_C_API int turn_build_channel_bind_request(
     uint8_t *buffer, const stun_transaction_id_t *txn_id,
     const char *username, const char *realm, const char *nonce,
     const char *password, uint16_t channel_number,
     const char *peer_ip, uint16_t peer_port);
 
-CXX_C_API int turn_build_send_indication_ex(
+TURBONET_ICE_C_API int turn_build_send_indication_ex(
     uint8_t *buffer, size_t buffer_capacity, const char *peer_ip, uint16_t peer_port,
     const void *data, size_t data_len);
 
-CXX_C_API int turn_build_send_indication(
+TURBONET_ICE_C_API int turn_build_send_indication(
     uint8_t *buffer, const char *peer_ip, uint16_t peer_port,
     const void *data, size_t data_len);
 
-CXX_C_API int turn_build_channel_data_ex(
+TURBONET_ICE_C_API int turn_build_channel_data_ex(
     uint8_t *buffer, size_t buffer_capacity, uint16_t channel_number,
     const void *data, size_t data_len);
 
-CXX_C_API int turn_build_channel_data(
+TURBONET_ICE_C_API int turn_build_channel_data(
     uint8_t *buffer, uint16_t channel_number,
     const void *data, size_t data_len);
 
-CXX_C_API int turn_parse_allocate_response(
+TURBONET_ICE_C_API int turn_parse_allocate_response(
     const uint8_t *data, size_t len, turn_allocation_t *allocation_out,
     char *realm_out, char *nonce_out);
 
-CXX_C_API int turn_is_channel_data(const uint8_t *data, size_t len);
+TURBONET_ICE_C_API int turn_is_channel_data(const uint8_t *data, size_t len);
 
-CXX_C_API int turn_parse_channel_data(
+TURBONET_ICE_C_API int turn_parse_channel_data(
     const uint8_t *data, size_t len, uint16_t *channel_out,
     const uint8_t **payload_out, size_t *payload_len_out);
 
-CXX_C_API int turn_parse_data_indication(
+TURBONET_ICE_C_API int turn_parse_data_indication(
     const uint8_t *data, size_t len, char *peer_ip_out,
     uint16_t *peer_port_out, const uint8_t **payload_out,
     size_t *payload_len_out);

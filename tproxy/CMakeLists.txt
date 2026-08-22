@@ -7,7 +7,7 @@ file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
 # Build SHARED library
 add_library(${TARGET_NAME} SHARED ${HEADER_FILES} ${SOURCE_FILES})
 add_library(TurboNet::TProxy ALIAS ${TARGET_NAME})
-target_compile_definitions(${TARGET_NAME} PRIVATE SHARED_CXX)
+cmake_config_api(${TARGET_NAME} TURBONET_TPROXY_C_API)
 
 # Set target properties
 set_target_properties(
@@ -28,7 +28,7 @@ target_include_directories(
 # Link libraries
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboNet::CoroNet TurboUtils::Parser TurboNet::LB
+  PUBLIC TurboNet::CoroNet TurboParser::Parser TurboNet::LB
      OpenSSL::SSL OpenSSL::Crypto)
 
  

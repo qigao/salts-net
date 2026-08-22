@@ -12,6 +12,8 @@
 #ifndef SNMP_USM_H
 #define SNMP_USM_H
 
+
+#include "snmp_api.h"
 #include "platform.h"
 #include "snmp_types.h"
 #include <stdint.h>
@@ -41,7 +43,7 @@
  *   size_t key_len;
  *   usm_password_to_key("mypassword", SNMP_AUTH_SHA1, key, &key_len);
  */
-CXX_C_API int usm_password_to_key(
+TURBONET_SNMP_C_API int usm_password_to_key(
     const char *password,
     snmp_auth_protocol_t auth_protocol,
     uint8_t *key,
@@ -62,7 +64,7 @@ CXX_C_API int usm_password_to_key(
  * @param localized_key_len Output key length
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_localize_key(
+TURBONET_SNMP_C_API int usm_localize_key(
     const uint8_t *key,
     size_t key_len,
     const uint8_t *engine_id,
@@ -83,7 +85,7 @@ CXX_C_API int usm_localize_key(
  * @param auth_params Output authentication parameters (12 bytes)
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_compute_auth(
+TURBONET_SNMP_C_API int usm_compute_auth(
     const uint8_t *message,
     size_t message_len,
     const uint8_t *key,
@@ -103,7 +105,7 @@ CXX_C_API int usm_compute_auth(
  * @param auth_params Received authentication parameters (12 bytes)
  * @return USM_OK if valid, USM_ERROR_AUTH_FAILED if invalid
  */
-CXX_C_API int usm_verify_auth(
+TURBONET_SNMP_C_API int usm_verify_auth(
     const uint8_t *message,
     size_t message_len,
     const uint8_t *key,
@@ -127,7 +129,7 @@ CXX_C_API int usm_verify_auth(
  * @param ciphertext_len [in] Buffer size, [out] Ciphertext length
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_encrypt(
+TURBONET_SNMP_C_API int usm_encrypt(
     const uint8_t *plaintext,
     size_t plaintext_len,
     const uint8_t *key,
@@ -155,7 +157,7 @@ CXX_C_API int usm_encrypt(
  * @param plaintext_len [in] Buffer size, [out] Plaintext length
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_decrypt(
+TURBONET_SNMP_C_API int usm_decrypt(
     const uint8_t *ciphertext,
     size_t ciphertext_len,
     const uint8_t *key,
@@ -181,7 +183,7 @@ CXX_C_API int usm_decrypt(
  * @param user Output user structure
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_create_user(
+TURBONET_SNMP_C_API int usm_create_user(
     const char *user_name,
     const char *auth_password,
     snmp_auth_protocol_t auth_protocol,
@@ -209,7 +211,7 @@ typedef struct {
  * @param state Engine time state to initialize
  * @param boots Initial boots count (0 for new engine, loaded from persistence)
  */
-CXX_C_API void usm_engine_time_init(snmp_engine_time_t *state, uint32_t boots);
+TURBONET_SNMP_C_API void usm_engine_time_init(snmp_engine_time_t *state, uint32_t boots);
 
 /**
  * Get current engine boots and time
@@ -218,7 +220,7 @@ CXX_C_API void usm_engine_time_init(snmp_engine_time_t *state, uint32_t boots);
  * @param boots Output engine boots
  * @param time Output engine time
  */
-CXX_C_API void usm_engine_time_get(
+TURBONET_SNMP_C_API void usm_engine_time_get(
     snmp_engine_time_t *state,
     uint32_t *boots,
     uint32_t *time
@@ -233,7 +235,7 @@ CXX_C_API void usm_engine_time_get(
  * @param boots Remote engine boots
  * @param time Remote engine time
  */
-CXX_C_API void usm_engine_time_update(
+TURBONET_SNMP_C_API void usm_engine_time_update(
     snmp_engine_time_t *state,
     uint32_t boots,
     uint32_t time
@@ -249,7 +251,7 @@ CXX_C_API void usm_engine_time_update(
  * @param msg_time Received message time
  * @return USM_OK if time is valid, USM_ERROR_AUTH_FAILED if not
  */
-CXX_C_API int usm_verify_time_window(
+TURBONET_SNMP_C_API int usm_verify_time_window(
     const snmp_engine_time_t *local_state,
     uint32_t msg_boots,
     uint32_t msg_time
@@ -265,7 +267,7 @@ CXX_C_API int usm_verify_time_window(
  * @param out_len [in] Buffer size, [out] Encoded length
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_encode_security_params(
+TURBONET_SNMP_C_API int usm_encode_security_params(
     const snmp_usm_params_t *params,
     uint8_t *out,
     size_t *out_len
@@ -282,7 +284,7 @@ CXX_C_API int usm_encode_security_params(
  * @param pool Memory pool for allocations (optional)
  * @return USM_OK on success, negative error code on failure
  */
-CXX_C_API int usm_decode_security_params(
+TURBONET_SNMP_C_API int usm_decode_security_params(
     const uint8_t *data,
     size_t len,
     snmp_usm_params_t *params,

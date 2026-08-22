@@ -19,12 +19,12 @@ spec("ldap") {
 
         int rc = ldap_build_bind_request(1, 3, "cn=admin,dc=example,dc=com", "secret", buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
         check(len < sizeof(buf));
 
         /* Verify SEQUENCE tag */
-        check_int_eq(buf[0], 0x30);
+        check_equal(buf[0], 0x30);
     }
 
     it("should build anonymous bind request correctly") {
@@ -33,9 +33,9 @@ spec("ldap") {
 
         int rc = ldap_build_bind_request(1, 3, "", "", buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
-        check_int_eq(buf[0], 0x30);
+        check_equal(buf[0], 0x30);
     }
 
     it("should build unbind request correctly") {
@@ -44,9 +44,9 @@ spec("ldap") {
 
         int rc = ldap_build_unbind_request(2, buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
-        check_int_eq(buf[0], 0x30);
+        check_equal(buf[0], 0x30);
     }
 
     it("should build basic search request correctly") {
@@ -66,9 +66,9 @@ spec("ldap") {
             buf, &len
         );
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
-        check_int_eq(buf[0], 0x30);
+        check_equal(buf[0], 0x30);
     }
 
     it("should build search request with specified attributes") {
@@ -87,7 +87,7 @@ spec("ldap") {
             buf, &len
         );
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
     }
 
@@ -102,7 +102,7 @@ spec("ldap") {
             "(&(objectClass=person)(cn=John*))",
             NULL, buf, &len
         );
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
 
         /* Test OR filter */
         len = sizeof(buf);
@@ -112,7 +112,7 @@ spec("ldap") {
             "(|(uid=admin)(uid=root))",
             NULL, buf, &len
         );
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
 
         /* Test NOT filter */
         len = sizeof(buf);
@@ -122,7 +122,7 @@ spec("ldap") {
             "(!(objectClass=computer))",
             NULL, buf, &len
         );
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
 
         /* Test presence filter */
         len = sizeof(buf);
@@ -132,7 +132,7 @@ spec("ldap") {
             "(mail=*)",
             NULL, buf, &len
         );
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
     }
 
     it("should build delete request correctly") {
@@ -141,9 +141,9 @@ spec("ldap") {
 
         int rc = ldap_build_delete_request(9, "cn=test,dc=example,dc=com", buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
-        check_int_eq(buf[0], 0x30);
+        check_equal(buf[0], 0x30);
     }
 
     it("should build add request correctly") {
@@ -163,7 +163,7 @@ spec("ldap") {
 
         int rc = ldap_build_add_request(10, "cn=Test User,dc=example,dc=com", attrs, 2, buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
     }
 
@@ -180,7 +180,7 @@ spec("ldap") {
 
         int rc = ldap_build_modify_request(11, "cn=test,dc=example,dc=com", mods, 1, buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
     }
 
@@ -197,7 +197,7 @@ spec("ldap") {
             buf, &len
         );
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
     }
 
@@ -214,7 +214,7 @@ spec("ldap") {
             buf, &len
         );
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
     }
 
@@ -224,7 +224,7 @@ spec("ldap") {
 
         int rc = ldap_build_abandon_request(14, 5, buf, &len);
 
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
         check(len > 0);
     }
   }
@@ -233,11 +233,11 @@ spec("ldap") {
     it("should identify complete messages correctly") {
         /* Incomplete message */
         uint8_t incomplete[] = { 0x30, 0x10, 0x02 };
-        check_int_eq(ldap_message_complete(incomplete, sizeof(incomplete)), 0);
+        check_equal(ldap_message_complete(incomplete, sizeof(incomplete)), 0);
 
         /* Complete short message */
         uint8_t complete[] = { 0x30, 0x03, 0x02, 0x01, 0x01 };
-        check_int_eq(ldap_message_complete(complete, sizeof(complete)), 5);
+        check_equal(ldap_message_complete(complete, sizeof(complete)), 5);
     }
 
     it("should parse successful bind response correctly") {
@@ -253,11 +253,11 @@ spec("ldap") {
         ldap_parse_result_t result;
         int rc = ldap_parse_message(packet, sizeof(packet), &result);
 
-        check_int_eq(rc, LDAP_PARSE_OK);
+        check_equal(rc, LDAP_PARSE_OK);
         check_not_null(result.message);
-        check_int_eq(result.message->message_id, 1);
-        check_int_eq(result.message->protocol_op, LDAP_RES_BIND);
-        check_int_eq(result.message->payload.bind_response.result_code, LDAP_SUCCESS);
+        check_equal(result.message->message_id, 1);
+        check_equal(result.message->protocol_op, LDAP_RES_BIND);
+        check_equal(result.message->payload.bind_response.result_code, LDAP_SUCCESS);
 
         ldap_message_free(result.message);
     }
@@ -275,8 +275,8 @@ spec("ldap") {
         ldap_parse_result_t result;
         int rc = ldap_parse_message(packet, sizeof(packet), &result);
 
-        check_int_eq(rc, LDAP_PARSE_OK);
-        check_int_eq(result.message->payload.bind_response.result_code, LDAP_INVALID_CREDENTIALS);
+        check_equal(rc, LDAP_PARSE_OK);
+        check_equal(result.message->payload.bind_response.result_code, LDAP_INVALID_CREDENTIALS);
 
         ldap_message_free(result.message);
     }
@@ -294,9 +294,9 @@ spec("ldap") {
         ldap_parse_result_t result;
         int rc = ldap_parse_message(packet, sizeof(packet), &result);
 
-        check_int_eq(rc, LDAP_PARSE_OK);
-        check_int_eq(result.message->protocol_op, LDAP_RES_SEARCH_DONE);
-        check_int_eq(result.message->payload.search_done.result_code, LDAP_SUCCESS);
+        check_equal(rc, LDAP_PARSE_OK);
+        check_equal(result.message->protocol_op, LDAP_RES_SEARCH_DONE);
+        check_equal(result.message->payload.search_done.result_code, LDAP_SUCCESS);
 
         ldap_message_free(result.message);
     }
@@ -324,22 +324,22 @@ spec("ldap") {
         ldap_parse_result_t result;
         int rc = ldap_parse_message(packet, sizeof(packet), &result);
 
-        check_int_eq(rc, LDAP_PARSE_OK);
-        check_int_eq(result.message->protocol_op, LDAP_RES_SEARCH_ENTRY);
-        check_str_eq(result.message->payload.search_entry.dn, "cn=admin,dc=example,dc=com");
-        check_int_eq(result.message->payload.search_entry.attribute_count, 1);
-        check_str_eq(result.message->payload.search_entry.attributes[0].type, "cn");
-        check_int_eq(result.message->payload.search_entry.attributes[0].value_count, 1);
+        check_equal(rc, LDAP_PARSE_OK);
+        check_equal(result.message->protocol_op, LDAP_RES_SEARCH_ENTRY);
+        check_equal(result.message->payload.search_entry.dn, "cn=admin,dc=example,dc=com");
+        check_equal(result.message->payload.search_entry.attribute_count, 1);
+        check_equal(result.message->payload.search_entry.attributes[0].type, "cn");
+        check_equal(result.message->payload.search_entry.attributes[0].value_count, 1);
 
         ldap_message_free(result.message);
     }
 
     it("should provide correct string labels for result codes") {
-        check_str_eq(ldap_result_code_str(LDAP_SUCCESS), "success");
-        check_str_eq(ldap_result_code_str(LDAP_INVALID_CREDENTIALS), "invalidCredentials");
-        check_str_eq(ldap_result_code_str(LDAP_NO_SUCH_OBJECT), "noSuchObject");
-        check_str_eq(ldap_result_code_str(LDAP_BUSY), "busy");
-        check_str_eq(ldap_result_code_str(999), "unknown");
+        check_equal(ldap_result_code_str(LDAP_SUCCESS), "success");
+        check_equal(ldap_result_code_str(LDAP_INVALID_CREDENTIALS), "invalidCredentials");
+        check_equal(ldap_result_code_str(LDAP_NO_SUCH_OBJECT), "noSuchObject");
+        check_equal(ldap_result_code_str(LDAP_BUSY), "busy");
+        check_equal(ldap_result_code_str(999), "unknown");
     }
   }
 
@@ -350,15 +350,15 @@ spec("ldap") {
 
         /* Build */
         int rc = ldap_build_bind_request(100, 3, "cn=test", "pass", buf, &len);
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
 
         /* Parse */
         ldap_parse_result_t result;
         rc = ldap_parse_message(buf, len, &result);
 
-        check_int_eq(rc, LDAP_PARSE_OK);
-        check_int_eq(result.message->message_id, 100);
-        check_int_eq(result.message->protocol_op, LDAP_REQ_BIND);
+        check_equal(rc, LDAP_PARSE_OK);
+        check_equal(result.message->message_id, 100);
+        check_equal(result.message->protocol_op, LDAP_REQ_BIND);
 
         ldap_message_free(result.message);
     }
@@ -373,15 +373,15 @@ spec("ldap") {
             0, 0, 0, 0, "(cn=*)", NULL,
             buf, &len
         );
-        check_int_eq(rc, LDAP_BUILD_OK);
+        check_equal(rc, LDAP_BUILD_OK);
 
         /* Parse */
         ldap_parse_result_t result;
         rc = ldap_parse_message(buf, len, &result);
 
-        check_int_eq(rc, LDAP_PARSE_OK);
-        check_int_eq(result.message->message_id, 200);
-        check_int_eq(result.message->protocol_op, LDAP_REQ_SEARCH);
+        check_equal(rc, LDAP_PARSE_OK);
+        check_equal(result.message->message_id, 200);
+        check_equal(result.message->protocol_op, LDAP_REQ_SEARCH);
 
         ldap_message_free(result.message);
     }

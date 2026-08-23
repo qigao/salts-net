@@ -59,6 +59,7 @@ static void lsquic_echo_on_conn_closed(lsquic_conn_t *connection) {
     return;
   }
   app->connection = NULL;
+  lsquic_conn_set_ctx(connection, NULL);
   coro_context_stop(app->context);
 }
 

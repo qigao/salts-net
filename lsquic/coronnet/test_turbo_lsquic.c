@@ -31,6 +31,7 @@ static void turbo_lsquic_test_conn_closed(lsquic_conn_t *connection) {
   if (state) {
     ++state->closed_connections;
   }
+  lsquic_conn_set_ctx(connection, NULL);
 }
 
 static SSL_CTX *turbo_lsquic_test_get_ssl_context(

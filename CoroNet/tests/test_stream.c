@@ -13,6 +13,21 @@
   #include <netinet/in.h>
   #include <sys/socket.h>
   #include <unistd.h>
+  #if defined(__linux__)
+    #include <stdatomic.h>
+    #include <sys/epoll.h>
+  #endif
+#endif
+
+#if defined(__linux__)
+static atomic_uint_fast64_t s_epoll_wait_calls;
+
+int __real_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
+
+int __wrap_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout) {
+  atomic_fetch_add_explicit(&s_epoll_wait_calls, 1u, memory_order_relaxed);
+  return __real_epoll_wait(epfd, events, maxevents, timeout);
+}
 #endif
 
 static int s_connected = -1;
@@ -2260,6 +2275,74 @@ spec("Stream") {
   }
 
 #if defined(__linux__)
+  it("should park the epoll reactor for an idle connected stream") {
+    static const char payload[] = "epoll-idle-write-interest";
+    coro_context_t *ctx = coro_context_create(NULL);
+    turbo_stream_listener_t *listener;
+    turbo_stream_t *client;
+    struct sockaddr_in addr;
+    stream_test_counts_t counts;
+    unsigned short port;
+    uint64_t waits_before;
+    uint64_t waits_after;
+    uint64_t idle_waits;
+    int send_status;
+    int recv_status;
+
+    check_not_null(ctx);
+    check_equal(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_EPOLL), 0);
+    port = stream_test_pick_loopback_port();
+    check_greater(port, 0);
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(port);
+    s_accepted_client = NULL;
+    s_accepted_count = 0;
+    s_connected = -1;
+    s_recv_hit = 0;
+    s_recv_len = 0u;
+    memset(s_recv_data, 0, sizeof(s_recv_data));
+
+    listener =
+        turbo_stream_listen(ctx, TURBO_STREAM_TCP4, (struct sockaddr *)&addr, 128, on_accept_local);
+    check_not_null(listener);
+    client = turbo_stream_create(ctx, TURBO_STREAM_TCP4);
+    check_not_null(client);
+    check_equal(turbo_stream_connect_addr(client, (struct sockaddr *)&addr, on_connect, on_close),
+                0);
+
+    counts.connected = &s_connected;
+    counts.expected_connected = 0;
+    counts.accepted = &s_accepted_count;
+    counts.expected_accepted = 1;
+    stream_test_run_while(ctx, stream_test_counts_pending, &counts, 3000);
+    check_equal(s_connected, 0);
+    check_equal(s_accepted_count, 1);
+    check_not_null(s_accepted_client);
+    check_equal(turbo_stream_recv_start(s_accepted_client, on_recv_capture), 0);
+
+    waits_before = atomic_load_explicit(&s_epoll_wait_calls, memory_order_relaxed);
+    usleep(100000);
+    waits_after = atomic_load_explicit(&s_epoll_wait_calls, memory_order_relaxed);
+    idle_waits = waits_after - waits_before;
+
+    send_status = turbo_stream_send(client, payload, sizeof(payload) - 1u);
+    recv_status = stream_test_run_until(ctx, &s_recv_hit, 1, 3000);
+
+    turbo_stream_destroy(client);
+    turbo_stream_destroy(s_accepted_client);
+    turbo_stream_listener_close(listener);
+    stream_test_destroy_context_robust(ctx);
+
+    check_less_equal(idle_waits, 8u);
+    check_equal(send_status, 0);
+    check_equal(recv_status, 0);
+    check_equal(s_recv_len, sizeof(payload) - 1u);
+    check_equal(memcmp(s_recv_data, payload, sizeof(payload) - 1u), 0);
+  }
+
   it("should not create one epoll worker thread per tcp connection") {
     int thread_growth = -1;
     check_equal(stream_test_backend_thread_growth(TURBO_TCP_BACKEND_EPOLL, &thread_growth),

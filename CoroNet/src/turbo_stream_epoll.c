@@ -36,6 +36,7 @@
 
 #define EVENT_RING_BYTES (64 * 1024)
 #define DATA_RING_SIZE   (128 * 1024)
+#define STREAM_EPOLL_BASE_EVENTS (EPOLLIN | EPOLLRDHUP)
 
 typedef enum {
     SEP_OP_NONE,
@@ -63,6 +64,7 @@ typedef struct stream_epoll_state_s {
     coro_context_t *ctx;
     int fd;
     int fd_armed;
+    uint32_t registered_events;
     int connected;
     int connect_event_posted; /* Connect completion is one-shot even if a terminal event follows. */
     int send_pending;
@@ -170,6 +172,7 @@ static void epoll_release_context_ref(stream_epoll_state_t *st);
 static void epoll_stream_cleanup_task(void *arg1, void *arg2);
 static void epoll_listener_cleanup_task(void *arg1, void *arg2);
 static int epoll_register_state(stream_epoll_state_t *st, uint32_t events);
+static int epoll_reactor_update_stream_events(stream_epoll_state_t *st, uint32_t events);
 static int epoll_reactor_wake_state(stream_epoll_state_t *st);
 static int epoll_reactor_close_state(stream_epoll_state_t *st);
 static void epoll_reactor_free_state(stream_epoll_state_t *st);
@@ -192,7 +195,33 @@ static void epoll_disarm_stream_fd(stream_epoll_state_t *st) {
         (void)epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_DEL, st->fd, NULL);
     }
     st->fd_armed = 0;
+    st->registered_events = 0;
     st->registered = 0;
+}
+
+/* The shared reactor thread is the sole owner of kernel interest changes after
+ * a stream is armed.  Keeping EPOLLOUT enabled on an idle TCP socket makes
+ * epoll_wait return immediately forever because writable is level-triggered. */
+static int epoll_reactor_update_stream_events(stream_epoll_state_t *st, uint32_t events) {
+    struct epoll_event ev;
+
+    if (!st || st->is_listener || st->fd < 0 || !st->fd_armed) {
+        return TURBO_EINVAL;
+    }
+    if (st->registered_events == events) {
+        return 0;
+    }
+
+    memset(&ev, 0, sizeof(ev));
+    ev.events = events;
+    ev.data.ptr = st;
+    if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_MOD, st->fd, &ev) != 0) {
+        int status = -errno;
+        post_event(st, SEP_OP_ERROR, status, NULL, NULL, 0);
+        return status;
+    }
+    st->registered_events = events;
+    return 0;
 }
 
 static void post_terminal_event(stream_epoll_state_t *st, int status) {
@@ -427,6 +456,8 @@ static void post_write_complete_if_drained(stream_epoll_state_t *st) {
 }
 
 static void flush_write_ring(stream_epoll_state_t *st) {
+    int write_blocked = 0;
+
     while (!epoll_is_stopping(st)) {
         size_t avail = 0;
         uint8_t *data = ring_spsc_read_acquire(&st->write_ring, &avail);
@@ -440,7 +471,11 @@ static void flush_write_ring(stream_epoll_state_t *st) {
             continue;
         }
 
-        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)) {
+        if (sent < 0 && errno == EINTR) {
+            continue;
+        }
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            write_blocked = 1;
             break;
         }
 
@@ -450,6 +485,14 @@ static void flush_write_ring(stream_epoll_state_t *st) {
             post_terminal_event(st, status);
         }
         return;
+    }
+
+    if (!epoll_terminal_is_posted(st) && st->fd_armed) {
+        uint32_t events = STREAM_EPOLL_BASE_EVENTS;
+        if (!st->connect_event_posted || write_blocked) {
+            events |= EPOLLOUT;
+        }
+        (void)epoll_reactor_update_stream_events(st, events);
     }
 
     /* An empty retry pass is significant: it may be the handshake that closes
@@ -592,6 +635,7 @@ static void epoll_reactor_close_fd(stream_epoll_state_t *st) {
         (void)epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_DEL, st->fd, NULL);
     }
     st->fd_armed = 0;
+    st->registered_events = 0;
     st->registered = 0;
     if (st->fd >= 0) {
         if (st->close_fd_on_cleanup) {
@@ -646,17 +690,27 @@ static void epoll_reactor_process_commands(void) {
                 ev.events = cmd.events;
                 ev.data.ptr = st;
                 if (!st->fd_armed) {
-                    if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_ADD, st->fd, &ev) == 0 ||
-                        errno == EEXIST) {
+                    int ctl_rc = epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_ADD, st->fd, &ev);
+                    if (ctl_rc != 0 && errno == EEXIST) {
+                        ctl_rc = epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_MOD, st->fd, &ev);
+                    }
+                    if (ctl_rc == 0) {
                         st->fd_armed = 1;
+                        st->registered_events = cmd.events;
                         st->registered = 1;
                     } else {
+                        st->registered_events = 0;
                         st->registered = 0;
                         post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
                     }
-                } else if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_MOD, st->fd, &ev) != 0 &&
-                           errno != ENOENT) {
-                    post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+                } else {
+                    if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_MOD, st->fd, &ev) != 0) {
+                        if (errno != ENOENT) {
+                            post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+                        }
+                    } else {
+                        st->registered_events = cmd.events;
+                    }
                 }
                 break;
 
@@ -1131,7 +1185,8 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a,
         st->connect_event_posted = 1;
     }
 
-    rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
+    rc = epoll_register_state(st, STREAM_EPOLL_BASE_EVENTS |
+                                  (connect_rc < 0 ? EPOLLOUT : 0));
     if (rc != 0) {
         close(st->fd);
         st->fd = -1;
@@ -1165,7 +1220,7 @@ static int epoll_send(turbo_stream_t *s, const char *d, size_t l) {
     if (rc != 0) {
         return rc;
     }
-    rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
+    rc = epoll_register_state(st, STREAM_EPOLL_BASE_EVENTS);
     if (rc != 0) {
         return rc;
     }
@@ -1209,7 +1264,7 @@ static int epoll_recv_start(turbo_stream_t *s) {
         return TURBO_EINVAL;
     }
     if (!st->is_listener) {
-        rc = epoll_register_state(st, EPOLLIN | EPOLLOUT | EPOLLRDHUP);
+        rc = epoll_register_state(st, STREAM_EPOLL_BASE_EVENTS);
         if (rc != 0) {
             return rc;
         }

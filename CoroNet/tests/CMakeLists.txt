@@ -20,6 +20,10 @@ cmake_add_test(
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+  target_link_options(test_stream PRIVATE "-Wl,--wrap=epoll_wait")
+endif()
+
 if(TURBO_HAS_VSOCK AND TURBO_ENABLE_VSOCK_INTEGRATION_TESTS)
   target_compile_definitions(test_vsock PRIVATE
                              TURBO_VSOCK_INTEGRATION_TESTS=1)

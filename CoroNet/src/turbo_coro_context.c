@@ -34,6 +34,9 @@ enum {
 
 int turbo_tcp_backend_is_available(int backend);
 int turbo_udp_backend_is_available(int backend);
+#if defined(__linux__) && defined(TURBO_HAS_IO_URING) && !defined(__ANDROID__)
+int turbo_stream_io_uring_runtime_available(void);
+#endif
 
 static turbo_tcp_backend_t turbo_tcp_backend_default(void) {
 #ifdef _WIN32
@@ -1261,7 +1264,7 @@ int turbo_tcp_backend_is_available(int backend) {
 #elif defined(__linux__) || defined(__ANDROID__)
   #if !defined(__ANDROID__) && TURBO_HAS_IO_URING
   case TURBO_TCP_BACKEND_IO_URING:
-    return 1;
+    return turbo_stream_io_uring_runtime_available();
   #endif
   case TURBO_TCP_BACKEND_EPOLL:
     return 1;

@@ -36,6 +36,19 @@
 #define STREAM_URING_CMD_QUEUE_SLOTS 4096
 #define STREAM_URING_ACCEPT_DEPTH 8
 
+int turbo_stream_io_uring_runtime_available(void) {
+  struct io_uring ring;
+  int rc;
+
+  memset(&ring, 0, sizeof(ring));
+  rc = io_uring_queue_init(STREAM_URING_QUEUE_DEPTH, &ring, 0);
+  if (rc < 0) {
+    return 0;
+  }
+  io_uring_queue_exit(&ring);
+  return 1;
+}
+
 typedef struct stream_uring_base_s stream_uring_base_t;
 typedef struct stream_uring_reactor_s stream_uring_reactor_t;
 

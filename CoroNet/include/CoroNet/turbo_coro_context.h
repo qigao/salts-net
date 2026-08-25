@@ -177,7 +177,9 @@ CORONET_C_API void coro_context_set_persistent(coro_context_t *ctx, int persiste
  *
  * @param ctx      Context to modify
  * @param backend  Preferred backend
- * @return 0 on success, negative error code on failure
+ * @return 0 on success, TURBO_EPROTONOSUPPORT when the backend was not built
+ *         or cannot be initialized in the current runtime environment, or
+ *         another negative error code on failure
  */
 CORONET_C_API int coro_context_set_tcp_backend(coro_context_t *ctx, turbo_tcp_backend_t backend);
 

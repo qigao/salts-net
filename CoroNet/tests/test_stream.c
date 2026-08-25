@@ -15,6 +15,9 @@
   #include <unistd.h>
   #if defined(__linux__)
     #include <stdatomic.h>
+    #if defined(TURBO_HAS_IO_URING)
+      #include <liburing.h>
+    #endif
     #include <sys/epoll.h>
   #endif
 #endif
@@ -28,6 +31,21 @@ int __wrap_epoll_wait(int epfd, struct epoll_event *events, int maxevents, int t
   atomic_fetch_add_explicit(&s_epoll_wait_calls, 1u, memory_order_relaxed);
   return __real_epoll_wait(epfd, events, maxevents, timeout);
 }
+
+#if defined(TURBO_HAS_IO_URING)
+static int stream_test_io_uring_runtime_available(void) {
+  struct io_uring ring;
+  int rc;
+
+  memset(&ring, 0, sizeof(ring));
+  rc = io_uring_queue_init(1024u, &ring, 0);
+  if (rc < 0) {
+    return 0;
+  }
+  io_uring_queue_exit(&ring);
+  return 1;
+}
+#endif
 #endif
 
 static int s_connected = -1;
@@ -1094,11 +1112,21 @@ static int stream_test_backend_thread_growth(turbo_tcp_backend_t backend, int *t
     return TURBO_EINVAL;
   }
   *thread_growth = -1;
+  memset(s_accepted_clients, 0, sizeof(s_accepted_clients));
+  memset(connect_status, 0xFF, sizeof(connect_status));
+  s_accepted_client = NULL;
+  s_accepted_count = 0;
+  s_connect_count = 0;
 
   ctx = coro_context_create(NULL);
-  if (!ctx || coro_context_set_tcp_backend(ctx, backend) != TURBO_OK) {
+  if (!ctx) {
     goto cleanup;
   }
+  rc = coro_context_set_tcp_backend(ctx, backend);
+  if (rc != TURBO_OK) {
+    goto cleanup;
+  }
+  rc = 1;
 
   threads_before = stream_test_read_thread_count();
   if (threads_before <= 0) {
@@ -1115,11 +1143,6 @@ static int stream_test_backend_thread_growth(turbo_tcp_backend_t backend, int *t
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
   addr.sin_port = htons(port);
-  memset(s_accepted_clients, 0, sizeof(s_accepted_clients));
-  memset(connect_status, 0xFF, sizeof(connect_status));
-  s_accepted_client = NULL;
-  s_accepted_count = 0;
-  s_connect_count = 0;
 
   listener =
       turbo_stream_listen(ctx, TURBO_STREAM_TCP4, (struct sockaddr *)&addr, 128, on_accept_local);
@@ -1583,13 +1606,15 @@ spec("Stream") {
   }
 
 #if defined(__linux__) || defined(__ANDROID__)
-  it("should reject unavailable io_uring tcp backend") {
+  it("should select io_uring only when the runtime permits it") {
     coro_context_t *ctx = coro_context_create(NULL);
     check(ctx != NULL);
-  #if defined(TURBO_HAS_IO_URING)
-    check_equal(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING), 0);
+  #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
+    check_equal(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING),
+                stream_test_io_uring_runtime_available() ? TURBO_OK : TURBO_EPROTONOSUPPORT);
   #else
-    check_equal(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING), TURBO_ENOTSUP);
+    check_equal(coro_context_set_tcp_backend(ctx, TURBO_TCP_BACKEND_IO_URING),
+                TURBO_EPROTONOSUPPORT);
   #endif
 
     coro_context_destroy(ctx);
@@ -1841,11 +1866,15 @@ spec("Stream") {
 
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
   it("should wake a recv waiter with eof after peer close on io_uring") {
-    check_equal(stream_run_io_uring_recv_eof_scenario(), 0);
+    check_equal(stream_run_io_uring_recv_eof_scenario(),
+                stream_test_io_uring_runtime_available() ? STREAM_IO_URING_EOF_SCENARIO_OK
+                                                         : STREAM_IO_URING_EOF_SCENARIO_BACKEND);
   }
 
   it("should wake a timeout-looping recv waiter with eof after peer close on io_uring") {
-    check_equal(stream_run_io_uring_timeout_loop_recv_eof_scenario(), 0);
+    check_equal(stream_run_io_uring_timeout_loop_recv_eof_scenario(),
+                stream_test_io_uring_runtime_available() ? STREAM_IO_URING_EOF_SCENARIO_OK
+                                                         : STREAM_IO_URING_EOF_SCENARIO_BACKEND);
   }
 #endif
 
@@ -2354,8 +2383,10 @@ spec("Stream") {
   it("should share one io_uring reactor across tcp connections") {
     int thread_growth = -1;
     check_equal(stream_test_backend_thread_growth(TURBO_TCP_BACKEND_IO_URING, &thread_growth),
-                 TURBO_OK);
-    check_less_equal(thread_growth, 3);
+                stream_test_io_uring_runtime_available() ? TURBO_OK : TURBO_EPROTONOSUPPORT);
+    if (stream_test_io_uring_runtime_available()) {
+      check_less_equal(thread_growth, 3);
+    }
   }
   #endif
 #endif

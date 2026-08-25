@@ -49,8 +49,6 @@ static void datagram_maybe_free(turbo_datagram_t *d) {
 static const turbo_datagram_backend_ops_t *datagram_platform_default_ops(void) {
 #if defined(_WIN32)
   return &turbo_datagram_iocp_ops;
-#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
-  return &turbo_datagram_io_uring_ops;
 #elif defined(__linux__) || defined(__ANDROID__)
   return &turbo_datagram_epoll_ops;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
@@ -68,10 +66,11 @@ static const turbo_datagram_backend_ops_t *datagram_udp_backend_ops(
 #ifdef _WIN32
   case TURBO_UDP_BACKEND_IOCP:
     return &turbo_datagram_iocp_ops;
-#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
+#elif defined(__linux__) || defined(__ANDROID__)
+#if !defined(__ANDROID__) && TURBO_HAS_IO_URING
   case TURBO_UDP_BACKEND_IO_URING:
     return &turbo_datagram_io_uring_ops;
-#elif defined(__linux__) || defined(__ANDROID__)
+#endif
   case TURBO_UDP_BACKEND_EPOLL:
     return &turbo_datagram_epoll_ops;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)

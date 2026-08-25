@@ -20,8 +20,12 @@ cmake_add_test(
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${WEBSOCKET_PARSER_INCLUDE_DIRS})
 
+# These tests redirect only their own epoll_wait references. Production binaries
+# and the CoroNet libraries continue to call libc directly.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_link_options(test_stream PRIVATE "-Wl,--wrap=epoll_wait")
+  target_link_options(test_coronet_epoll_fault_logging
+                      PRIVATE "-Wl,--wrap=epoll_wait")
 endif()
 
 if(TURBO_HAS_VSOCK AND TURBO_ENABLE_VSOCK_INTEGRATION_TESTS)

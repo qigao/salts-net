@@ -140,7 +140,7 @@ static void dg_epoll_report_error(dg_epoll_state_t *st, int status) {
   dg_epoll_post_wait(st, on_dg_error);
 }
 
-static void *dg_epoll_worker(void *arg) {
+static void dg_epoll_worker(void *arg) {
   dg_epoll_state_t *st = (dg_epoll_state_t *)arg;
   struct epoll_event events[1];
   uint8_t buf[65536];
@@ -208,7 +208,6 @@ static void *dg_epoll_worker(void *arg) {
     }
   }
 
-  return NULL;
 }
 
 static void on_dg_bounce(void *arg1, void *arg2) {
@@ -429,7 +428,7 @@ static int dg_epoll_recv_start(turbo_datagram_t *d) {
   }
 
   st->stopping = 0;
-  rc = turbo_thread_create(&st->worker_thread, (turbo_thread_cb)dg_epoll_worker, st);
+  rc = turbo_thread_create(&st->worker_thread, dg_epoll_worker, st);
   if (rc == 0) {
     st->recv_started = 1;
   }

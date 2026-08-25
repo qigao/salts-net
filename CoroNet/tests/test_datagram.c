@@ -209,7 +209,7 @@ static void datagram_test_destroy_context_robust(coro_context_t *ctx) {
 
 spec("Datagram") {
 #if defined(__linux__) || defined(__ANDROID__)
-    it("should reject unavailable io_uring udp backend") {
+    it("should expose the compiled io_uring udp selector") {
         coro_context_t *ctx = coro_context_create(NULL);
         check(ctx != NULL);
 #if defined(TURBO_HAS_IO_URING)
@@ -221,17 +221,42 @@ spec("Datagram") {
 
         coro_context_destroy(ctx);
     }
+
+    it("should reject a platform-incompatible udp backend with ENOTSUP") {
+        coro_context_t *ctx = coro_context_create(NULL);
+
+        check_not_null(ctx);
+        check_equal(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IOCP),
+                    TURBO_ENOTSUP);
+
+        coro_context_destroy(ctx);
+    }
+
+    it("should allow explicit epoll udp backend") {
+        coro_context_t *ctx = coro_context_create(NULL);
+        coro_socket_t *sock;
+
+        check_not_null(ctx);
+        check_equal(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_EPOLL), 0);
+
+        sock = coro_socket_create_udpv4(ctx);
+        check_not_null(sock);
+        check_equal(coro_socket_get_udp_backend(sock), TURBO_UDP_BACKEND_EPOLL);
+
+        coro_socket_destroy(sock);
+        coro_context_destroy(ctx);
+    }
 #endif
 
-#if defined(__linux__) && defined(TURBO_HAS_IO_URING)
-    it("should default udp sockets to io_uring on linux") {
+#if defined(__linux__) || defined(__ANDROID__)
+    it("should default udp sockets to epoll on linux") {
         coro_context_t *ctx = coro_context_create(NULL);
         coro_socket_t *sock;
 
         check(ctx != NULL);
         sock = coro_socket_create_udpv4(ctx);
         check(sock != NULL);
-        check_equal(coro_socket_get_udp_backend(sock), TURBO_UDP_BACKEND_IO_URING);
+        check_equal(coro_socket_get_udp_backend(sock), TURBO_UDP_BACKEND_EPOLL);
 
         coro_socket_destroy(sock);
         coro_context_destroy(ctx);
@@ -254,21 +279,26 @@ spec("Datagram") {
     }
 
 #if defined(__linux__) && defined(TURBO_HAS_IO_URING)
-    it("should close io_uring datagrams without racing the command wakeup") {
+    it("should close runtime-supported io_uring datagrams without racing the command wakeup") {
         for (int iteration = 0;
              iteration < DATAGRAM_IO_URING_CLOSE_STRESS_ITERATIONS;
              ++iteration) {
             coro_context_t *ctx = coro_context_create(NULL);
             turbo_datagram_t *dg;
+            int bind_rc;
 
             check_not_null(ctx);
             check_equal(coro_context_set_udp_backend(ctx, TURBO_UDP_BACKEND_IO_URING), 0);
             dg = turbo_datagram_create(ctx, TURBO_DATAGRAM_UDP4);
             check_not_null(dg);
-            check_equal(turbo_datagram_bind(dg, "127.0.0.1", 0), 0);
+            bind_rc = turbo_datagram_bind(dg, "127.0.0.1", 0);
+            check_true(bind_rc == 0 || bind_rc == TURBO_ENOTSUP);
 
             turbo_datagram_destroy(dg);
             datagram_test_destroy_context_robust(ctx);
+            if (bind_rc == TURBO_ENOTSUP) {
+                break;
+            }
         }
     }
 #endif

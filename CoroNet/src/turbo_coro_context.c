@@ -611,7 +611,7 @@ int coro_context_set_udp_backend(coro_context_t *ctx, turbo_udp_backend_t backen
   }
 
   if (!turbo_udp_backend_is_available(backend)) {
-    return TURBO_EPROTONOSUPPORT;
+    return TURBO_ENOTSUP;
   }
 
   ctx->udp_backend = backend;
@@ -1281,10 +1281,11 @@ int turbo_udp_backend_is_available(int backend) {
 #ifdef _WIN32
   case TURBO_UDP_BACKEND_IOCP:
     return 1;
-#elif defined(__linux__) && !defined(__ANDROID__) && TURBO_HAS_IO_URING
+#elif defined(__linux__) || defined(__ANDROID__)
+#if !defined(__ANDROID__) && TURBO_HAS_IO_URING
   case TURBO_UDP_BACKEND_IO_URING:
     return 1;
-#elif defined(__linux__) || defined(__ANDROID__)
+#endif
   case TURBO_UDP_BACKEND_EPOLL:
     return 1;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)

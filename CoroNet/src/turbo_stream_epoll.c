@@ -17,6 +17,7 @@
 #include "CoroNet/turbo_coro_context.h"
 #include "CoroNet/turbo_coro_internal.h"
 #include "turbo_buffer.h"
+#include "turbo_error.h"
 #include "turbo_thread.h"
 #include "tlog.h"
 #include "ring_buffer_spsc.h"
@@ -37,6 +38,7 @@
 #define EVENT_RING_BYTES (64 * 1024)
 #define DATA_RING_SIZE   (128 * 1024)
 #define STREAM_EPOLL_BASE_EVENTS (EPOLLIN | EPOLLRDHUP)
+#define CORONET_EPOLL_LOG_COMPONENT "CoroNet.epoll"
 
 typedef enum {
     SEP_OP_NONE,
@@ -45,6 +47,7 @@ typedef enum {
     SEP_OP_READ,
     SEP_OP_WRITE,
     SEP_OP_CLOSE,
+    SEP_OP_ACCEPT_ERROR,
     SEP_OP_ERROR,
     SEP_OP_TICK
 } ep_op_kind_t;
@@ -159,6 +162,8 @@ static void epoll_request_stop(stream_epoll_state_t *st) {
 static void post_event(stream_epoll_state_t *st, ep_op_kind_t kind, int status,
                        void *extra, const struct sockaddr *peer_addr,
                        socklen_t peer_addr_len);
+static void post_listener_terminal_event(stream_epoll_state_t *st, ep_op_kind_t kind,
+                                         int status);
 static void epoll_post_wait(stream_epoll_state_t *st, coro_post_fn fn, void *arg1, void *arg2);
 static void on_epoll_event_bounce(void *arg1, void *arg2);
 static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev);
@@ -240,6 +245,27 @@ static void post_terminal_event(stream_epoll_state_t *st, int status) {
     atomic_store_explicit(&st->terminal_delivery_status, status, memory_order_release);
     epoll_disarm_stream_fd(st);
     post_event(st, SEP_OP_READ, status, NULL, NULL, 0);
+}
+
+static void post_listener_terminal_event(stream_epoll_state_t *st, ep_op_kind_t kind,
+                                         int status) {
+    int expected = 0;
+
+    if (!st || !st->is_listener || epoll_is_stopping(st)) {
+        return;
+    }
+    if (!atomic_compare_exchange_strong_explicit(&st->terminal_posted, &expected, 1,
+                                                  memory_order_acq_rel,
+                                                  memory_order_acquire)) {
+        return;
+    }
+    if (st->fd >= 0 && st->fd_armed && g_reactor.epoll_fd >= 0) {
+        (void)epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_DEL, st->fd, NULL);
+    }
+    st->fd_armed = 0;
+    st->registered_events = 0;
+    st->registered = 0;
+    post_event(st, kind, status, NULL, NULL, 0);
 }
 
 static uint8_t *wait_ring_write(stream_epoll_state_t *st, ring_spsc_t *ring, size_t size) {
@@ -351,11 +377,6 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
         atomic_store_explicit(&st->read_event_pending, 0, memory_order_release);
     }
 
-    if (ev->status != 0) {
-        TLOG_DEBUGF("epoll[{:p}] read-event stream={:p} status={:d} bytes={:d}", (void *)st,
-                   (void *)s, ev->status, (int)bytes);
-    }
-
     if (!s || s->closing || s->finalized) {
         if (data && bytes > 0) {
             ring_spsc_read_release(&st->read_ring, bytes);
@@ -390,6 +411,13 @@ static void handle_read_event(stream_epoll_state_t *st, stream_epoll_event_t *ev
         }
     } else if (ev->status != 0) {
         atomic_store_explicit(&st->terminal_delivery_status, 0, memory_order_release);
+        if (ev->status != TURBO_EOF) {
+            TURBO_LOG_DEBUGF(
+                tlog_peek_default(), CORONET_EPOLL_LOG_COMPONENT,
+                "stream-terminal operation=read status={:d} reason={:s} "
+                "action=close-stream fd={:d}",
+                ev->status, turbo_strerror(ev->status), st->fd);
+        }
         s->on_recv(s, NULL, NULL);
     }
 
@@ -551,10 +579,26 @@ static void on_epoll_event_bounce(void *arg1, void *arg2) {
                         handle_write_event(st, ev);
                         break;
                     }
+                    case SEP_OP_ACCEPT_ERROR: {
+                        if (st->is_listener) {
+                            turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
+                            TURBO_LOG_ERRORF(tlog_get_default(), CORONET_EPOLL_LOG_COMPONENT,
+                                             "listener-accept-failed operation=accept "
+                                             "status={:d} reason={:s} "
+                                             "action=close-listener fd={:d}",
+                                             ev->status, turbo_strerror(ev->status), st->fd);
+                            turbo_stream_listener_close(l);
+                        }
+                        break;
+                    }
                     case SEP_OP_ERROR: {
                         if (st->is_listener) {
                             turbo_stream_listener_t *l = (turbo_stream_listener_t *)st->owner;
-                            TLOG_ERRORF("epoll listener accept failed: {:d}", ev->status);
+                            TURBO_LOG_ERRORF(tlog_get_default(), CORONET_EPOLL_LOG_COMPONENT,
+                                             "listener-reactor-failed operation=epoll_ctl "
+                                             "status={:d} reason={:s} "
+                                             "action=close-listener fd={:d}",
+                                             ev->status, turbo_strerror(ev->status), st->fd);
                             turbo_stream_listener_close(l);
                         }
                         break;
@@ -699,14 +743,24 @@ static void epoll_reactor_process_commands(void) {
                         st->registered_events = cmd.events;
                         st->registered = 1;
                     } else {
+                        int status = -errno;
                         st->registered_events = 0;
                         st->registered = 0;
-                        post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+                        if (st->is_listener) {
+                            post_listener_terminal_event(st, SEP_OP_ERROR, status);
+                        } else {
+                            post_event(st, SEP_OP_ERROR, status, NULL, NULL, 0);
+                        }
                     }
                 } else {
                     if (epoll_ctl(g_reactor.epoll_fd, EPOLL_CTL_MOD, st->fd, &ev) != 0) {
                         if (errno != ENOENT) {
-                            post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+                            int status = -errno;
+                            if (st->is_listener) {
+                                post_listener_terminal_event(st, SEP_OP_ERROR, status);
+                            } else {
+                                post_event(st, SEP_OP_ERROR, status, NULL, NULL, 0);
+                            }
                         }
                     } else {
                         st->registered_events = cmd.events;
@@ -762,7 +816,7 @@ static void stream_epoll_handle_listener_event(stream_epoll_state_t *st) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
                 return;
             }
-            post_event(st, SEP_OP_ERROR, -errno, NULL, NULL, 0);
+            post_listener_terminal_event(st, SEP_OP_ACCEPT_ERROR, -errno);
             return;
         }
 
@@ -785,7 +839,7 @@ static void stream_epoll_handle_listener_event(stream_epoll_state_t *st) {
             close(client_fd);
         }
 
-        post_event(st, SEP_OP_ERROR, TURBO_ENOMEM, NULL, NULL, 0);
+        post_listener_terminal_event(st, SEP_OP_ACCEPT_ERROR, TURBO_ENOMEM);
         return;
     }
 }
@@ -877,10 +931,18 @@ static void stream_epoll_reactor_worker(void *arg) {
         int nfds = epoll_wait(g_reactor.epoll_fd, events, 64, -1);
 
         if (nfds < 0) {
+            int wait_errno;
+            int status;
+
             if (errno == EINTR) {
                 continue;
             }
-            TLOG_ERRORF("epoll reactor wait failed err={:d}", errno);
+            wait_errno = errno;
+            status = -wait_errno;
+            TURBO_LOG_ERRORF(tlog_get_default(), CORONET_EPOLL_LOG_COMPONENT,
+                             "reactor-wait-failed operation=epoll_wait status={:d} "
+                             "reason={:s} action=stop-reactor",
+                             status, turbo_strerror(status));
             break;
         }
 
@@ -1096,8 +1158,6 @@ static void epoll_release_context_ref(stream_epoll_state_t *st) {
 
 static void epoll_shutdown_state(stream_epoll_state_t *st) {
     if (!st) return;
-    TLOG_DEBUGF("epoll[{:p}] shutdown-begin fd={:d} listener={:d}",
-               (void *)st, st->fd, st->is_listener);
     epoll_request_stop(st);
     if (st->fd >= 0) {
         (void)shutdown(st->fd, SHUT_RDWR);
@@ -1194,7 +1254,6 @@ static int epoll_connect(turbo_stream_t *s, const struct sockaddr *a,
     }
 
     if (connect_rc == 0) {
-        TLOG_DEBUGF("epoll[{:p}] connect-immediate fd={:d}", (void *)st, st->fd);
         post_event(st, SEP_OP_CONNECT, 0, NULL, NULL, 0);
     }
 
@@ -1308,8 +1367,6 @@ static void epoll_close(turbo_stream_t *s) {
         return;
     }
 
-    TLOG_DEBUGF("epoll[{:p}] stream-close stream={:p} fd={:d}", (void *)st, (void *)s, st->fd);
-
     epoll_shutdown_state(st);
 }
 
@@ -1375,9 +1432,6 @@ static void epoll_listener_close(turbo_stream_listener_t *l) {
         turbo_stream_listener_finalize_close(l);
         return;
     }
-
-    TLOG_DEBUGF("epoll[{:p}] listener-close listener={:p} fd={:d}", (void *)st, (void *)l,
-               st->fd);
 
     epoll_shutdown_state(st);
 }

@@ -57,7 +57,8 @@ set(BACKEND_FILES_IO_URING
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_io_uring.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_pipe_unix.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_io_uring.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_datagram_epoll.c)
 
 set(BACKEND_FILES_EPOLL
     ${CMAKE_CURRENT_SOURCE_DIR}/src/turbo_stream_epoll.c

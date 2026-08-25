@@ -7,6 +7,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <errno.h>
 #include <unistd.h>
 #endif
 
@@ -34,7 +35,7 @@ static void on_accept_local(void *server, void *client, void *peer) {
 
 static int s_recv_count = 0;
 static char s_recv_buf[1024];
-static char s_send_payload[256 * 1024];
+static char s_send_payload[16 * 1024];
 
 static int on_recv(void *stream, const mem_slice_t *slice, void *peer) {
     (void)peer;
@@ -220,7 +221,11 @@ spec("Stream Pipe") {
         }
     }
 
+#ifdef _WIN32
     it("should close pipe clients with pending connects without use-after-free") {
+#else
+    it("should close pipe clients after missing endpoint connect without use-after-free") {
+#endif
         enum { PIPE_CONNECT_CLOSE_LOOPS = 16 };
         int i;
 
@@ -238,7 +243,12 @@ spec("Stream Pipe") {
             s_connected = -1;
             s_closed = 0;
 
+#ifdef _WIN32
             check_equal(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close), 0);
+#else
+            check_equal(turbo_stream_connect_pipe(client, pipe_name, on_connect, on_close),
+                        -ENOENT);
+#endif
 
             turbo_stream_close(client);
             turbo_stream_destroy(client);

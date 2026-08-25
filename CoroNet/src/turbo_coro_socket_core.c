@@ -2120,8 +2120,6 @@ turbo_udp_backend_t coro_socket_get_udp_backend(const coro_socket_t *s) {
 
 #ifdef _WIN32
   return TURBO_UDP_BACKEND_IOCP;
-#elif defined(__linux__) && TURBO_HAS_IO_URING
-  return TURBO_UDP_BACKEND_IO_URING;
 #elif defined(__linux__) || defined(__ANDROID__)
   return TURBO_UDP_BACKEND_EPOLL;
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)

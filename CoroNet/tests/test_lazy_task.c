@@ -267,7 +267,7 @@ spec("Lazy Task API") {
         (void)coro_context_run(ctx, TURBO_RUN_NOWAIT);
 
         check_equal(counter, 1);
-        check_equal(turbo_vec_size(&ctx->tasks), 0);
+        check_equal(vec_size(&ctx->tasks), 0);
         robust_context_destroy(ctx);
     }
 }

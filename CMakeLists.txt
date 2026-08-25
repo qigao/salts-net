@@ -52,8 +52,29 @@ find_package(c-ares CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
-find_package(TurboUtils REQUIRED PATHS ${TURBO_UTILS_ROOT})
-find_package(TurboParser CONFIG REQUIRED PATHS "${TURBOPARSER_ROOT}")
+
+foreach(_turbonet_dependency_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT)
+  if(NOT DEFINED ENV{${_turbonet_dependency_root}}
+     OR "$ENV{${_turbonet_dependency_root}}" STREQUAL "")
+    message(FATAL_ERROR
+            "Required dependency root is not defined: ${_turbonet_dependency_root}")
+  endif()
+  if(NOT IS_DIRECTORY "$ENV{${_turbonet_dependency_root}}")
+    message(FATAL_ERROR
+            "${_turbonet_dependency_root} is not a directory: "
+            "$ENV{${_turbonet_dependency_root}}")
+  endif()
+endforeach()
+unset(_turbonet_dependency_root)
+
+find_package(
+  TurboUtils CONFIG REQUIRED
+  PATHS "$ENV{TURBOUTILS_ROOT}"
+  NO_DEFAULT_PATH)
+find_package(
+  TurboParser CONFIG REQUIRED
+  PATHS "$ENV{TURBOPARSER_ROOT}"
+  NO_DEFAULT_PATH)
 
 # Additional components
 add_subdirectory(tools)

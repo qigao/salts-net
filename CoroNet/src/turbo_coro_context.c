@@ -79,19 +79,19 @@ static void destroy_task_now(coro_task_t *task);
 
 #define CORO_TASK_VECTOR_ELEMENT_LIMIT (SIZE_MAX / sizeof(coro_task_t *))
 
-static int coro_status_from_stl(turbo_stl_status status) {
+static int coro_status_from_stl(stl_status status) {
   switch (status) {
-    case TURBO_STL_OK:
+    case STL_OK:
       return TURBO_OK;
-    case TURBO_STL_OUT_OF_MEMORY:
+    case STL_OUT_OF_MEMORY:
       return TURBO_ENOMEM;
-    case TURBO_STL_CAPACITY_EXCEEDED:
+    case STL_CAPACITY_EXCEEDED:
       return TURBO_ERANGE;
-    case TURBO_STL_INVALID_ARGUMENT:
-    case TURBO_STL_EMPTY:
-    case TURBO_STL_NOT_FOUND:
-    case TURBO_STL_TYPE_MISMATCH:
-    case TURBO_STL_TRAIT_MISSING:
+    case STL_INVALID_ARGUMENT:
+    case STL_EMPTY:
+    case STL_NOT_FOUND:
+    case STL_TYPE_MISMATCH:
+    case STL_TRAIT_MISSING:
       return TURBO_EINVAL;
   }
   return TURBO_EINVAL;
@@ -118,7 +118,7 @@ static void coro_context_cleanup_create_failure(coro_context_t *ctx) {
     ctx->pool = NULL;
   }
 
-  turbo_vec_destroy(&ctx->tasks);
+  vec_raw_destroy_storage(&ctx->tasks);
 
   if (ctx->post_queue) {
     if (ctx->post_initialized) {
@@ -175,9 +175,9 @@ coro_context_t *coro_context_create_ex(
   ctx->owns_arena = 1;
 
   /* Initialize lazy task list. Reserve the historical initial capacity. */
-  if (turbo_vec_init_bytes(&ctx->tasks, sizeof(coro_task_t *), _Alignof(coro_task_t *),
-                           CORO_TASK_VECTOR_ELEMENT_LIMIT) != TURBO_STL_OK ||
-      turbo_vec_reserve(&ctx->tasks, 8) != TURBO_STL_OK) {
+  if (vec_init_bytes(&ctx->tasks, sizeof(coro_task_t *), _Alignof(coro_task_t *),
+                     CORO_TASK_VECTOR_ELEMENT_LIMIT) != STL_OK ||
+      vec_reserve(&ctx->tasks, 8) != STL_OK) {
     coro_context_cleanup_create_failure(ctx);
     return NULL;
   }
@@ -450,11 +450,11 @@ void coro_context_destroy(coro_context_t *ctx) {
   }
 
   /* Free remaining tasks owned by this context. */
-  coro_task_t **tasks = (coro_task_t **)turbo_vec_data(&ctx->tasks);
-  for (size_t i = 0; i < turbo_vec_size(&ctx->tasks); ++i) {
+  coro_task_t **tasks = (coro_task_t **)vec_data(&ctx->tasks);
+  for (size_t i = 0; i < vec_size(&ctx->tasks); ++i) {
     destroy_task_now(tasks[i]);
   }
-  turbo_vec_destroy(&ctx->tasks);
+  vec_raw_destroy_storage(&ctx->tasks);
 
   /* Cleanup arena: destroy and free since each context owns its arena */
   if (ctx->arena && ctx->owns_arena) {
@@ -675,33 +675,33 @@ static int remove_task_from_context(coro_context_t *ctx, coro_task_t *task) {
 
   if (!ctx || !task) return TURBO_EINVAL;
 
-  count = turbo_vec_size(&ctx->tasks);
+  count = vec_size(&ctx->tasks);
   index = task->context_index;
-  tasks = (coro_task_t **)turbo_vec_data(&ctx->tasks);
+  tasks = (coro_task_t **)vec_data(&ctx->tasks);
   if (index >= count || !tasks || tasks[index] != task) return TURBO_EINVAL;
 
   moved = tasks[count - 1];
-  if (turbo_vec_swap_remove(&ctx->tasks, index, NULL) != TURBO_STL_OK) return TURBO_EINVAL;
+  if (vec_swap_remove(&ctx->tasks, index, NULL) != STL_OK) return TURBO_EINVAL;
   if (moved != task) moved->context_index = index;
   task->context_index = SIZE_MAX;
   return TURBO_OK;
 }
 
 static int register_task_with_context(coro_context_t *ctx, coro_task_t *task) {
-  turbo_stl_status status;
+  stl_status status;
 
   if (!ctx || !task) return TURBO_EINVAL;
 
-  status = turbo_vec_push(&ctx->tasks, &task);
-  if (status != TURBO_STL_OK) return coro_status_from_stl(status);
-  task->context_index = turbo_vec_size(&ctx->tasks) - 1;
+  status = vec_push(&ctx->tasks, &task);
+  if (status != STL_OK) return coro_status_from_stl(status);
+  task->context_index = vec_size(&ctx->tasks) - 1;
   return TURBO_OK;
 }
 
 static void cleanup_done_tasks(coro_context_t *ctx) {
-  size_t i = turbo_vec_size(&ctx->tasks);
+  size_t i = vec_size(&ctx->tasks);
   while (i > 0) {
-    coro_task_t **tasks = (coro_task_t **)turbo_vec_data(&ctx->tasks);
+    coro_task_t **tasks = (coro_task_t **)vec_data(&ctx->tasks);
     coro_task_t *task = tasks[--i];
     if (coro_task_is_done(task) && task->ref_count == 0) {
       if (remove_task_from_context(ctx, task) == TURBO_OK) {

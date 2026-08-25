@@ -165,7 +165,7 @@ struct coro_context_s {
   atomic_int external_refs;           /**< Background transport threads holding ctx alive */
 
   /* Lazy tasks (deferred execution) */
-  turbo_vec_t tasks; /**< Dense vector of coro_task_t* owned by this context */
+  vec_t tasks; /**< Dense vector of coro_task_t* owned by this context */
 
   /* Scheduler for managed coroutines */
   coro_scheduler_t *scheduler; /**< Built-in scheduler for spawn/when_all */

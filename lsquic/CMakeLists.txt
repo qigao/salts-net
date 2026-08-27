@@ -195,6 +195,15 @@ if(LSQUIC_EMBEDDED)
     endif()
     set(LSQUIC_TLS_DEFINITIONS HAVE_BORINGSSL)
     set(LSQUIC_LINK_LIBRARIES OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
+    if(NOT WIN32)
+        # Static BoringSSL contains C++ objects, while LSQUIC's public consumers
+        # may otherwise be linked with the C driver and omit the C++ runtime.
+        set(_lsquic_cxx_runtime_libraries ${CMAKE_CXX_IMPLICIT_LINK_LIBRARIES})
+        list(REMOVE_ITEM _lsquic_cxx_runtime_libraries
+             ${CMAKE_C_IMPLICIT_LINK_LIBRARIES})
+        list(APPEND LSQUIC_LINK_LIBRARIES ${_lsquic_cxx_runtime_libraries})
+        unset(_lsquic_cxx_runtime_libraries)
+    endif()
 else()
 IF(DEFINED BORINGSSL_DIR AND NOT DEFINED LIBSSL_DIR)
     SET(LIBSSL_DIR ${BORINGSSL_DIR})

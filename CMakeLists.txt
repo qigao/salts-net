@@ -53,7 +53,7 @@ find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-foreach(_turbonet_dependency_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT)
+foreach(_turbonet_dependency_root IN ITEMS ROCIDA_ROOT TURBOPARSER_ROOT)
   if(NOT DEFINED ENV{${_turbonet_dependency_root}}
      OR "$ENV{${_turbonet_dependency_root}}" STREQUAL "")
     message(FATAL_ERROR
@@ -67,10 +67,14 @@ foreach(_turbonet_dependency_root IN ITEMS TURBOUTILS_ROOT TURBOPARSER_ROOT)
 endforeach()
 unset(_turbonet_dependency_root)
 
+unset(Rocida_DIR CACHE)
+unset(Rocida_DIR)
 find_package(
-  TurboUtils CONFIG REQUIRED
-  PATHS "$ENV{TURBOUTILS_ROOT}"
+  Rocida CONFIG REQUIRED
+  PATHS "$ENV{ROCIDA_ROOT}"
   NO_DEFAULT_PATH)
+unset(TurboParser_DIR CACHE)
+unset(TurboParser_DIR)
 find_package(
   TurboParser CONFIG REQUIRED
   PATHS "$ENV{TURBOPARSER_ROOT}"

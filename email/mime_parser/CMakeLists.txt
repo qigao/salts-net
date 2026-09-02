@@ -18,7 +18,7 @@ cmake_config_target(
 
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboUtils::Core OpenSSL::SSL OpenSSL::Crypto
+  PUBLIC Rocida::Core OpenSSL::SSL OpenSSL::Crypto
   PRIVATE uri_parser TurboNet::Asn1Parser TurboNet::Crypto)
 
 target_include_directories(
@@ -51,6 +51,6 @@ cmake_add_test(
   test/test_mime_mhtml.c
   LIBS
   ${TARGET_NAME}
-  TurboUtils::TinyTest
+  Rocida::TinyTest
   FOLDER
   "email/${TARGET_NAME}/test")

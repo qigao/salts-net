@@ -26,7 +26,7 @@ find_package(OpenSSL REQUIRED)
 
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC TurboUtils::Core TurboNet::CoroNet OpenSSL::Crypto
+  PUBLIC Rocida::Core TurboNet::CoroNet OpenSSL::Crypto
   PRIVATE asn1_parser)
 
 set_target_properties(

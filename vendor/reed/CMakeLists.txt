@@ -14,5 +14,5 @@ set_target_properties(
 
 cmake_add_test(
   SOURCES tests/test_gf256.c
-  LIBS reed TurboUtils::TinyTest
+  LIBS reed Rocida::TinyTest
   FOLDER "vendor/reed/test")

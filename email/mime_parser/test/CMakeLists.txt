@@ -11,7 +11,7 @@ set(MIME_TESTS
 foreach(TEST_NAME IN LISTS MIME_TESTS)
   add_executable(${TEST_NAME} ${TEST_NAME}.c)
 
-  target_link_libraries(${TEST_NAME} mime_parser TurboUtils::TinyTest)
+  target_link_libraries(${TEST_NAME} mime_parser Rocida::TinyTest)
 
   target_include_directories(${TEST_NAME}
                              PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)

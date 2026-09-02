@@ -10,9 +10,9 @@ cmake_add_test(
   FOLDER
   "${TARGET_NAME}/test"
   LIBS
-  TurboUtils::TinyTest
+  Rocida::TinyTest
   ${STATIC_TARGET_NAME}
-  TurboUtils::Core
+  Rocida::Core
   TurboNet::WebSocketParser
   OpenSSL::SSL
   ${TURBONET_CARES_TARGET}

@@ -54,7 +54,7 @@ set_source_files_properties(
   PROPERTIES COMPILE_DEFINITIONS
              "WITH_STDLIB;WITH_LIBECC_CONFIG_OVERRIDE;WITH_CURVE_WEI448;WITH_HASH_SHAKE256;WITH_SIG_EDDSA448;WORDSIZE=64")
 
-target_link_libraries(turbo_crypto PRIVATE TurboUtils::Core)
+target_link_libraries(turbo_crypto PRIVATE Rocida::Core)
 
 set_target_properties(
   turbo_crypto

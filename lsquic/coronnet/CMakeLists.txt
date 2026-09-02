@@ -45,7 +45,7 @@ if(BUILD_TESTS AND BUILD_TESTING)
   cmake_add_test(
     SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/test_turbo_lsquic.c
     FOLDER "LSQUIC/test"
-    LIBS TurboNet_LSQUIC TurboUtils::TinyTest
+    LIBS TurboNet_LSQUIC Rocida::TinyTest
     INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
              ${CMAKE_CURRENT_SOURCE_DIR}/../../../CoroNet/include)
 endif()

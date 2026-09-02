@@ -53,28 +53,10 @@ find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(PkgConfig REQUIRED)
 
-foreach(_turbonet_dependency_root IN ITEMS ROCIDA_ROOT TURBOPARSER_ROOT)
-  if(NOT DEFINED ENV{${_turbonet_dependency_root}}
-     OR "$ENV{${_turbonet_dependency_root}}" STREQUAL "")
-    message(FATAL_ERROR
-            "Required dependency root is not defined: ${_turbonet_dependency_root}")
-  endif()
-  if(NOT IS_DIRECTORY "$ENV{${_turbonet_dependency_root}}")
-    message(FATAL_ERROR
-            "${_turbonet_dependency_root} is not a directory: "
-            "$ENV{${_turbonet_dependency_root}}")
-  endif()
-endforeach()
-unset(_turbonet_dependency_root)
-
-unset(Rocida_DIR CACHE)
-unset(Rocida_DIR)
 find_package(
   Rocida CONFIG REQUIRED
   PATHS "$ENV{ROCIDA_ROOT}"
-  NO_DEFAULT_PATH)
-unset(TurboParser_DIR CACHE)
-unset(TurboParser_DIR)
+  NO_DEFAULT_PATH) 
 find_package(
   TurboParser CONFIG REQUIRED
   PATHS "$ENV{TURBOPARSER_ROOT}"

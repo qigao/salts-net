@@ -46,7 +46,7 @@ cmake_add_test(
     test/test_email_pop3.c
     test/test_email_message.c
     test/test_email_integration.c
-  LIBS   ${TARGET_NAME} TurboUtils::TinyTest
+  LIBS   ${TARGET_NAME} Rocida::TinyTest
   FOLDER "email/test")
 
 # ── Examples ───────────────────────────────────────────────────────────

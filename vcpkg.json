@@ -17,6 +17,7 @@
       "name": "liburing",
       "platform": "linux & !android"
     },
+    "llhttp",
     {
       "name": "pkgconf",
       "host": true

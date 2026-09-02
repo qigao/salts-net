@@ -4,7 +4,7 @@ cmake_add_source(BENCHMARK_SOURCES DIRS ${CMAKE_CURRENT_SOURCE_DIR}
 cmake_add_benchmark(
   SOURCES ${BENCHMARK_SOURCES}
   FOLDER "${TARGET_NAME}/benchmarks"
-  LIBS TurboUtils::TinyTest ${STATIC_TARGET_NAME} TurboUtils::Core
+  LIBS Rocida::TinyTest ${STATIC_TARGET_NAME} Rocida::Core
        TurboNet::WebSocketParser
        ${TURBONET_CARES_TARGET} OpenSSL::SSL OpenSSL::Crypto
   INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../include

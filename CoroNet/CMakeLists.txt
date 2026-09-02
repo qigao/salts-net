@@ -143,8 +143,8 @@ foreach(tgt ${TARGET_NAME} ${STATIC_TARGET_NAME})
 
   target_link_libraries(
     ${tgt}
-    PUBLIC TurboUtils::Core TurboParser::Parser Threads::Threads
-    PRIVATE TurboUtils::STL kcp::kcp ${TURBONET_CARES_TARGET}
+    PUBLIC Rocida::Core TurboParser::Parser Threads::Threads
+    PRIVATE Rocida::STL kcp::kcp ${TURBONET_CARES_TARGET}
             OpenSSL::SSL OpenSSL::Crypto
              TurboNet::WebSocketParser TurboNet::Crypto reed
   )

@@ -23,7 +23,7 @@ target_include_directories(
 target_link_libraries(
   turbo_ice
   PUBLIC TurboNet::CoroNet
-  PRIVATE OpenSSL::SSL OpenSSL::Crypto TurboUtils::Core)
+  PRIVATE OpenSSL::SSL OpenSSL::Crypto Rocida::Core)
 if(WIN32)
   target_link_libraries(turbo_ice PRIVATE ws2_32 iphlpapi psapi)
 endif()
@@ -42,17 +42,17 @@ cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ice)
 
 if(BUILD_TESTS)
   add_executable(test_stun tests/test_stun.c)
-  target_link_libraries(test_stun PRIVATE turbo_ice TurboUtils::TinyTest)
+  target_link_libraries(test_stun PRIVATE turbo_ice Rocida::TinyTest)
   add_test(NAME stun COMMAND test_stun)
   set_target_properties(test_stun PROPERTIES FOLDER ice/tests)
 
   add_executable(test_turn tests/test_turn.c)
-  target_link_libraries(test_turn PRIVATE turbo_ice TurboUtils::TinyTest)
+  target_link_libraries(test_turn PRIVATE turbo_ice Rocida::TinyTest)
   add_test(NAME turn COMMAND test_turn)
   set_target_properties(test_turn PROPERTIES FOLDER ice/tests)
 
   add_executable(test_ice tests/test_ice.c)
-  target_link_libraries(test_ice PRIVATE turbo_ice TurboUtils::TinyTest)
+  target_link_libraries(test_ice PRIVATE turbo_ice Rocida::TinyTest)
   if(WIN32)
     target_link_libraries(test_ice PRIVATE ws2_32)
   endif()

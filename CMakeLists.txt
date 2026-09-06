@@ -107,3 +107,16 @@ install(
   FILE SaltsNetTargets.cmake
   NAMESPACE SaltsNet::
   DESTINATION "lib/cmake/SaltsNet")
+
+if(BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
+  configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake.in"
+    "${CMAKE_BINARY_DIR}/VerifyInstalledPackage.cmake"
+    @ONLY)
+  add_test(
+    NAME saltsnet_installed_package
+    COMMAND "${CMAKE_COMMAND}" -P
+            "${CMAKE_BINARY_DIR}/VerifyInstalledPackage.cmake")
+  set_tests_properties(saltsnet_installed_package
+                       PROPERTIES LABELS package RUN_SERIAL TRUE)
+endif()

@@ -1,0 +1,187 @@
+cmake_minimum_required(VERSION 3.20)
+
+set(saltsnet_stage_dir "@CMAKE_BINARY_DIR@/package-test/install")
+set(saltsnet_consumer_build_dir "@CMAKE_BINARY_DIR@/package-test/consumer")
+
+file(REMOVE_RECURSE "${saltsnet_stage_dir}" "${saltsnet_consumer_build_dir}")
+
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" --install "@CMAKE_BINARY_DIR@" --prefix
+          "${saltsnet_stage_dir}" --config "@CMAKE_BUILD_TYPE@"
+  RESULT_VARIABLE saltsnet_install_status
+  OUTPUT_VARIABLE saltsnet_install_output
+  ERROR_VARIABLE saltsnet_install_error)
+if(NOT saltsnet_install_status EQUAL 0)
+  message(FATAL_ERROR
+          "SaltsNet staging install failed (${saltsnet_install_status}).\n"
+          "stdout:\n${saltsnet_install_output}\n"
+          "stderr:\n${saltsnet_install_error}")
+endif()
+
+file(GLOB_RECURSE saltsnet_staged_paths
+     LIST_DIRECTORIES TRUE
+     "${saltsnet_stage_dir}/*")
+set(saltsnet_legacy_paths)
+foreach(saltsnet_staged_path IN LISTS saltsnet_staged_paths)
+  get_filename_component(saltsnet_staged_name "${saltsnet_staged_path}" NAME)
+  string(TOLOWER "${saltsnet_staged_name}" saltsnet_staged_name_lower)
+  if(saltsnet_staged_name_lower MATCHES "coronet|turbonet")
+    list(APPEND saltsnet_legacy_paths "${saltsnet_staged_path}")
+  endif()
+endforeach()
+if(saltsnet_legacy_paths)
+  list(JOIN saltsnet_legacy_paths "\n  " saltsnet_legacy_display)
+  message(FATAL_ERROR
+          "Staged SaltsNet package contains legacy paths:\n  ${saltsnet_legacy_display}")
+endif()
+
+set(saltsnet_package_cmake_dir
+    "${saltsnet_stage_dir}/lib/cmake/SaltsNet")
+file(GLOB saltsnet_package_cmake_files
+     "${saltsnet_package_cmake_dir}/*.cmake")
+if(NOT saltsnet_package_cmake_files)
+  message(FATAL_ERROR
+          "Staged SaltsNet package has no CMake files: ${saltsnet_package_cmake_dir}")
+endif()
+foreach(saltsnet_package_cmake_file IN LISTS saltsnet_package_cmake_files)
+  file(READ "${saltsnet_package_cmake_file}" saltsnet_package_cmake_content)
+  foreach(saltsnet_legacy_token IN ITEMS "TurboNet::" "CoroNet" "turbo_coro")
+    string(FIND "${saltsnet_package_cmake_content}" "${saltsnet_legacy_token}"
+           saltsnet_legacy_offset)
+    if(NOT saltsnet_legacy_offset EQUAL -1)
+      message(FATAL_ERROR
+              "Staged package file ${saltsnet_package_cmake_file} contains legacy token: ${saltsnet_legacy_token}")
+    endif()
+  endforeach()
+endforeach()
+
+set(saltsnet_configure_command
+    "@CMAKE_COMMAND@"
+    -S "@CMAKE_SOURCE_DIR@/test/package_consumer"
+    -B "${saltsnet_consumer_build_dir}"
+    -G "@CMAKE_GENERATOR@"
+    "-DSALTSNET_PACKAGE_ROOT=${saltsnet_stage_dir}"
+    "-DSALTSNET_EXPECT_LSQUIC=@SALTSNET_ENABLE_LSQUIC@")
+if(NOT "@CMAKE_BUILD_TYPE@" STREQUAL "")
+  list(APPEND saltsnet_configure_command
+       "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@")
+endif()
+if(NOT "@CMAKE_TOOLCHAIN_FILE@" STREQUAL "")
+  list(APPEND saltsnet_configure_command
+       "-DCMAKE_TOOLCHAIN_FILE=@CMAKE_TOOLCHAIN_FILE@")
+endif()
+if(NOT "@CMAKE_PREFIX_PATH@" STREQUAL "")
+  set(saltsnet_prefix_path "@CMAKE_PREFIX_PATH@")
+  set(saltsnet_prefix_path_count 0)
+  foreach(saltsnet_prefix IN LISTS saltsnet_prefix_path)
+    list(APPEND saltsnet_configure_command
+         "-DSALTSNET_EXPECT_PREFIX_${saltsnet_prefix_path_count}=${saltsnet_prefix}")
+    math(EXPR saltsnet_prefix_path_count "${saltsnet_prefix_path_count} + 1")
+  endforeach()
+  string(REPLACE ";" "\\;" saltsnet_prefix_path_argument
+         "${saltsnet_prefix_path}")
+  list(APPEND saltsnet_configure_command
+       "-DCMAKE_PREFIX_PATH=${saltsnet_prefix_path_argument}"
+       "-DSALTSNET_EXPECT_PREFIX_COUNT=${saltsnet_prefix_path_count}")
+endif()
+if(NOT "@VCPKG_INSTALLED_DIR@" STREQUAL "")
+  list(APPEND saltsnet_configure_command
+       "-DVCPKG_INSTALLED_DIR=@VCPKG_INSTALLED_DIR@")
+endif()
+if(NOT "@VCPKG_TARGET_TRIPLET@" STREQUAL "")
+  list(APPEND saltsnet_configure_command
+       "-DVCPKG_TARGET_TRIPLET=@VCPKG_TARGET_TRIPLET@")
+endif()
+
+execute_process(
+  COMMAND ${saltsnet_configure_command}
+  RESULT_VARIABLE saltsnet_configure_status
+  OUTPUT_VARIABLE saltsnet_configure_output
+  ERROR_VARIABLE saltsnet_configure_error)
+if(NOT saltsnet_configure_status EQUAL 0)
+  message(FATAL_ERROR
+          "SaltsNet package consumer configure failed (${saltsnet_configure_status}).\n"
+          "stdout:\n${saltsnet_configure_output}\n"
+          "stderr:\n${saltsnet_configure_error}")
+endif()
+
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" --build "${saltsnet_consumer_build_dir}"
+          --config "@CMAKE_BUILD_TYPE@" --parallel
+  RESULT_VARIABLE saltsnet_build_status
+  OUTPUT_VARIABLE saltsnet_build_output
+  ERROR_VARIABLE saltsnet_build_error)
+if(NOT saltsnet_build_status EQUAL 0)
+  message(FATAL_ERROR
+          "SaltsNet package consumer build failed (${saltsnet_build_status}).\n"
+          "stdout:\n${saltsnet_build_output}\n"
+          "stderr:\n${saltsnet_build_error}")
+endif()
+
+set(saltsnet_consumer_executable
+    "${saltsnet_consumer_build_dir}/bin/saltsnet_package_consumer_test@CMAKE_EXECUTABLE_SUFFIX@")
+if(NOT EXISTS "${saltsnet_consumer_executable}")
+  message(FATAL_ERROR
+          "SaltsNet package consumer executable is missing: ${saltsnet_consumer_executable}")
+endif()
+
+if(NOT DEFINED ENV{SALTS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
+  message(FATAL_ERROR "SALTS_ROOT must name the Salts install prefix")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" saltsnet_salts_root)
+set(saltsnet_vcpkg_runtime_root
+    "@VCPKG_INSTALLED_DIR@/@VCPKG_TARGET_TRIPLET@")
+
+if(WIN32)
+  set(saltsnet_runtime_variable PATH)
+  set(saltsnet_runtime_directories
+      "${saltsnet_stage_dir}/bin"
+      "${saltsnet_salts_root}/bin")
+  if("@CMAKE_BUILD_TYPE@" STREQUAL "Debug")
+    list(APPEND saltsnet_runtime_directories
+         "${saltsnet_vcpkg_runtime_root}/debug/bin")
+  endif()
+  if(@ENABLE_ASAN@)
+    find_file(saltsnet_asan_runtime
+              NAMES clang_rt.asan_dynamic-x86_64.dll
+              PATHS ENV PATH
+              NO_DEFAULT_PATH)
+    if(NOT saltsnet_asan_runtime)
+      message(FATAL_ERROR
+              "The active toolchain PATH does not contain the ASan runtime")
+    endif()
+    get_filename_component(saltsnet_asan_runtime_dir
+                           "${saltsnet_asan_runtime}" DIRECTORY)
+    list(APPEND saltsnet_runtime_directories
+         "${saltsnet_asan_runtime_dir}")
+  endif()
+  list(APPEND saltsnet_runtime_directories
+       "${saltsnet_vcpkg_runtime_root}/bin")
+  list(JOIN saltsnet_runtime_directories ";" saltsnet_runtime_path)
+else()
+  set(saltsnet_runtime_variable LD_LIBRARY_PATH)
+  set(saltsnet_runtime_directories
+      "${saltsnet_stage_dir}/lib"
+      "${saltsnet_salts_root}/lib")
+  if("@CMAKE_BUILD_TYPE@" STREQUAL "Debug")
+    list(APPEND saltsnet_runtime_directories
+         "${saltsnet_vcpkg_runtime_root}/debug/lib")
+  endif()
+  list(APPEND saltsnet_runtime_directories
+       "${saltsnet_vcpkg_runtime_root}/lib")
+  list(JOIN saltsnet_runtime_directories ":" saltsnet_runtime_path)
+endif()
+
+execute_process(
+  COMMAND "@CMAKE_COMMAND@" -E env
+          "${saltsnet_runtime_variable}=${saltsnet_runtime_path}"
+          "${saltsnet_consumer_executable}"
+  RESULT_VARIABLE saltsnet_run_status
+  OUTPUT_VARIABLE saltsnet_run_output
+  ERROR_VARIABLE saltsnet_run_error)
+if(NOT saltsnet_run_status EQUAL 0)
+  message(FATAL_ERROR
+          "SaltsNet package consumer failed (${saltsnet_run_status}).\n"
+          "stdout:\n${saltsnet_run_output}\n"
+          "stderr:\n${saltsnet_run_error}")
+endif()

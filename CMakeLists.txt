@@ -22,7 +22,7 @@ get_filename_component(CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}" ABSOLUTE)
 
 # Project description
 set(PROJECT_DESCRIPTION "High-performance networking library")
-set(PROJECT_HOMEPAGE_URL "https://github.com/qigao/turbonet")
+set(PROJECT_HOMEPAGE_URL "https://github.com/qigao/salts-net")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Language standards - unified approach

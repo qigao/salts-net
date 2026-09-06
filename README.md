@@ -33,6 +33,12 @@ cmake --build --preset win-release-user --parallel
 ctest --preset win-release-user
 ```
 
+只复验安装包边界（staged SDK、全部导出 target 与外部消费者）：
+
+```powershell
+ctest --preset win-release-user -L package
+```
+
 安装 SaltsNet：
 
 ```powershell

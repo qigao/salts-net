@@ -40,6 +40,8 @@ typedef struct lb_test_peer {
   int status;
   int is_worker;
   int request_mode;
+  size_t response_fragment_size;
+  size_t registration_fragment_size;
 } lb_test_peer_t;
 
 static void lb_test_close(lb_test_socket_t socket_value) {
@@ -107,9 +109,24 @@ static void lb_test_peer_run(void *user) {
   if (socket_value == LB_TEST_INVALID_SOCKET) goto done;
 
   if (peer->is_worker) {
-    if (peer->registration &&
-        lb_test_send_all(socket_value, peer->registration, strlen(peer->registration)) != 0) {
-      goto done;
+    if (peer->registration) {
+      char registration[64];
+      const size_t group_size = strlen(peer->registration);
+      size_t offset = 0u;
+      if (group_size + 1u > sizeof(registration)) goto done;
+      memcpy(registration, peer->registration, group_size);
+      registration[group_size] = '\n';
+      while (offset < group_size + 1u) {
+        size_t fragment_size = peer->registration_fragment_size;
+        if (fragment_size == 0u || fragment_size > group_size + 1u - offset) {
+          fragment_size = group_size + 1u - offset;
+        }
+        if (lb_test_send_all(socket_value, registration + offset, fragment_size) != 0) {
+          goto done;
+        }
+        offset += fragment_size;
+        if (offset < group_size + 1u) salts_sleep_ms(10u);
+      }
     }
     const int exchange_count = peer->exchange_count > 0 ? peer->exchange_count : 1;
     for (int exchange = 0; exchange < exchange_count; ++exchange) {
@@ -118,7 +135,20 @@ static void lb_test_peer_run(void *user) {
       if (peer->request_mode) input[0] = (char)((unsigned char)input[0] | 0x80u);
       if (peer->prefix &&
           lb_test_send_all(socket_value, peer->prefix, strlen(peer->prefix)) != 0) goto done;
-      if (lb_test_send_all(socket_value, input, (size_t)received) != 0) goto done;
+      if (peer->response_fragment_size == 0u) {
+        if (lb_test_send_all(socket_value, input, (size_t)received) != 0) goto done;
+      } else {
+        size_t offset = 0u;
+        while (offset < (size_t)received) {
+          size_t fragment_size = peer->response_fragment_size;
+          if (fragment_size > (size_t)received - offset) {
+            fragment_size = (size_t)received - offset;
+          }
+          if (lb_test_send_all(socket_value, input + offset, fragment_size) != 0) goto done;
+          offset += fragment_size;
+          if (offset < (size_t)received) salts_sleep_ms(10u);
+        }
+      }
     }
     peer->status = 0;
   } else {
@@ -265,6 +295,19 @@ spec("Salts CNet load balancer") {
       check(memcmp(client.response, "[API]", 5u) == 0);
     }
 
+    it("waits for a complete fragmented worker registration") {
+      salts_lb_config_t config = salts_lb_config_default();
+      lb_test_peer_t worker = {.is_worker = 1,
+                               .registration = "api",
+                               .registration_fragment_size = 1u,
+                               .prefix = "[API]"};
+      lb_test_peer_t client = {.request = "API:list"};
+      config.route = lb_test_route;
+      lb_test_run_pair(&config, &worker, &client);
+      check(client.response_size >= 5u);
+      check(memcmp(client.response, "[API]", 5u) == 0);
+    }
+
     it("rejects filtered sessions without consuming a worker") {
       salts_lb_config_t config = salts_lb_config_default();
       salts_lb_t *lb;
@@ -296,6 +339,23 @@ spec("Salts CNet load balancer") {
       salts_lb_config_t config = salts_lb_config_default();
       lb_test_peer_t worker = {.is_worker = 1, .request_mode = 1};
       lb_test_peer_t client = {.request = request, .request_size = sizeof(request) - 1u};
+      config.mode = SALTS_LB_MODE_REQUEST;
+      config.frame = lb_test_tlv_frame;
+      lb_test_run_pair(&config, &worker, &client);
+      check_equal(client.response_size, sizeof(request) - 1u);
+      check_equal((unsigned char)client.response[0], 0x81u);
+      check(memcmp(client.response + 3, "hello", 5u) == 0);
+    }
+
+    it("frames a worker response split across TCP receives") {
+      static const char request[] = "\x01\x00\x05hello";
+      salts_lb_config_t config = salts_lb_config_default();
+      lb_test_peer_t worker = {.is_worker = 1,
+                               .request_mode = 1,
+                               .response_fragment_size = 1u};
+      lb_test_peer_t client = {.request = request,
+                               .request_size = sizeof(request) - 1u,
+                               .expected_response_size = sizeof(request) - 1u};
       config.mode = SALTS_LB_MODE_REQUEST;
       config.frame = lb_test_tlv_frame;
       lb_test_run_pair(&config, &worker, &client);

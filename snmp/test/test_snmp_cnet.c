@@ -29,7 +29,8 @@ typedef enum snmp_test_agent_behavior_e {
   SNMP_TEST_AGENT_RESPOND = 0,
   SNMP_TEST_AGENT_STALE_THEN_RESPOND,
   SNMP_TEST_AGENT_DROP_RESPONSE,
-  SNMP_TEST_AGENT_MALFORMED_RESPONSE
+  SNMP_TEST_AGENT_MALFORMED_RESPONSE,
+  SNMP_TEST_AGENT_END_OF_MIB
 } snmp_test_agent_behavior_t;
 
 typedef struct snmp_test_agent_s {
@@ -51,6 +52,7 @@ typedef struct snmp_test_v3_agent_s {
   snmp_test_socket_t socket;
   int status;
   snmp_security_level_t security_level;
+  snmp_security_level_t response_security_level;
   const char *security_name;
   uint32_t response_time_offset;
   snmp_pdu_type_t expected_request_type;
@@ -91,6 +93,7 @@ static void snmp_test_agent_run(void *user) {
       0xA2, 0x1B, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x10,
       0x30, 0x0E, 0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x04,
       0x02, 'o',  'k'};
+  size_t response_size = sizeof(response);
   snmp_test_agent_t *agent = (snmp_test_agent_t *)user;
   struct sockaddr_storage peer;
 #if defined(_WIN32)
@@ -130,10 +133,18 @@ static void snmp_test_agent_run(void *user) {
     response[17] = 1u;
   } else if (agent->behavior == SNMP_TEST_AGENT_MALFORMED_RESPONSE) {
     response[0] = 0xFFu;
+  } else if (agent->behavior == SNMP_TEST_AGENT_END_OF_MIB) {
+    response[1] = 0x26u;
+    response[14] = 0x19u;
+    response[25] = 0x0Eu;
+    response[27] = 0x0Cu;
+    response[39] = SNMP_TYPE_ENDOFMIBVIEW;
+    response[40] = 0u;
+    response_size -= 2u;
   }
   agent->status =
-      sendto(agent->socket, (const char *)response, (int)sizeof(response), 0,
-             (const struct sockaddr *)&peer, peer_size) == (int)sizeof(response)
+      sendto(agent->socket, (const char *)response, (int)response_size, 0,
+             (const struct sockaddr *)&peer, peer_size) == (int)response_size
           ? 0
           : -1;
 }
@@ -203,9 +214,13 @@ static void snmp_test_v3_agent_run(void *user) {
     if (snmp_build_v3_query(exchange == 0 ? SNMP_PDU_REPORT
                                           : SNMP_PDU_GET_RESPONSE,
                             exchange + 1, &oid, 1u, &params,
-                            exchange == 0 ? NULL : auth_user,
+                            exchange == 0 ||
+                                    agent->response_security_level ==
+                                        SNMP_SEC_LEVEL_NOAUTH_NOPRIV
+                                ? NULL
+                                : auth_user,
                             exchange == 0 ? SNMP_SEC_LEVEL_NOAUTH_NOPRIV
-                                          : agent->security_level,
+                                          : agent->response_security_level,
                             packet, &response_len) != SNMP_BUILD_OK ||
         sendto(agent->socket, (const char *)packet, (int)response_len, 0,
                (const struct sockaddr *)&peer, peer_size) != (int)response_len) {
@@ -311,8 +326,9 @@ static snmp_test_exchange_t snmp_test_exchange(snmp_test_agent_behavior_t behavi
 }
 
 static snmp_test_v3_exchange_t snmp_test_v3_exchange(
-    snmp_security_level_t security_level, uint32_t response_time_offset,
-    snmp_pdu_type_t request_type) {
+    snmp_security_level_t security_level,
+    snmp_security_level_t response_security_level,
+    uint32_t response_time_offset, snmp_pdu_type_t request_type) {
   snmp_test_v3_exchange_t exchange = {.status = SNMP_CLIENT_ERROR_NETWORK,
                                       .agent_status = -1};
   snmp_test_agent_t socket_owner;
@@ -328,6 +344,7 @@ static snmp_test_v3_exchange_t snmp_test_v3_exchange(
   agent.socket = socket_owner.socket;
   agent.status = -1;
   agent.security_level = security_level;
+  agent.response_security_level = response_security_level;
   agent.security_name = authenticated ? "authuser" : "public";
   agent.response_time_offset = response_time_offset;
   agent.expected_request_type = request_type;
@@ -375,6 +392,51 @@ static snmp_test_v3_exchange_t snmp_test_v3_exchange(
   return exchange;
 }
 
+static void snmp_test_walk_callback(const snmp_oid_t *oid,
+                                    const snmp_varbind_t *varbind,
+                                    void *user_data) {
+  (void)oid;
+  (void)varbind;
+  (void)user_data;
+}
+
+static int snmp_test_walk_to_end_of_mib(void) {
+  snmp_test_agent_t agent;
+  salts_thread_t thread = NULL;
+  snmp_client_t *client = NULL;
+  snmp_oid_t root = {0};
+  uint16_t port = 0u;
+  int walk_count = -1;
+
+  if (snmp_test_agent_open(&agent, &port) != 0) return -1;
+  agent.behavior = SNMP_TEST_AGENT_END_OF_MIB;
+  agent.expected_request_type = SNMP_PDU_GET_NEXT_REQUEST;
+  if (salts_thread_create(&thread, snmp_test_agent_run, &agent) != 0) {
+    snmp_test_agent_close(&agent);
+    return -1;
+  }
+  {
+    const snmp_client_config_t config = {.host = "127.0.0.1",
+                                         .port = port,
+                                         .community = "public",
+                                         .version = SNMP_VERSION_2C,
+                                         .timeout_ms = 1000u,
+                                         .retries = 0u,
+                                         .recv_buffer_size = 1024u};
+    client = snmp_client_create(&config);
+  }
+  if (client != NULL && snmp_oid_from_string("1.3.6.1.2.1.1", &root) == 0) {
+    walk_count = snmp_client_walk(client, &root, snmp_test_walk_callback, NULL);
+  }
+
+  snmp_client_destroy(client);
+  snmp_oid_free(&root);
+  if (salts_thread_join(&thread) != 0 || agent.status != 0) walk_count = -1;
+  salts_thread_destroy(&thread);
+  snmp_test_agent_close(&agent);
+  return walk_count;
+}
+
 spec("SNMP CNet transport") {
   it("performs a loopback request without a coroutine context") {
     const snmp_test_exchange_t exchange =
@@ -417,7 +479,8 @@ spec("SNMP CNet transport") {
 
   it("discovers the authoritative engine before a v3 noAuth request") {
     const snmp_test_v3_exchange_t exchange =
-        snmp_test_v3_exchange(SNMP_SEC_LEVEL_NOAUTH_NOPRIV, 0u,
+        snmp_test_v3_exchange(SNMP_SEC_LEVEL_NOAUTH_NOPRIV,
+                              SNMP_SEC_LEVEL_NOAUTH_NOPRIV, 0u,
                               SNMP_PDU_GET_REQUEST);
     check_equal(exchange.status, SNMP_CLIENT_OK);
     check_equal(exchange.version, SNMP_VERSION_3);
@@ -427,16 +490,34 @@ spec("SNMP CNet transport") {
 
   it("localizes credentials after v3 engine discovery") {
     const snmp_test_v3_exchange_t exchange =
-        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
+        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV,
+                              SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
                               SNMP_PDU_GET_REQUEST);
     check_equal(exchange.status, SNMP_CLIENT_OK);
     check_equal(exchange.pdu_type, SNMP_PDU_GET_RESPONSE);
     check_equal(exchange.agent_status, 0);
   }
 
+  it("rejects an authNoPriv response that omits authentication") {
+    const snmp_test_v3_exchange_t exchange = snmp_test_v3_exchange(
+        SNMP_SEC_LEVEL_AUTH_NOPRIV, SNMP_SEC_LEVEL_NOAUTH_NOPRIV, 0u,
+        SNMP_PDU_GET_REQUEST);
+    check_equal(exchange.status, SNMP_CLIENT_ERROR_RESPONSE);
+    check_equal(exchange.agent_status, 0);
+  }
+
+  it("rejects an authPriv response that omits privacy") {
+    const snmp_test_v3_exchange_t exchange = snmp_test_v3_exchange(
+        SNMP_SEC_LEVEL_AUTH_PRIV, SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
+        SNMP_PDU_GET_REQUEST);
+    check_equal(exchange.status, SNMP_CLIENT_ERROR_RESPONSE);
+    check_equal(exchange.agent_status, 0);
+  }
+
   it("rejects an authenticated v3 response outside the engine time window") {
     const snmp_test_v3_exchange_t exchange =
-        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV, 1000u,
+        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV,
+                              SNMP_SEC_LEVEL_AUTH_NOPRIV, 1000u,
                               SNMP_PDU_GET_REQUEST);
     check_equal(exchange.status, SNMP_CLIENT_ERROR_RESPONSE);
     check_equal(exchange.agent_status, 0);
@@ -444,7 +525,8 @@ spec("SNMP CNet transport") {
 
   it("encrypts and decrypts a v3 authPriv exchange") {
     const snmp_test_v3_exchange_t exchange =
-        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_PRIV, 0u,
+        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_PRIV,
+                              SNMP_SEC_LEVEL_AUTH_PRIV, 0u,
                               SNMP_PDU_GET_REQUEST);
     check_equal(exchange.status, SNMP_CLIENT_OK);
     check_equal(exchange.pdu_type, SNMP_PDU_GET_RESPONSE);
@@ -453,7 +535,8 @@ spec("SNMP CNet transport") {
 
   it("sends a v3 GetNextRequest after discovery") {
     const snmp_test_v3_exchange_t exchange =
-        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
+        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV,
+                              SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
                               SNMP_PDU_GET_NEXT_REQUEST);
     check_equal(exchange.status, SNMP_CLIENT_OK);
     check_equal(exchange.pdu_type, SNMP_PDU_GET_RESPONSE);
@@ -462,10 +545,35 @@ spec("SNMP CNet transport") {
 
   it("sends a typed v3 SetRequest after discovery") {
     const snmp_test_v3_exchange_t exchange =
-        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
+        snmp_test_v3_exchange(SNMP_SEC_LEVEL_AUTH_NOPRIV,
+                              SNMP_SEC_LEVEL_AUTH_NOPRIV, 0u,
                               SNMP_PDU_SET_REQUEST);
     check_equal(exchange.status, SNMP_CLIENT_OK);
     check_equal(exchange.pdu_type, SNMP_PDU_GET_RESPONSE);
     check_equal(exchange.agent_status, 0);
+  }
+
+  it("rejects AES-256 before opening the transport") {
+    const snmp_client_config_t config = {
+        .host = "127.0.0.1",
+        .port = 161u,
+        .community = "public",
+        .version = SNMP_VERSION_3,
+        .timeout_ms = 1000u,
+        .retries = 0u,
+        .recv_buffer_size = 1024u,
+        .security_name = "authuser",
+        .auth_password = "authpass",
+        .auth_protocol = SNMP_AUTH_SHA1,
+        .priv_password = "privpass",
+        .priv_protocol = SNMP_PRIV_AES256,
+        .security_level = SNMP_SEC_LEVEL_AUTH_PRIV};
+    snmp_client_t *client = snmp_client_create(&config);
+    check_null(client);
+    snmp_client_destroy(client);
+  }
+
+  it("releases an end-of-MIB walk response exactly once") {
+    check_equal(snmp_test_walk_to_end_of_mib(), 0);
   }
 }

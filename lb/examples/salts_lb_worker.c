@@ -45,8 +45,15 @@ static void worker_on_state(void *user, cnet_connection connection,
   if (state == CNET_CONNECTION_CONNECTED) {
     worker->connected = 1;
     if (worker->group && worker->group[0]) {
-      if (cnet_send(&worker->client, worker->connection, worker->group,
-                    strlen(worker->group)) != SALTS_OK) worker->failed = 1;
+      const size_t group_size = strlen(worker->group);
+      if (group_size + 1u > WORKER_MAX_MESSAGE_BYTES) {
+        worker->failed = 1;
+      } else {
+        memcpy(worker->output, worker->group, group_size);
+        worker->output[group_size] = '\n';
+        if (cnet_send(&worker->client, worker->connection, worker->output,
+                      group_size + 1u) != SALTS_OK) worker->failed = 1;
+      }
     } else if (cnet_receive(&worker->client, worker->connection, 1u) != SALTS_OK) {
       worker->failed = 1;
     }

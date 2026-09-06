@@ -37,6 +37,7 @@ typedef struct salts_lb_config {
   salts_lb_mode_t mode;
   salts_lb_route_fn route;
   void *route_user;
+  /** Required in REQUEST mode and applied symmetrically to requests and responses. */
   salts_lb_frame_fn frame;
   void *frame_user;
   salts_lb_filter_fn filter;
@@ -57,6 +58,10 @@ typedef struct salts_lb_config {
 SALTSNET_LB_C_API salts_lb_config_t salts_lb_config_default(void);
 SALTSNET_LB_C_API salts_lb_t *salts_lb_create(const salts_lb_config_t *config);
 SALTSNET_LB_C_API int salts_lb_listen(salts_lb_t *lb, const char *host, uint16_t port);
+/**
+ * Accept worker connections. When route is configured, each worker must first
+ * send one newline-terminated group name of at most 63 bytes.
+ */
 SALTSNET_LB_C_API int salts_lb_accept_workers(salts_lb_t *lb, const char *host, uint16_t port);
 SALTSNET_LB_C_API int salts_lb_frontend_port(const salts_lb_t *lb, uint16_t *out_port);
 SALTSNET_LB_C_API int salts_lb_worker_port(const salts_lb_t *lb, uint16_t *out_port);

@@ -1,4 +1,10 @@
 #if defined(_WIN32)
+  #ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN
+  #endif
+  #define NOMINMAX
+  #define NORPC
+  #define NOSERVICE
   #include <winsock2.h>
   #include <ws2tcpip.h>
 typedef SOCKET turn_test_socket_t;
@@ -18,6 +24,10 @@ typedef int turn_test_socket_t;
 
 #include <salts/thread.h>
 
+#include <openssl/evp.h>
+#include <openssl/hmac.h>
+#include <openssl/md5.h>
+
 #include <string.h>
 
 enum { TURN_TEST_TIMEOUT_MS = 2000, TURN_TEST_CLIENT_TIMEOUT_MS = 250 };
@@ -26,6 +36,23 @@ typedef struct turn_test_server_s {
   turn_test_socket_t socket;
   int status;
 } turn_test_server_t;
+
+typedef enum turn_test_integrity_e {
+  TURN_TEST_INTEGRITY_VALID = 0,
+  TURN_TEST_INTEGRITY_MISSING,
+  TURN_TEST_INTEGRITY_MUTATED
+} turn_test_integrity_t;
+
+typedef struct turn_test_auth_server_s {
+  turn_test_socket_t socket;
+  int status;
+  turn_test_integrity_t integrity;
+} turn_test_auth_server_t;
+
+typedef struct turn_test_auth_exchange_s {
+  int client_status;
+  int server_status;
+} turn_test_auth_exchange_t;
 
 static void turn_test_write_u16(uint8_t *buffer, uint16_t value) {
   buffer[0] = (uint8_t)(value >> 8);
@@ -120,6 +147,52 @@ static int turn_test_build_allocate_response(uint8_t *response, const uint8_t *r
   return STUN_HEADER_SIZE + attribute_bytes;
 }
 
+static int turn_test_build_auth_challenge(uint8_t *response,
+                                          const uint8_t *request) {
+  static const char realm[] = "test-realm";
+  static const char nonce[] = "test-nonce";
+  const uint16_t attribute_bytes = 40u;
+
+  memset(response, 0, STUN_HEADER_SIZE + attribute_bytes);
+  turn_test_write_u16(response, TURN_MSG_ALLOCATE_ERROR);
+  turn_test_write_u16(response + 2, attribute_bytes);
+  turn_test_write_u32(response + 4, STUN_MAGIC_COOKIE);
+  memcpy(response + 8, request + 8, sizeof(stun_transaction_id_t));
+  turn_test_write_u16(response + 20, STUN_ATTR_ERROR_CODE);
+  turn_test_write_u16(response + 22, 4u);
+  response[26] = 4u;
+  response[27] = 1u;
+  turn_test_write_u16(response + 28, TURN_ATTR_REALM);
+  turn_test_write_u16(response + 30, (uint16_t)strlen(realm));
+  memcpy(response + 32, realm, strlen(realm));
+  turn_test_write_u16(response + 44, TURN_ATTR_NONCE);
+  turn_test_write_u16(response + 46, (uint16_t)strlen(nonce));
+  memcpy(response + 48, nonce, strlen(nonce));
+  return STUN_HEADER_SIZE + attribute_bytes;
+}
+
+static int turn_test_build_authenticated_allocate_response(
+    uint8_t *response, const uint8_t *request, turn_test_integrity_t integrity) {
+  static const char credentials[] = "test-user:test-realm:test-pass";
+  uint8_t key[16];
+  uint8_t hmac[EVP_MAX_MD_SIZE];
+  unsigned int hmac_len = 0u;
+  int response_size = turn_test_build_allocate_response(response, request);
+
+  if (integrity == TURN_TEST_INTEGRITY_MISSING) return response_size;
+  turn_test_write_u16(response + 2, 44u);
+  turn_test_write_u16(response + response_size, STUN_ATTR_MESSAGE_INTEGRITY);
+  turn_test_write_u16(response + response_size + 2, 20u);
+  MD5((const unsigned char *)credentials, strlen(credentials), key);
+  if (HMAC(EVP_sha1(), key, (int)sizeof(key), response, (size_t)response_size,
+           hmac, &hmac_len) == NULL || hmac_len != 20u) {
+    return -1;
+  }
+  memcpy(response + response_size + 4, hmac, 20u);
+  if (integrity == TURN_TEST_INTEGRITY_MUTATED) response[response_size + 4] ^= 0x80u;
+  return response_size + 24;
+}
+
 static void turn_test_server_run(void *user) {
   turn_test_server_t *server = (turn_test_server_t *)user;
   struct sockaddr_in peer;
@@ -146,6 +219,79 @@ static void turn_test_server_run(void *user) {
   sent = sendto(server->socket, (const char *)response, response_size, 0,
                 (const struct sockaddr *)&peer, (int)peer_size);
   server->status = sent == response_size ? 0 : -1;
+}
+
+static void turn_test_auth_server_run(void *user) {
+  turn_test_auth_server_t *server = (turn_test_auth_server_t *)user;
+  struct sockaddr_in peer;
+#if defined(_WIN32)
+  int peer_size = (int)sizeof(peer);
+#else
+  socklen_t peer_size = (socklen_t)sizeof(peer);
+#endif
+  uint8_t request[TURN_MAX_MESSAGE_SIZE];
+  uint8_t response[STUN_HEADER_SIZE + 44u];
+  int received;
+  int response_size;
+
+  server->status = -1;
+  memset(&peer, 0, sizeof(peer));
+  received = recvfrom(server->socket, (char *)request, (int)sizeof(request), 0,
+                      (struct sockaddr *)&peer, &peer_size);
+  if (received < STUN_HEADER_SIZE) return;
+  response_size = turn_test_build_auth_challenge(response, request);
+  if (sendto(server->socket, (const char *)response, response_size, 0,
+             (const struct sockaddr *)&peer, (int)peer_size) != response_size) {
+    return;
+  }
+
+  received = recvfrom(server->socket, (char *)request, (int)sizeof(request), 0,
+                      (struct sockaddr *)&peer, &peer_size);
+  if (received < STUN_HEADER_SIZE) return;
+  response_size = turn_test_build_authenticated_allocate_response(
+      response, request, server->integrity);
+  if (response_size < 0) return;
+  if (sendto(server->socket, (const char *)response, response_size, 0,
+             (const struct sockaddr *)&peer, (int)peer_size) != response_size) {
+    return;
+  }
+  server->status = 0;
+}
+
+static turn_test_auth_exchange_t turn_test_authenticated_allocate(
+    turn_test_integrity_t integrity) {
+  turn_test_auth_exchange_t exchange = {.client_status = -1, .server_status = -1};
+  turn_test_server_t socket_owner;
+  turn_test_auth_server_t server;
+  salts_thread_t server_thread = NULL;
+  turn_allocation_t allocation;
+  uint16_t port = 0u;
+
+  if (turn_test_server_open(&socket_owner, &port) != 0) return exchange;
+  server.socket = socket_owner.socket;
+  server.status = -1;
+  server.integrity = integrity;
+  if (salts_thread_create(&server_thread, turn_test_auth_server_run, &server) != 0) {
+    turn_test_server_close(&socket_owner);
+    return exchange;
+  }
+  {
+    const turn_client_config_t config = {.server_host = "localhost",
+                                         .server_port = port,
+                                         .username = "test-user",
+                                         .password = "test-pass",
+                                         .timeout_ms = TURN_TEST_CLIENT_TIMEOUT_MS};
+    salts_turn_client_t *client = turn_client_create(&config);
+    if (client != NULL) {
+      memset(&allocation, 0, sizeof(allocation));
+      exchange.client_status = turn_client_allocate(client, &allocation);
+    }
+    turn_client_destroy(client);
+  }
+  if (salts_thread_join(&server_thread) == 0) exchange.server_status = server.status;
+  salts_thread_destroy(&server_thread);
+  turn_test_server_close(&socket_owner);
+  return exchange;
 }
 
 spec("turn") {
@@ -190,6 +336,27 @@ spec("turn") {
       check_equal(allocation.relayed_ip, "203.0.113.9");
       check_equal(allocation.relayed_port, 49152u);
       check_equal(allocation.lifetime, 600u);
+    }
+
+    it("accepts an authenticated allocation response with valid integrity") {
+      const turn_test_auth_exchange_t exchange =
+          turn_test_authenticated_allocate(TURN_TEST_INTEGRITY_VALID);
+      check_equal(exchange.client_status, 0);
+      check_equal(exchange.server_status, 0);
+    }
+
+    it("rejects an authenticated allocation response without integrity") {
+      const turn_test_auth_exchange_t exchange =
+          turn_test_authenticated_allocate(TURN_TEST_INTEGRITY_MISSING);
+      check(exchange.client_status < 0);
+      check_equal(exchange.server_status, 0);
+    }
+
+    it("rejects an authenticated allocation response with mutated integrity") {
+      const turn_test_auth_exchange_t exchange =
+          turn_test_authenticated_allocate(TURN_TEST_INTEGRITY_MUTATED);
+      check(exchange.client_status < 0);
+      check_equal(exchange.server_status, 0);
     }
   }
 

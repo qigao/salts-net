@@ -65,6 +65,12 @@ typedef struct {
 } ice_check_task_state_t;
 
 typedef struct {
+    salts_ice_agent_t *agent;
+    uint64_t timeout_ms;
+    int done;
+} ice_poll_task_state_t;
+
+typedef struct {
     salts_ice_agent_t *self;
     salts_ice_agent_t *remote;
     int candidate_tx;
@@ -78,7 +84,10 @@ typedef struct {
     ice_state_t last_old_state;
     ice_state_t last_new_state;
     ice_state_t close_on_state;
+    int close_callback_on_poll_thread;
 } ice_lifecycle_observer_t;
+
+static SALTS_THREAD_LOCAL int ice_test_poll_thread;
 
 static void on_lifecycle_state_change(salts_ice_agent_t *agent, ice_state_t old_state,
                                       ice_state_t new_state, void *user_data) {
@@ -91,6 +100,9 @@ static void on_lifecycle_state_change(salts_ice_agent_t *agent, ice_state_t old_
     observer->state_change_count++;
     observer->last_old_state = old_state;
     observer->last_new_state = new_state;
+    if (new_state == ICE_STATE_CLOSED) {
+        observer->close_callback_on_poll_thread = ice_test_poll_thread;
+    }
     if (new_state == observer->close_on_state) {
         ice_agent_close(agent);
     }
@@ -177,6 +189,15 @@ static void ice_start_checks_task(void *arg) {
     }
 
     state->rc = ice_agent_start_checks(state->agent);
+    state->done = 1;
+}
+
+static void ice_poll_task(void *arg) {
+    ice_poll_task_state_t *state = (ice_poll_task_state_t *)arg;
+    if (!state || !state->agent) return;
+    ice_test_poll_thread = 1;
+    ice_agent_poll_selected_pair(state->agent, state->timeout_ms);
+    ice_test_poll_thread = 0;
     state->done = 1;
 }
 
@@ -827,6 +848,58 @@ spec("ice") {
 
         memset(&callbacks, 0, sizeof(callbacks));
         ice_agent_set_callbacks(agent, &callbacks);
+        ice_agent_destroy(agent);
+    }
+
+    it("should complete a cross-thread close on the polling owner") {
+        ice_config_t config = ice_default_config();
+        salts_ice_agent_t *agent;
+        test_ice_agent_view_t *view;
+        ice_callbacks_t callbacks;
+        ice_lifecycle_observer_t observer;
+        ice_poll_task_state_t poll_task;
+        salts_thread_t poll_thread = NULL;
+        uint64_t close_started_ms;
+
+        config.allow_loopback = 1;
+        config.stun_server_count = 0;
+        config.turn_server_count = 0;
+        agent = ice_agent_create(&config);
+        check_not_null(agent);
+        check_equal(ice_agent_gather_candidates(agent), 0);
+        view = (test_ice_agent_view_t *)agent;
+        check(view->local_candidate_count > 0);
+
+        memset(&observer, 0, sizeof(observer));
+        observer.close_on_state = ICE_STATE_NEW;
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.on_state_change = on_lifecycle_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        memset(&view->remote_candidates[0], 0, sizeof(view->remote_candidates[0]));
+        view->remote_candidates[0].type = ICE_CANDIDATE_TYPE_HOST;
+        view->pairs[0].local = &view->local_candidates[0];
+        view->pairs[0].remote = &view->remote_candidates[0];
+        view->selected_pair = &view->pairs[0];
+        view->state = ICE_STATE_CONNECTED;
+        view->last_consent_response_ms = salts_monotonic_ms();
+        view->next_consent_check_ms = view->last_consent_response_ms + 10000u;
+
+        memset(&poll_task, 0, sizeof(poll_task));
+        poll_task.agent = agent;
+        poll_task.timeout_ms = 5000u;
+        check_equal(salts_thread_create(&poll_thread, ice_poll_task, &poll_task), 0);
+        salts_sleep_ms(50u);
+        close_started_ms = salts_monotonic_ms();
+        ice_agent_close(agent);
+        check_equal(salts_thread_join(&poll_thread), 0);
+        salts_thread_destroy(&poll_thread);
+
+        check(poll_task.done);
+        check(salts_monotonic_ms() - close_started_ms < 1000u);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_equal(observer.close_callback_on_poll_thread, 1);
         ice_agent_destroy(agent);
     }
   }

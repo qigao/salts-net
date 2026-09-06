@@ -10,8 +10,8 @@
 #include <salts/clock.h>
 #include <string.h>
 #include <stdlib.h>
-#include <time.h>
 #include <limits.h>
+#include <stdatomic.h>
 /* OpenSSL headers */
 #include <openssl/md5.h>
 #include <openssl/sha.h>
@@ -19,6 +19,59 @@
 #include <openssl/evp.h>
 #include <openssl/des.h>
 #include <openssl/aes.h>
+#include <openssl/rand.h>
+
+static atomic_flag usm_salt_lock = ATOMIC_FLAG_INIT;
+static uint64_t usm_aes_salt_counter;
+static uint32_t usm_des_salt_counter;
+
+static void usm_store_u32_be(uint8_t *output, uint32_t value) {
+    output[0] = (uint8_t)(value >> 24u);
+    output[1] = (uint8_t)(value >> 16u);
+    output[2] = (uint8_t)(value >> 8u);
+    output[3] = (uint8_t)value;
+}
+
+static void usm_store_u64_be(uint8_t *output, uint64_t value) {
+    usm_store_u32_be(output, (uint32_t)(value >> 32u));
+    usm_store_u32_be(output + 4u, (uint32_t)value);
+}
+
+static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
+                             uint32_t engine_boots, uint8_t salt[8]) {
+    int status = USM_OK;
+    while (atomic_flag_test_and_set_explicit(&usm_salt_lock,
+                                              memory_order_acquire)) {
+    }
+
+    if (priv_protocol == SNMP_PRIV_DES) {
+        if (usm_des_salt_counter == 0u &&
+            RAND_bytes((unsigned char *)&usm_des_salt_counter,
+                       (int)sizeof(usm_des_salt_counter)) != 1) {
+            status = USM_ERROR_INVALID;
+        } else if (usm_des_salt_counter == UINT32_MAX) {
+            status = USM_ERROR_INVALID;
+        } else {
+            usm_des_salt_counter++;
+            usm_store_u32_be(salt, engine_boots);
+            usm_store_u32_be(salt + 4u, usm_des_salt_counter);
+        }
+    } else {
+        if (usm_aes_salt_counter == 0u &&
+            RAND_bytes((unsigned char *)&usm_aes_salt_counter,
+                       (int)sizeof(usm_aes_salt_counter)) != 1) {
+            status = USM_ERROR_INVALID;
+        } else if (usm_aes_salt_counter == UINT64_MAX) {
+            status = USM_ERROR_INVALID;
+        } else {
+            usm_aes_salt_counter++;
+            usm_store_u64_be(salt, usm_aes_salt_counter);
+        }
+    }
+
+    atomic_flag_clear_explicit(&usm_salt_lock, memory_order_release);
+    return status;
+}
 
 /*
  * Password-to-key derivation (RFC 3414 Section 2.6)
@@ -226,16 +279,6 @@ int usm_encrypt(
         return USM_ERROR_INVALID;
     }
 
-    /* Generate salt (8 bytes) */
-    static uint32_t counter = 0;
-    if (counter == 0) {
-        counter = (uint32_t)time(NULL);
-    }
-    counter++;
-
-    memcpy(salt_out, &engine_boots, 4);
-    memcpy(salt_out + 4, &counter, 4);
-
     int result = USM_OK;
 
     if (priv_protocol == SNMP_PRIV_DES) {
@@ -247,6 +290,9 @@ int usm_encrypt(
 
         size_t padded_len = ((plaintext_len + 7u) / 8u) * 8u;
         if (*ciphertext_len < padded_len) return USM_ERROR_INVALID;
+        if (usm_generate_salt(priv_protocol, engine_boots, salt_out) != USM_OK) {
+            return USM_ERROR_INVALID;
+        }
 
         /* Pre-IV: salt XOR key[8..15] */
         uint8_t iv[8];
@@ -288,11 +334,14 @@ int usm_encrypt(
         if (key_len < required_key_len || *ciphertext_len < plaintext_len) {
             return USM_ERROR_INVALID;
         }
+        if (usm_generate_salt(priv_protocol, engine_boots, salt_out) != USM_OK) {
+            return USM_ERROR_INVALID;
+        }
 
         /* IV = engineBoots || engineTime || salt */
         uint8_t iv[16];
-        memcpy(iv, &engine_boots, 4);
-        memcpy(iv + 4, &engine_time, 4);
+        usm_store_u32_be(iv, engine_boots);
+        usm_store_u32_be(iv + 4u, engine_time);
         memcpy(iv + 8, salt_out, 8);
 
         AES_KEY aes_key;
@@ -392,8 +441,8 @@ int usm_decrypt(
 
         /* IV = engineBoots || engineTime || salt */
         uint8_t iv[16];
-        memcpy(iv, &engine_boots, 4);
-        memcpy(iv + 4, &engine_time, 4);
+        usm_store_u32_be(iv, engine_boots);
+        usm_store_u32_be(iv + 4u, engine_time);
         memcpy(iv + 8, salt, 8);
 
         AES_KEY aes_key;

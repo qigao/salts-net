@@ -314,7 +314,9 @@ typedef struct {
  * - Read-only queries, callback replacement/detachment, repeated close, and
  *   destroy remain valid while the agent object is alive.
  * - Agent operations and callbacks run on one non-overlapping owner thread.
- *   A different thread may request close, which wakes active CNet datagrams.
+ *   A different thread may request close. The request wakes the currently
+ *   published CNet wait; the owner performs the terminal state transition and
+ *   invokes callbacks before its initiating API returns.
  * - Callbacks are synchronous. They may call ice_agent_close(), but must not
  *   call ice_agent_destroy(); destroy the agent after the initiating API
  *   returns instead.

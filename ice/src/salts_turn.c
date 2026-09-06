@@ -32,6 +32,7 @@
 #include <openssl/hmac.h>
 #include <openssl/evp.h>
 #include <openssl/md5.h>
+#include <openssl/crypto.h>
 
 enum { TURN_CHANNEL_CAPACITY = 16 };
 
@@ -127,6 +128,55 @@ static int calculate_turn_message_integrity(
     unsigned int hmac_len = 20;
     if (!HMAC(EVP_sha1(), key, 16, data, len, hmac_out, &hmac_len)) return -1;
     return 0;
+}
+
+static int turn_validate_message_integrity(
+    const uint8_t *data, size_t len, const char *username, const char *realm,
+    const char *password) {
+    const uint8_t *attr_ptr;
+    const uint8_t *integrity = NULL;
+    const uint8_t *integrity_header = NULL;
+    size_t remaining;
+    uint8_t expected[20];
+    uint8_t *hmac_data;
+    size_t hmac_data_len;
+
+    if (!data || !username || !realm || !password ||
+        !stun_is_stun_message(data, len)) return -1;
+    attr_ptr = data + STUN_HEADER_SIZE;
+    remaining = read_u16_be(data + 2);
+    for (;;) {
+        uint16_t attr_type, attr_len;
+        const uint8_t *attr_value;
+        const uint8_t *current_header = attr_ptr;
+        int next = turn_attribute_next(&attr_ptr, &remaining, &attr_type,
+                                       &attr_value, &attr_len);
+        if (next == 0) break;
+        if (next < 0) return -2;
+        if (attr_type == STUN_ATTR_MESSAGE_INTEGRITY) {
+            if (attr_len != sizeof(expected)) return -2;
+            integrity_header = current_header;
+            integrity = attr_value;
+            break;
+        }
+    }
+    if (!integrity || !integrity_header) return -3;
+
+    hmac_data_len = (size_t)(integrity_header - data);
+    if (hmac_data_len < STUN_HEADER_SIZE ||
+        hmac_data_len > UINT16_MAX - 24u + STUN_HEADER_SIZE) return -2;
+    hmac_data = (uint8_t *)malloc(hmac_data_len);
+    if (!hmac_data) return -4;
+    memcpy(hmac_data, data, hmac_data_len);
+    write_u16_be(hmac_data + 2,
+                 (uint16_t)(hmac_data_len - STUN_HEADER_SIZE + 24u));
+    if (calculate_turn_message_integrity(hmac_data, hmac_data_len, username,
+                                         realm, password, expected) != 0) {
+        free(hmac_data);
+        return -5;
+    }
+    free(hmac_data);
+    return CRYPTO_memcmp(integrity, expected, sizeof(expected)) == 0 ? 0 : -6;
 }
 
 static int xor_encode_address(
@@ -915,8 +965,14 @@ int turn_client_allocate(salts_turn_client_t *tc, turn_allocation_t *allocation_
 
             realm[0] = '\0';
             nonce[0] = '\0';
-            result = turn_parse_allocate_response_checked((const uint8_t *)data, data_len,
-                                                          &txn_id, &alloc, realm, nonce);
+            result = turn_validate_message_integrity(
+                (const uint8_t *)data, data_len, tc->username, tc->realm,
+                tc->password);
+            if (result == 0) {
+                result = turn_parse_allocate_response_checked(
+                    (const uint8_t *)data, data_len, &txn_id, &alloc, realm,
+                    nonce);
+            }
             free(data);
             if (result == -TURN_ERROR_STALE_NONCE && attempt == 0) {
                 if (realm[0]) strncpy(tc->realm, realm, sizeof(tc->realm) - 1);
@@ -957,8 +1013,15 @@ int turn_client_refresh(salts_turn_client_t *tc) {
         if (len < 0) return -2;
 
         rc = turn_send_and_recv(tc, buffer, len, &data, &data_len);
-        if (rc == 0) rc = turn_parse_refresh_response((const uint8_t *)data, data_len,
-                                                      &txn_id, &lifetime);
+        if (rc == 0) {
+            rc = turn_validate_message_integrity(
+                (const uint8_t *)data, data_len, tc->username, tc->realm,
+                tc->password);
+        }
+        if (rc == 0) {
+            rc = turn_parse_refresh_response((const uint8_t *)data, data_len,
+                                             &txn_id, &lifetime);
+        }
         if (rc == -TURN_ERROR_STALE_NONCE && attempt == 0) {
             turn_copy_authentication_attributes((const uint8_t *)data, data_len,
                                                 tc->realm, sizeof(tc->realm),
@@ -1000,6 +1063,11 @@ int turn_client_create_permission(salts_turn_client_t *tc,
                                                        peer_ip, peer_port);
         if (len < 0) return -2;
         rc = turn_send_and_recv(tc, buffer, len, &data, &data_len);
+        if (rc == 0) {
+            rc = turn_validate_message_integrity(
+                (const uint8_t *)data, data_len, tc->username, tc->realm,
+                tc->password);
+        }
         if (rc == 0) {
             rc = turn_expect_response((const uint8_t *)data, data_len, &txn_id,
                                       TURN_MSG_CREATE_PERMISSION_RESPONSE,
@@ -1058,6 +1126,11 @@ int turn_client_channel_bind(salts_turn_client_t *tc,
                                                   channel, peer_ip, peer_port);
         if (len < 0) return -3;
         rc = turn_send_and_recv(tc, buffer, len, &data, &data_len);
+        if (rc == 0) {
+            rc = turn_validate_message_integrity(
+                (const uint8_t *)data, data_len, tc->username, tc->realm,
+                tc->password);
+        }
         if (rc == 0) {
             rc = turn_expect_response((const uint8_t *)data, data_len, &txn_id,
                                       TURN_MSG_CHANNEL_BIND_RESPONSE,

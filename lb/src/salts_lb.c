@@ -384,26 +384,76 @@ static void salts_lb_on_receive(void *user, cnet_connection connection,
 
   if (slot->role == SALTS_LB_ROLE_WORKER) {
     if (slot->phase == SALTS_LB_PHASE_WORKER_REGISTERING) {
-      size_t size = view->size;
-      if (size >= sizeof(slot->group)) {
+      const unsigned char *terminator;
+      size_t group_size;
+      if (view->size > lb->config.max_message_bytes - slot->buffered) {
         salts_lb_close_slot(slot);
         return;
       }
-      memcpy(slot->group, view->data, size);
-      while (size > 0u && (slot->group[size - 1u] == '\n' || slot->group[size - 1u] == '\r')) --size;
-      slot->group[size] = '\0';
+      memcpy(slot->buffer + slot->buffered, view->data, view->size);
+      slot->buffered += view->size;
+      terminator = (const unsigned char *)memchr(slot->buffer, '\n', slot->buffered);
+      if (!terminator) {
+        if (slot->buffered >= sizeof(slot->group) ||
+            salts_lb_arm_receive(slot) != SALTS_OK) {
+          salts_lb_close_slot(slot);
+        }
+        return;
+      }
+      if ((size_t)(terminator - slot->buffer) + 1u != slot->buffered) {
+        salts_lb_close_slot(slot);
+        return;
+      }
+      group_size = (size_t)(terminator - slot->buffer);
+      if (group_size > 0u && slot->buffer[group_size - 1u] == '\r') --group_size;
+      if (group_size >= sizeof(slot->group)) {
+        salts_lb_close_slot(slot);
+        return;
+      }
+      memcpy(slot->group, slot->buffer, group_size);
+      slot->group[group_size] = '\0';
+      slot->buffered = 0u;
       salts_lb_make_worker_idle(slot);
     } else if (slot->phase == SALTS_LB_PHASE_WORKER_SESSION) {
       salts_lb_forward_session(slot, view);
     } else if (slot->phase == SALTS_LB_PHASE_WORKER_REQUEST) {
       salts_lb_slot_t *frontend;
+      ptrdiff_t response_size;
       int status;
       if (slot->peer_index >= lb->config.connection_capacity) {
         salts_lb_close_slot(slot);
         return;
       }
       frontend = &lb->slots[slot->peer_index];
-      status = cnet_send(&lb->client, frontend->connection, view->data, view->size);
+      if (view->size > lb->config.max_message_bytes - slot->buffered) {
+        salts_lb_close_slot(frontend);
+        salts_lb_close_slot(slot);
+        return;
+      }
+      memcpy(slot->buffer + slot->buffered, view->data, view->size);
+      slot->buffered += view->size;
+      response_size = lb->config.frame(slot->buffer, slot->buffered,
+                                       lb->config.frame_user);
+      if (response_size < 0 || (size_t)response_size > slot->buffered ||
+          (size_t)response_size > lb->config.max_message_bytes) {
+        salts_lb_close_slot(frontend);
+        salts_lb_close_slot(slot);
+        return;
+      }
+      if (response_size == 0) {
+        if (salts_lb_arm_receive(slot) != SALTS_OK) {
+          salts_lb_close_slot(frontend);
+          salts_lb_close_slot(slot);
+        }
+        return;
+      }
+      if ((size_t)response_size != slot->buffered) {
+        salts_lb_close_slot(frontend);
+        salts_lb_close_slot(slot);
+        return;
+      }
+      status = cnet_send(&lb->client, frontend->connection, slot->buffer,
+                         (size_t)response_size);
       if (status != SALTS_OK) {
         salts_lb_close_slot(frontend);
         salts_lb_close_slot(slot);
@@ -412,6 +462,8 @@ static void salts_lb_on_receive(void *user, cnet_connection connection,
       frontend->phase = SALTS_LB_PHASE_FRONT_SENDING_RESPONSE;
       frontend->send_action = SALTS_LB_SEND_REQUEST_RESPONSE;
       salts_lb_unpair(frontend);
+      slot->buffered = 0u;
+      slot->frame_size = 0u;
       salts_lb_make_worker_idle(slot);
     } else {
       salts_lb_close_slot(slot);

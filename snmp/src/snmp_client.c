@@ -85,6 +85,13 @@ static uint32_t snmp_client_effective_timeout(const snmp_client_t *client) {
     return client->timeout_ms != 0u ? client->timeout_ms : 1u;
 }
 
+static uint8_t snmp_client_security_flags(snmp_security_level_t security_level) {
+    uint8_t flags = 0u;
+    if (security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV) flags |= SNMP_MSG_FLAG_AUTH;
+    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV) flags |= SNMP_MSG_FLAG_PRIV;
+    return flags;
+}
+
 static void snmp_client_set_transport_error(snmp_client_t *client, const char *operation,
                                             int status) {
     client->transport_status = status;
@@ -213,8 +220,7 @@ static int snmp_client_v3_config_is_valid(const snmp_client_config_t *config) {
     }
     return config->priv_password && config->priv_password[0] != '\0' &&
            (config->priv_protocol == SNMP_PRIV_DES ||
-            config->priv_protocol == SNMP_PRIV_AES128 ||
-            config->priv_protocol == SNMP_PRIV_AES256);
+            config->priv_protocol == SNMP_PRIV_AES128);
 }
 
 /* No longer needed: on_udp_recv, on_timeout */
@@ -417,13 +423,29 @@ static int send_request_and_wait(
                                       client->response_pool);
             if (status > 0 && response->pdu.request_id == expected_request_id) {
                 int valid_v3_state = 1;
-                if (client->version == SNMP_VERSION_3 && client->engine_discovered) {
-                    valid_v3_state = response->usm_params.engine_id_len == client->engine_id_len &&
-                                     memcmp(response->usm_params.authoritative_engine_id,
-                                            client->engine_id,
-                                            client->engine_id_len) == 0;
-                    if (valid_v3_state &&
-                        (response->v3_header.msg_flags & SNMP_MSG_FLAG_AUTH) != 0u) {
+                if (client->version == SNMP_VERSION_3) {
+                    const uint8_t security_mask =
+                        SNMP_MSG_FLAG_AUTH | SNMP_MSG_FLAG_PRIV;
+                    const uint8_t expected_flags = client->engine_discovered
+                                                       ? snmp_client_security_flags(
+                                                             client->security_level)
+                                                       : 0u;
+                    valid_v3_state =
+                        response->v3_header.msg_security_model == 3u &&
+                        (response->v3_header.msg_flags & security_mask) ==
+                            expected_flags;
+                    if (valid_v3_state && client->engine_discovered) {
+                        valid_v3_state =
+                            response->usm_params.engine_id_len ==
+                                client->engine_id_len &&
+                            memcmp(response->usm_params.authoritative_engine_id,
+                                   client->engine_id, client->engine_id_len) == 0 &&
+                            response->usm_params.user_name != NULL &&
+                            strcmp(response->usm_params.user_name,
+                                   client->security_name) == 0;
+                    }
+                    if (valid_v3_state && client->engine_discovered &&
+                        (expected_flags & SNMP_MSG_FLAG_AUTH) != 0u) {
                         valid_v3_state =
                             usm_verify_time_window(&client->engine_time,
                                                    response->usm_params.engine_boots,
@@ -704,11 +726,13 @@ int snmp_client_walk(
         int result = snmp_client_get_next(client, &current_oid, 1, &response);
 
         if (result != SNMP_CLIENT_OK) {
+            snmp_client_release_response(client);
             break;  /* Error or timeout */
         }
 
         /* Check if we're still under the root OID */
         if (response.pdu.varbind_count == 0) {
+            snmp_client_release_response(client);
             break;  /* No more OIDs */
         }
 
@@ -718,7 +742,7 @@ int snmp_client_walk(
         if (varbind->value_type == SNMP_TYPE_ENDOFMIBVIEW ||
             varbind->value_type == SNMP_TYPE_NOSUCHOBJECT ||
             varbind->value_type == SNMP_TYPE_NOSUCHINSTANCE) {
-            pool_destroy(client->response_pool);
+            snmp_client_release_response(client);
             break;
         }
 
@@ -735,7 +759,7 @@ int snmp_client_walk(
         }
 
         if (!still_under_root) {
-            pool_destroy(client->response_pool);
+            snmp_client_release_response(client);
             break;
         }
 
@@ -747,8 +771,7 @@ int snmp_client_walk(
         count++;
 
         /* Cleanup response pool */
-        pool_destroy(client->response_pool);
-        client->response_pool = NULL;
+        snmp_client_release_response(client);
     }
 
     return count;

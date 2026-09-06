@@ -294,6 +294,55 @@ spec("snmp_v3") {
         check_equal(decrypted, plaintext, decrypted_len);
     }
 
+    it("decrypts the NIST AES-128-CFB vector with the RFC 3826 IV layout") {
+        static const uint8_t key[16] = {
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+            0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c};
+        static const uint8_t salt[8] = {
+            0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f};
+        static const uint8_t ciphertext[16] = {
+            0x3b, 0x3f, 0xd9, 0x2e, 0xb7, 0x2d, 0xad, 0x20,
+            0x33, 0x34, 0x49, 0xf8, 0xe8, 0x3c, 0xfb, 0x4a};
+        static const uint8_t expected[16] = {
+            0x6b, 0xc1, 0xbe, 0xe2, 0x2e, 0x40, 0x9f, 0x96,
+            0xe9, 0x3d, 0x7e, 0x11, 0x73, 0x93, 0x17, 0x2a};
+        uint8_t plaintext[sizeof(ciphertext)] = {0};
+        size_t plaintext_len = sizeof(plaintext);
+
+        check_equal(usm_decrypt(ciphertext, sizeof(ciphertext), key, sizeof(key),
+                                SNMP_PRIV_AES128, 0x00010203u, 0x04050607u,
+                                salt, plaintext, &plaintext_len),
+                    USM_OK);
+        check_equal(plaintext_len, sizeof(expected));
+        check_equal(plaintext, expected, sizeof(expected));
+    }
+
+    it("emits consecutive AES privacy salts in network byte order") {
+        uint8_t key[16] = {0};
+        uint8_t plaintext[1] = {0};
+        uint8_t ciphertext[1] = {0};
+        uint8_t first_salt[8] = {0};
+        uint8_t second_salt[8] = {0};
+        size_t ciphertext_len = sizeof(ciphertext);
+        uint64_t first = 0u;
+        uint64_t second = 0u;
+
+        check_equal(usm_encrypt(plaintext, sizeof(plaintext), key, sizeof(key),
+                                SNMP_PRIV_AES128, 1u, 1u, first_salt,
+                                ciphertext, &ciphertext_len),
+                    USM_OK);
+        ciphertext_len = sizeof(ciphertext);
+        check_equal(usm_encrypt(plaintext, sizeof(plaintext), key, sizeof(key),
+                                SNMP_PRIV_AES128, 1u, 1u, second_salt,
+                                ciphertext, &ciphertext_len),
+                    USM_OK);
+        for (size_t index = 0u; index < sizeof(first_salt); ++index) {
+            first = (first << 8u) | first_salt[index];
+            second = (second << 8u) | second_salt[index];
+        }
+        check_equal(second, first + 1u);
+    }
+
     it("rejects AES encryption when the output capacity is too small") {
         uint8_t key[16] = {0};
         uint8_t plaintext[16] = {0};

@@ -4,6 +4,7 @@
 #include <cnet/cnet.h>
 
 #include <stddef.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 enum {
@@ -28,6 +29,7 @@ typedef struct ice_cnet_datagram_s {
   int send_pending;
   int send_status;
   int receive_status;
+  atomic_int wake_requested;
 } ice_cnet_datagram_t;
 
 int ice_cnet_datagram_init(ice_cnet_datagram_t *transport, const char *bind_host,

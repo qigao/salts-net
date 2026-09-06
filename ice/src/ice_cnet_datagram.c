@@ -76,8 +76,14 @@ static void ice_cnet_on_send(void *user, cnet_datagram *datagram,
 static int ice_cnet_poll(ice_cnet_datagram_t *transport, uint64_t deadline) {
   const uint32_t remaining_ms = ice_cnet_remaining_ms(deadline);
   size_t events = 0u;
+  int status;
   if (remaining_ms == 0u) return SALTS_ETIMEDOUT;
-  return cnet_datagram_poll(&transport->datagram, remaining_ms, &events);
+  status = cnet_datagram_poll(&transport->datagram, remaining_ms, &events);
+  if (atomic_exchange_explicit(&transport->wake_requested, 0,
+                               memory_order_acq_rel)) {
+    return SALTS_ECANCELED;
+  }
+  return status;
 }
 
 static int ice_cnet_peer_from_sockaddr(const struct sockaddr *address,
@@ -117,6 +123,7 @@ int ice_cnet_datagram_init(ice_cnet_datagram_t *transport, const char *bind_host
   transport->next_send_tag = 1u;
   transport->send_status = SALTS_OK;
   transport->receive_status = SALTS_OK;
+  atomic_init(&transport->wake_requested, 0);
 
   config.backend = ice_cnet_backend();
   config.host = bind_host;
@@ -283,6 +290,7 @@ int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer
 
 int ice_cnet_datagram_wake(ice_cnet_datagram_t *transport) {
   if (transport == NULL || !transport->initialized || transport->stopped) return SALTS_EINVAL;
+  atomic_store_explicit(&transport->wake_requested, 1, memory_order_release);
   return cnet_datagram_wake(&transport->datagram);
 }
 

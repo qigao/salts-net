@@ -276,6 +276,36 @@ spec("snmp") {
   }
 
   describe("Real Packet Parsing") {
+    it("should reject a constructed SNMP application value") {
+      const uint8_t packet[] = {
+          0x30, 0x28, 0x02, 0x01, 0x01, 0x04, 0x06, 'p',  'u',  'b',  'l',  'i',  'c',
+          0xA2, 0x1B, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x10,
+          0x30, 0x0E, 0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00,
+          0x60, 0x02, 0x04, 0x00};
+      MemoryPool *pool = pool_create(1024);
+      snmp_message_t msg;
+
+      check_not_null(pool);
+      check_equal(snmp_parse(packet, sizeof(packet), &msg, pool),
+                  SNMP_PARSE_ERROR_VALUE_TYPE);
+      pool_destroy(pool);
+    }
+
+    it("should reject a constructed SNMP exception value") {
+      const uint8_t packet[] = {
+          0x30, 0x26, 0x02, 0x01, 0x01, 0x04, 0x06, 'p',  'u',  'b',  'l',  'i',  'c',
+          0xA2, 0x19, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x0E,
+          0x30, 0x0C, 0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00,
+          0xA2, 0x00};
+      MemoryPool *pool = pool_create(1024);
+      snmp_message_t msg;
+
+      check_not_null(pool);
+      check_equal(snmp_parse(packet, sizeof(packet), &msg, pool),
+                  SNMP_PARSE_ERROR_VALUE_TYPE);
+      pool_destroy(pool);
+    }
+
     it("should parse real SNMPv2c GetResponse correctly") {
       /*
        * Real SNMPv2c GetResponse packet (captured from Wireshark)

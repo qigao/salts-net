@@ -84,7 +84,7 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
 
   /* SNMP application values and v2 exception values use distinct tag classes. */
   default:
-    if (asn1_val->tag_class == 1) { /* Application */
+    if (asn1_val->tag_class == 1 && !asn1_val->constructed) { /* Application */
       switch (asn1_val->tag_number) {
         case 0: /* IpAddress */
           varbind->value_type = SNMP_TYPE_IPADDRESS;
@@ -161,7 +161,7 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
         default:
           return SNMP_PARSE_ERROR_VALUE_TYPE;
       }
-    } else if (asn1_val->tag_class == 2 &&
+    } else if (asn1_val->tag_class == 2 && !asn1_val->constructed &&
                asn1_val->value.octet_string.length == 0u) {
       switch (asn1_val->tag_number) {
         case 0:

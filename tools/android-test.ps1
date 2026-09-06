@@ -12,7 +12,7 @@ lldb-server, forwards its localhost TCP listener through ADB, and launches the
 matching host LLDB.
 
 .PARAMETER Target
-The CMake executable target to build and run, for example test_coro.
+The CMake executable target to build and run, for example test_stun_cnet.
 
 .PARAMETER Preset
 The Android build preset. Its associated configure preset and binaryDir are
@@ -65,13 +65,13 @@ Host and device localhost TCP port used for the LLDB connection.
 Uses an already-built test executable without invoking CMake.
 
 .EXAMPLE
-./tools/android-test.ps1 test_coro -Tap
+./tools/android-test.ps1 test_stun_cnet -Tap
 
 .EXAMPLE
-./tools/android-test.ps1 test_coro -Filter "known error" -JUnit artifacts/test_coro.xml
+./tools/android-test.ps1 test_stun_cnet -Filter "times out" -JUnit artifacts/test_stun_cnet.xml
 
 .EXAMPLE
-./tools/android-test.ps1 test_coro -Lldb -Serial adb-DEVICE._adb-tls-connect._tcp
+./tools/android-test.ps1 test_stun_cnet -Lldb -Serial adb-DEVICE._adb-tls-connect._tcp
 #>
 param(
     [Parameter(Mandatory, Position = 0)]

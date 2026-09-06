@@ -30,8 +30,8 @@ Complete email client library with SMTP, POP3, and IMAP support.
 ### Send Email (SMTP, recommended local path)
 
 For local development, run a plain SMTP sink such as `smtp4dev` and point the example at it.
-This matches the current SMTP implementation, which supports plain SMTP today while TLS and
-STARTTLS upgrade are available through the same client config.
+The SMTP implementation supports plain SMTP, direct TLS, and STARTTLS through the same client
+config.
 
 ```c
 #include "email/email_smtp.h"
@@ -83,7 +83,7 @@ Direct TLS and STARTTLS use CNet's verified platform trust store and hostname va
 
 ### Receive Email (POP3, local smtp4dev path)
 
-The current POP3 code path is plain TCP and expects `USER`/`PASS`.
+The POP3 implementation supports plain TCP, direct TLS, and STLS, and uses `USER`/`PASS`.
 In this workspace the local `smtp4dev` setup uses the test account `turbo` / `turbo`,
 and the example defaults to those values unless you override them with environment variables.
 

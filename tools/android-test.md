@@ -11,8 +11,8 @@
 - PowerShell 7 或更高版本。
 - CMake、Ninja、Android SDK Platform Tools 和 Android NDK 已安装。
 - `CMakeUserPresets.json` 中的 Android Windows-host preset 路径与本机环境一致。
-- 同 ABI、同构建类型的 TurboUtils Android build tree 已生成；当前 Windows-host presets
-  默认从相邻 `../turbo-utils/build/android-<abi>-<config>` 查找它。
+- 同 ABI、同构建类型的 Salts Android SDK 已安装；当前 Windows-host presets 通过
+  `SALTS_ROOT=$env{PKG_ROOT}/salts-android/<config>` 查找它。
 - 设备 ABI 与 preset 一致。默认 preset 构建 `arm64-v8a`。
 - USB 或 WiFi ADB 设备已经连接并显示为 `device`。
 
@@ -30,7 +30,7 @@ adb devices -l
 在仓库根目录运行：
 
 ```powershell
-./tools/android-test.ps1 test_coro -Tap
+./tools/android-test.ps1 test_stun_cnet -Tap
 ```
 
 默认使用：
@@ -87,7 +87,7 @@ NDK 优先取合并后的 `ANDROID_NDK_HOME`，否则从
 只有一个在线设备时不需要指定 serial。存在多个设备时，使用 `-Serial`：
 
 ```powershell
-./tools/android-test.ps1 test_coro `
+./tools/android-test.ps1 test_stun_cnet `
   -Serial "adb-38101FDJG00AVU-Rx6MV9._adb-tls-connect._tcp"
 ```
 
@@ -111,7 +111,7 @@ NDK 优先取合并后的 `ANDROID_NDK_HOME`，否则从
 ### TAP 输出
 
 ```powershell
-./tools/android-test.ps1 test_coro -Tap
+./tools/android-test.ps1 test_stun_cnet -Tap
 ```
 
 ### JUnit 输出
@@ -181,12 +181,12 @@ try {
 
 ### 补充动态库
 
-脚本会自动解析可执行文件和已发现 `.so` 的 `DT_NEEDED`。SaltsNet 依赖外部
-TurboUtils build tree，因此首次运行应把对应的 `bin` 加入搜索目录：
+脚本会自动解析可执行文件和已发现 `.so` 的 `DT_NEEDED`。SaltsNet 依赖已安装的
+Salts Android SDK，因此应把与 preset 构建类型一致的 `lib` 目录加入搜索路径：
 
 ```powershell
-./tools/android-test.ps1 test_coro `
-  -LibraryDirectory '../turbo-utils/build/android-arm64-v8a-release/bin'
+./tools/android-test.ps1 test_stun_cnet `
+  -LibraryDirectory "$env:PKG_ROOT/salts-android/release/lib"
 ```
 
 若只有单个库位于非标准位置，也可以用 `-Library <file>` 显式部署。无法解析非系统
@@ -197,7 +197,7 @@ TurboUtils build tree，因此首次运行应把对应的 `bin` 加入搜索目�
 ARM64 Debug 示例：
 
 ```powershell
-./tools/android-test.ps1 test_coro `
+./tools/android-test.ps1 test_stun_cnet `
   -Preset android-arm64-v8a-debug-win
 ```
 
@@ -206,7 +206,7 @@ ARM64 Debug 示例：
 `-BuildDirectory`：
 
 ```powershell
-./tools/android-test.ps1 test_coro `
+./tools/android-test.ps1 test_stun_cnet `
   -Preset my-android-preset `
   -BuildDirectory build/my-android-tree
 ```
@@ -256,7 +256,7 @@ configure preset 和 build preset 属于不同 preset 类型，可以使用相�
 ## 交互式 LLDB 调试
 
 ```powershell
-./tools/android-test.ps1 test_coro -Lldb
+./tools/android-test.ps1 test_stun_cnet -Lldb
 ```
 
 脚本会：
@@ -289,7 +289,7 @@ AOSP 当前的 `lldbclient.py` 是指向历史名称 `gdbclient.py` 的符号链
 使用 `-LldbCommand` 在连接后执行额外命令：
 
 ```powershell
-./tools/android-test.ps1 test_coro `
+./tools/android-test.ps1 test_stun_cnet `
   -NoBuild `
   -Lldb `
   -LldbCommand @(
@@ -306,7 +306,7 @@ AOSP 当前的 `lldbclient.py` 是指向历史名称 `gdbclient.py` 的符号链
 更换端口：
 
 ```powershell
-./tools/android-test.ps1 test_coro -Lldb -Port 5040
+./tools/android-test.ps1 test_stun_cnet -Lldb -Port 5040
 ```
 
 端口必须在主机与设备上均未被其他进程占用。
@@ -387,19 +387,19 @@ Android 与 Windows presets 当前共用仓库的 `vcpkg_installed`。Android co
 ## 最小复验命令
 
 ```powershell
-./tools/android-test.ps1 test_coro `
+./tools/android-test.ps1 test_stun_cnet `
   -Tap `
-  -LibraryDirectory '../turbo-utils/build/android-arm64-v8a-release/bin'
+  -LibraryDirectory "$env:PKG_ROOT/salts-android/release/lib"
 ```
 
 需要验证调试链路时：
 
 ```powershell
-./tools/android-test.ps1 test_coro `
+./tools/android-test.ps1 test_stun_cnet `
   -Lldb `
-  -LibraryDirectory '../turbo-utils/build/android-arm64-v8a-release/bin' `
+  -LibraryDirectory "$env:PKG_ROOT/salts-android/release/lib" `
   -LldbCommand 'breakpoint set --name main','process continue','thread backtrace','process continue','quit'
 ```
 
-本次迁移已在 ARM64 Pixel WiFi ADB 设备复验：`test_coro` 21 个测试、96 个断言通过；
-LLDB 命中 `main`、输出源码 backtrace，并继续运行至退出状态 0。
+以设备进程退出状态和本次生成的 TinyTest 输出为准；历史测试数量不作为当前
+SaltsNet/CNet 迁移的验收依据。

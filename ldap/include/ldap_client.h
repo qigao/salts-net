@@ -19,18 +19,18 @@ typedef struct {
 } ldap_client_config_t;
 
 // Lifecycle
-TURBONET_LDAP_C_API ldap_client_t *ldap_client_create(const ldap_client_config_t *config);
-TURBONET_LDAP_C_API void ldap_client_destroy(ldap_client_t *client);
-TURBONET_LDAP_C_API int ldap_client_connect(ldap_client_t *client); // Explicit connect or auto-connect
+SALTSNET_LDAP_C_API ldap_client_t *ldap_client_create(const ldap_client_config_t *config);
+SALTSNET_LDAP_C_API void ldap_client_destroy(ldap_client_t *client);
+SALTSNET_LDAP_C_API int ldap_client_connect(ldap_client_t *client); // Explicit connect or auto-connect
 
 // Operations
 // Synchronous APIs for simplicity, matching SNMP client style
 
 // Simple Bind
-TURBONET_LDAP_C_API int ldap_client_simple_bind(ldap_client_t *client, const char *dn, const char *password, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_simple_bind(ldap_client_t *client, const char *dn, const char *password, ldap_result_data_t *result);
 
 // Unbind
-TURBONET_LDAP_C_API int ldap_client_unbind(ldap_client_t *client);
+SALTSNET_LDAP_C_API int ldap_client_unbind(ldap_client_t *client);
 
 // Search
 // Callback for search entries
@@ -46,26 +46,26 @@ typedef struct {
     int time_limit;
 } ldap_search_params_t;
 
-TURBONET_LDAP_C_API int ldap_client_search(ldap_client_t *client, const ldap_search_params_t *params, ldap_search_cb callback, void *user_data, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_search(ldap_client_t *client, const ldap_search_params_t *params, ldap_search_cb callback, void *user_data, ldap_result_data_t *result);
 
 // Add
-TURBONET_LDAP_C_API int ldap_client_add(ldap_client_t *client, const char *dn, const ldap_attribute_t *attrs, size_t attr_count, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_add(ldap_client_t *client, const char *dn, const ldap_attribute_t *attrs, size_t attr_count, ldap_result_data_t *result);
 
 // Delete
-TURBONET_LDAP_C_API int ldap_client_delete(ldap_client_t *client, const char *dn, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_delete(ldap_client_t *client, const char *dn, ldap_result_data_t *result);
 
 // Modify
-TURBONET_LDAP_C_API int ldap_client_modify(ldap_client_t *client, const char *dn, const ldap_modification_t *mods, size_t mod_count, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_modify(ldap_client_t *client, const char *dn, const ldap_modification_t *mods, size_t mod_count, ldap_result_data_t *result);
 
 // Modify DN
-TURBONET_LDAP_C_API int ldap_client_rename(ldap_client_t *client, const char *dn, const char *new_rdn, const char *new_parent, int delete_old_rdn, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_rename(ldap_client_t *client, const char *dn, const char *new_rdn, const char *new_parent, int delete_old_rdn, ldap_result_data_t *result);
 
 // Compare
-TURBONET_LDAP_C_API int ldap_client_compare(ldap_client_t *client, const char *dn, const char *attr, const char *value, size_t value_len, ldap_result_data_t *result);
+SALTSNET_LDAP_C_API int ldap_client_compare(ldap_client_t *client, const char *dn, const char *attr, const char *value, size_t value_len, ldap_result_data_t *result);
 
 // Utilities
-TURBONET_LDAP_C_API const char *ldap_err2string(int err);
-TURBONET_LDAP_C_API void ldap_result_free(ldap_result_data_t *result); // Frees strings inside result
+SALTSNET_LDAP_C_API const char *ldap_err2string(int err);
+SALTSNET_LDAP_C_API void ldap_result_free(ldap_result_data_t *result); // Frees strings inside result
 
 #ifdef __cplusplus
 }

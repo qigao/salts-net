@@ -46,7 +46,7 @@ Following Linus Torvalds' "Good Taste" principles:
 
 ```c
 #include "mime_parser.h"
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 
 // Setup callbacks
 mime_settings_t settings = {0};
@@ -379,4 +379,4 @@ snprintf(header, sizeof(header),
 
 ## License
 
-Part of TurboUtils project.
+Part of the SaltsNet project.

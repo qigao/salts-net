@@ -6,7 +6,6 @@
 #include "email/email_client.h"
 #include "email/email_message.h"
 #include "email/email_smtp.h"
-#include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,9 +34,7 @@ static int env_flag_or_default(const char *name, int fallback) {
   return strcmp(value, "0") != 0;
 }
 
-// SMTP operations must run inside a coroutine
-static void smtp_test_coro(coro_t *co, void *arg) {
-  coro_context_t *ctx = (coro_context_t *)arg;
+static int run_example(void) {
 
   // Configure SMTP for local smtp4dev testing
   smtp_config_t smtp_config = {0};
@@ -51,10 +48,10 @@ static void smtp_test_coro(coro_t *co, void *arg) {
   smtp_config.timeout_ms = 30000;
 
   // Create SMTP client
-  smtp_client_t *smtp = smtp_client_create(ctx, &smtp_config);
+  smtp_client_t *smtp = smtp_client_create(&smtp_config);
   if (!smtp) {
     fprintf(stderr, "Failed to create SMTP client\n");
-    return;
+    return 1;
   }
 
   // Connect
@@ -63,7 +60,7 @@ static void smtp_test_coro(coro_t *co, void *arg) {
     fprintf(stderr, "SMTP connect failed: %s\n", smtp_get_error(smtp));
     fprintf(stderr, "Start smtp4dev locally or override SMTP_HOST/SMTP_PORT.\n");
     smtp_client_free(smtp);
-    return;
+    return 1;
   }
 
   printf("Connected successfully!\n");
@@ -77,26 +74,23 @@ static void smtp_test_coro(coro_t *co, void *arg) {
     fprintf(stderr, "Failed to create message\n");
     smtp_disconnect(smtp);
     smtp_client_free(smtp);
-    return;
+    return 1;
   }
 
   // Set message content with non-ASCII data to test RFC compliance
-  email_message_set_from(msg, "测试张三",
-                         env_or_default("SMTP_FROM", "sender@smtp4dev.local"));
+  email_message_set_from(msg, "测试张三", env_or_default("SMTP_FROM", "sender@smtp4dev.local"));
   email_message_add_to(msg, "Local Test Recipient",
                        env_or_default("SMTP_TO", "recipient@smtp4dev.local"));
   email_message_set_subject(msg, "测试 RFC 2047 编码标题");
-  email_message_set_text_body(msg,
-                              "Hello from TurboNet Email Module!\n\n"
-                              "This message was sent to a local smtp4dev server.\n"
-                              "It contains dot-leading lines to test DATA transparency:\n"
-                              ".This line starts with a dot.\n"
-                              "..This line starts with two dots.\n"
-                              "End of test.");
+  email_message_set_text_body(msg, "Hello from SaltsNet Email Module!\n\n"
+                                   "This message was sent to a local smtp4dev server.\n"
+                                   "It contains dot-leading lines to test DATA transparency:\n"
+                                   ".This line starts with a dot.\n"
+                                   "..This line starts with two dots.\n"
+                                   "End of test.");
   email_message_set_html_body(
-      msg,
-      "<html><body><h1>测试 RFC 2047 编码标题</h1>"
-      "<p>This message was sent to a local smtp4dev server.</p></body></html>");
+      msg, "<html><body><h1>测试 RFC 2047 编码标题</h1>"
+           "<p>This message was sent to a local smtp4dev server.</p></body></html>");
 
   // Add an attachment with non-ASCII filename
   const char *att_data = "Hello, this is a test attachment with non-ASCII filename.";
@@ -110,7 +104,7 @@ static void smtp_test_coro(coro_t *co, void *arg) {
     mem_destroy(&pool);
     smtp_disconnect(smtp);
     smtp_client_free(smtp);
-    return;
+    return 1;
   }
 
   printf("Email sent successfully!\n");
@@ -120,28 +114,7 @@ static void smtp_test_coro(coro_t *co, void *arg) {
   mem_destroy(&pool);
   smtp_disconnect(smtp);
   smtp_client_free(smtp);
-}
-
-int main(void) {
-  // Create coroutine context
-  coro_context_t *ctx = coro_context_create(NULL);
-  if (!ctx) {
-    fprintf(stderr, "Failed to create coroutine context\n");
-    return 1;
-  }
-
-  // Spawn coroutine
-  if (coro_context_spawn(ctx, smtp_test_coro, ctx) != 0) {
-    fprintf(stderr, "Failed to spawn coroutine\n");
-    coro_context_destroy(ctx);
-    return 1;
-  }
-
-  // Run event loop
-  coro_context_run(ctx, TURBO_RUN_DEFAULT);
-
-  // Cleanup
-  coro_context_destroy(ctx);
-
   return 0;
 }
+
+int main(void) { return run_example(); }

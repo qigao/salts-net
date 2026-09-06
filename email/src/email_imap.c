@@ -1,17 +1,20 @@
 #include "email/email_imap.h"
-#include "CoroNet.h"
+#include "email_cnet_transport.h"
+#include <ctype.h>
 #include <fmt.h>
+#include <salts/error_codes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
+
+enum { IMAP_MAX_LITERAL_BYTES = 64 * 1024 * 1024, IMAP_MAX_RESULT_COUNT = 4096 };
 
 struct imap_client_s {
-  coro_context_t *ctx;
   imap_config_t config;
-  coro_socket_t *socket;
+  email_cnet_transport_t transport;
   char error_msg[512];
   int tag_counter;
+  char tag_buffer[16];
   char read_buffer[8192];
   char line_buffer[8192];
   size_t read_buffer_len;
@@ -26,14 +29,40 @@ static void imap_reset_read_state(imap_client_t *client) {
   client->line_buffer[0] = '\0';
 }
 
+static int imap_parse_literal_size(imap_client_t *client, size_t *out_size) {
+  const char *cursor;
+  size_t value = 0u;
+  if (!client || !out_size) return -1;
+  cursor = strrchr(client->line_buffer, '{');
+  if (!cursor || cursor[1] < '0' || cursor[1] > '9') {
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
+    return -1;
+  }
+  cursor++;
+  while (*cursor >= '0' && *cursor <= '9') {
+    const size_t digit = (size_t)(*cursor - '0');
+    if (value > (IMAP_MAX_LITERAL_BYTES - digit) / 10u) {
+      fmt_text(client->error_msg, sizeof(client->error_msg), "IMAP literal exceeds size limit");
+      return -1;
+    }
+    value = value * 10u + digit;
+    cursor++;
+  }
+  if (*cursor != '}' || value == 0u || value > IMAP_MAX_LITERAL_BYTES) {
+    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid IMAP literal size");
+    return -1;
+  }
+  *out_size = value;
+  return 0;
+}
+
 static char *imap_generate_tag(imap_client_t *client) {
-  static char tag[16];
-  fmt(tag, sizeof(tag), "A{:04d}", ++client->tag_counter);
-  return tag;
+  fmt(client->tag_buffer, sizeof(client->tag_buffer), "A{:04d}", ++client->tag_counter);
+  return client->tag_buffer;
 }
 
 static int imap_read_line(imap_client_t *client) {
-  if (!client || !client->socket) return -1;
+  if (!client || !email_cnet_transport_is_connected(&client->transport)) return -1;
 
   while (1) {
     size_t i;
@@ -49,8 +78,7 @@ static int imap_read_line(imap_client_t *client) {
         client->line_buffer[line_len] = '\0';
 
         client->read_buffer_len -= line_len;
-        memmove(client->read_buffer, client->read_buffer + line_len,
-                client->read_buffer_len);
+        memmove(client->read_buffer, client->read_buffer + line_len, client->read_buffer_len);
         client->read_buffer[client->read_buffer_len] = '\0';
 
         return 0;
@@ -58,36 +86,26 @@ static int imap_read_line(imap_client_t *client) {
     }
 
     {
-      char *data = NULL;
       size_t len = 0;
       size_t free_space;
-      int result = coro_socket_recv(client->socket, &data, &len);
-      if (result != 0 || !data || len == 0) {
-        if (data) {
-          coro_socket_free_recv(data);
-        }
+      int result;
+      free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
+      result = email_cnet_transport_receive(
+          &client->transport, client->read_buffer + client->read_buffer_len, free_space, &len);
+      if (result != SALTS_OK || len == 0) {
         fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP response");
         return -1;
       }
 
-      free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
-      if (len > free_space) {
-        coro_socket_free_recv(data);
-        fmt_text(client->error_msg, sizeof(client->error_msg), "IMAP response buffer overflow");
-        return -1;
-      }
-
-      memcpy(client->read_buffer + client->read_buffer_len, data, len);
       client->read_buffer_len += len;
       client->read_buffer[client->read_buffer_len] = '\0';
-      coro_socket_free_recv(data);
     }
   }
 }
 
 static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
   size_t total = 0;
-  if (!client || !client->socket || !out) return -1;
+  if (!client || !email_cnet_transport_is_connected(&client->transport) || !out) return -1;
 
   while (total < len) {
     if (client->read_buffer_len > 0) {
@@ -104,35 +122,14 @@ static int imap_read_exact(imap_client_t *client, char *out, size_t len) {
     }
 
     {
-      char *data = NULL;
       size_t chunk_len = 0;
-      int result = coro_socket_recv(client->socket, &data, &chunk_len);
-      if (result != 0 || !data || chunk_len == 0) {
-        if (data) {
-          coro_socket_free_recv(data);
-        }
+      int result =
+          email_cnet_transport_receive(&client->transport, out + total, len - total, &chunk_len);
+      if (result != SALTS_OK || chunk_len == 0) {
         fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read IMAP literal");
         return -1;
       }
-
-      if (chunk_len > len - total) {
-        size_t remaining = len - total;
-        size_t extra = chunk_len - remaining;
-        memcpy(out + total, data, remaining);
-        total += remaining;
-        if (extra > sizeof(client->read_buffer) - 1) {
-          coro_socket_free_recv(data);
-          fmt_text(client->error_msg, sizeof(client->error_msg), "IMAP literal overflow");
-          return -1;
-        }
-        memcpy(client->read_buffer, data + remaining, extra);
-        client->read_buffer_len = extra;
-        client->read_buffer[client->read_buffer_len] = '\0';
-      } else {
-        memcpy(out + total, data, chunk_len);
-        total += chunk_len;
-      }
-      coro_socket_free_recv(data);
+      total += chunk_len;
     }
   }
 
@@ -167,13 +164,13 @@ static int imap_read_response(imap_client_t *client, const char *expected_tag) {
 }
 
 static int imap_send_command(imap_client_t *client, const char *tag, const char *cmd) {
-  if (!client || !client->socket || !tag || !cmd) return -1;
+  if (!client || !email_cnet_transport_is_connected(&client->transport) || !tag || !cmd) return -1;
 
   char buffer[2048];
   int len = fmt(buffer, sizeof(buffer), "{} {}\r\n", tag, cmd);
 
-  int rc = coro_socket_send(client->socket, buffer, len);
-  if (rc != 0) {
+  int rc = email_cnet_transport_send(&client->transport, buffer, (size_t)len);
+  if (rc != SALTS_OK) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to send IMAP command: {}", cmd);
     return -1;
   }
@@ -205,23 +202,37 @@ static int imap_command(imap_client_t *client, const char *cmd) {
 
 /* ── Client Creation ───────────────────────────────────────────────── */
 
-imap_client_t *imap_client_create(coro_context_t *ctx,
-                                   const imap_config_t *config) {
-  if (!ctx || !config) return NULL;
+imap_client_t *imap_client_create(const imap_config_t *config) {
+  if (!config || !config->host || config->host[0] == '\0' || config->port <= 0 ||
+      config->port > 65535 || config->timeout_ms < 0 || (config->use_tls && config->use_starttls)) {
+    return NULL;
+  }
 
   imap_client_t *client = calloc(1, sizeof(imap_client_t));
   if (!client) return NULL;
 
-  client->ctx = ctx;
   client->config = *config;
 
   if (config->host) client->config.host = strdup(config->host);
   if (config->username) client->config.username = strdup(config->username);
   if (config->password) client->config.password = strdup(config->password);
-
-  if (client->config.timeout_ms == 0) {
-    client->config.timeout_ms = 30000;
+  if (!client->config.host || (config->username && !client->config.username) ||
+      (config->password && !client->config.password)) {
+    free(client->config.host);
+    free(client->config.username);
+    free(client->config.password);
+    free(client);
+    return NULL;
   }
+
+  if (email_cnet_transport_init(&client->transport, client->config.timeout_ms) != SALTS_OK) {
+    free(client->config.host);
+    free(client->config.username);
+    free(client->config.password);
+    free(client);
+    return NULL;
+  }
+  client->config.timeout_ms = (int)client->transport.timeout_ms;
 
   return client;
 }
@@ -229,7 +240,7 @@ imap_client_t *imap_client_create(coro_context_t *ctx,
 void imap_client_free(imap_client_t *client) {
   if (!client) return;
 
-  if (client->socket) coro_socket_destroy(client->socket);
+  if (email_cnet_transport_destroy(&client->transport) != SALTS_OK) return;
 
   free(client->config.host);
   free(client->config.username);
@@ -240,24 +251,17 @@ void imap_client_free(imap_client_t *client) {
 /* ── Connection ────────────────────────────────────────────────────── */
 
 int imap_connect(imap_client_t *client) {
-  int socket_type;
-
   if (!client) return -1;
 
-  // Create socket
-  socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
-  client->socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
-  if (!client->socket) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
-    return -1;
-  }
-
-  if (coro_socket_connect(client->socket, client->config.host,
-                          client->config.port) != 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to connect to {}:{}", client->config.host,
-        client->config.port);
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
+  imap_reset_read_state(client);
+  if (email_cnet_transport_connect(&client->transport, client->config.host,
+                                   (uint16_t)client->config.port,
+                                   client->config.use_tls) != SALTS_OK) {
+    fmt(client->error_msg, sizeof(client->error_msg),
+        "Failed to connect to {}:{} at {} (CNet status {})", client->config.host,
+        client->config.port, email_cnet_transport_stage(&client->transport),
+        email_cnet_transport_status(&client->transport));
+    (void)email_cnet_transport_close(&client->transport);
     return -1;
   }
 
@@ -274,8 +278,11 @@ int imap_connect(imap_client_t *client) {
       return -1;
     }
 
-    if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to upgrade IMAP connection to TLS");
+    if (email_cnet_transport_start_tls(&client->transport, client->config.host) != SALTS_OK) {
+      fmt(client->error_msg, sizeof(client->error_msg),
+          "Failed to upgrade IMAP connection to TLS at {} (CNet status {})",
+          email_cnet_transport_stage(&client->transport),
+          email_cnet_transport_status(&client->transport));
       imap_disconnect(client);
       return -1;
     }
@@ -285,7 +292,8 @@ int imap_connect(imap_client_t *client) {
   if (client->config.username && client->config.password) {
     // LOGIN
     char login_cmd[1024];
-    fmt(login_cmd, sizeof(login_cmd), "LOGIN {} {}", client->config.username, client->config.password);
+    fmt(login_cmd, sizeof(login_cmd), "LOGIN {} {}", client->config.username,
+        client->config.password);
 
     if (imap_command(client, login_cmd) != 0) {
       imap_disconnect(client);
@@ -297,25 +305,27 @@ int imap_connect(imap_client_t *client) {
 }
 
 void imap_disconnect(imap_client_t *client) {
-  if (!client || !client->socket) return;
+  if (!client || !email_cnet_transport_is_connected(&client->transport)) {
+    if (client) (void)email_cnet_transport_close(&client->transport);
+    return;
+  }
 
   // Send LOGOUT
   imap_command(client, "LOGOUT");
 
-  coro_socket_destroy(client->socket);
-  client->socket = NULL;
+  (void)email_cnet_transport_close(&client->transport);
 }
 
 /* ── Mailbox Operations ────────────────────────────────────────────── */
 
-char **imap_list_mailboxes(imap_client_t *client,
-                            const char *reference,
-                            const char *pattern,
-                            int *count) {
+char **imap_list_mailboxes(imap_client_t *client, const char *reference, const char *pattern,
+                           int *count) {
   if (!client) return NULL;
+  if (count) *count = 0;
 
   char list_cmd[512];
-  fmt(list_cmd, sizeof(list_cmd), "LIST \"{}\" \"{}\"", reference ? reference : "", pattern ? pattern : "*");
+  fmt(list_cmd, sizeof(list_cmd), "LIST \"{}\" \"{}\"", reference ? reference : "",
+      pattern ? pattern : "*");
 
   char *tag = imap_generate_tag(client);
   if (imap_send_command(client, tag, list_cmd) != 0) {
@@ -327,10 +337,12 @@ char **imap_list_mailboxes(imap_client_t *client,
   int capacity = 16;
   int n = 0;
   mailboxes = malloc(capacity * sizeof(char *));
+  if (!mailboxes) return NULL;
 
   while (1) {
     if (imap_read_line(client) != 0) {
-      for (int i = 0; i < n; i++) free(mailboxes[i]);
+      for (int i = 0; i < n; i++)
+        free(mailboxes[i]);
       free(mailboxes);
       return NULL;
     }
@@ -351,13 +363,36 @@ char **imap_list_mailboxes(imap_client_t *client,
         }
         if (*start_quote == '"') {
           size_t name_len = last_quote - start_quote - 1;
-          char *name = malloc(name_len + 1);
+          char *name = malloc(name_len + 1u);
+          if (!name) {
+            for (int i = 0; i < n; i++)
+              free(mailboxes[i]);
+            free(mailboxes);
+            return NULL;
+          }
           memcpy(name, start_quote + 1, name_len);
           name[name_len] = '\0';
 
           if (n >= capacity) {
+            char **new_mailboxes;
+            if (capacity >= IMAP_MAX_RESULT_COUNT) {
+              free(name);
+              for (int i = 0; i < n; i++)
+                free(mailboxes[i]);
+              free(mailboxes);
+              fmt_text(client->error_msg, sizeof(client->error_msg), "Too many IMAP mailboxes");
+              return NULL;
+            }
             capacity *= 2;
-            mailboxes = realloc(mailboxes, capacity * sizeof(char *));
+            new_mailboxes = realloc(mailboxes, (size_t)capacity * sizeof(char *));
+            if (!new_mailboxes) {
+              free(name);
+              for (int i = 0; i < n; i++)
+                free(mailboxes[i]);
+              free(mailboxes);
+              return NULL;
+            }
+            mailboxes = new_mailboxes;
           }
           mailboxes[n++] = name;
         }
@@ -369,8 +404,7 @@ char **imap_list_mailboxes(imap_client_t *client,
   return mailboxes;
 }
 
-imap_mailbox_t *imap_select_mailbox(imap_client_t *client,
-                                     const char *mailbox) {
+imap_mailbox_t *imap_select_mailbox(imap_client_t *client, const char *mailbox) {
   if (!client || !mailbox) return NULL;
 
   char select_cmd[512];
@@ -382,7 +416,12 @@ imap_mailbox_t *imap_select_mailbox(imap_client_t *client,
   }
 
   imap_mailbox_t *info = calloc(1, sizeof(imap_mailbox_t));
+  if (!info) return NULL;
   info->name = strdup(mailbox);
+  if (!info->name) {
+    free(info);
+    return NULL;
+  }
 
   // Parse SELECT responses
   while (1) {
@@ -450,6 +489,7 @@ int imap_delete_mailbox(imap_client_t *client, const char *mailbox) {
 
 int *imap_search(imap_client_t *client, const char *criteria, int *count) {
   if (!client || !criteria) return NULL;
+  if (count) *count = 0;
 
   char search_cmd[1024];
   fmt(search_cmd, sizeof(search_cmd), "SEARCH {}", criteria);
@@ -463,6 +503,7 @@ int *imap_search(imap_client_t *client, const char *criteria, int *count) {
   int capacity = 64;
   int n = 0;
   results = malloc(capacity * sizeof(int));
+  if (!results) return NULL;
 
   // Read responses
   while (1) {
@@ -480,15 +521,29 @@ int *imap_search(imap_client_t *client, const char *criteria, int *count) {
     if (strncmp(client->line_buffer, "* SEARCH", 8) == 0) {
       char *ptr = client->line_buffer + 8;
       while (*ptr) {
-        while (*ptr == ' ') ptr++;
+        while (*ptr == ' ')
+          ptr++;
         if (isdigit(*ptr)) {
           int num = atoi(ptr);
           if (n >= capacity) {
+            int *new_results;
+            if (capacity >= IMAP_MAX_RESULT_COUNT) {
+              free(results);
+              fmt_text(client->error_msg, sizeof(client->error_msg),
+                       "Too many IMAP search results");
+              return NULL;
+            }
             capacity *= 2;
-            results = realloc(results, capacity * sizeof(int));
+            new_results = realloc(results, (size_t)capacity * sizeof(int));
+            if (!new_results) {
+              free(results);
+              return NULL;
+            }
+            results = new_results;
           }
           results[n++] = num;
-          while (isdigit(*ptr)) ptr++;
+          while (isdigit(*ptr))
+            ptr++;
         } else {
           break;
         }
@@ -517,24 +572,16 @@ email_message_t *imap_fetch_message(imap_client_t *client, int seq_num) {
   }
 
   // Parse literal size: BODY[] {1234}
-  char *literal_start = strstr(client->line_buffer, "{");
-  if (!literal_start) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
-    return NULL;
-  }
-
-  int literal_size = atoi(literal_start + 1);
-  if (literal_size <= 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Invalid literal size: {}", literal_size);
-    return NULL;
-  }
+  size_t literal_size = 0u;
+  if (imap_parse_literal_size(client, &literal_size) != 0) return NULL;
 
   // Read literal data
-  char *message_data = malloc(literal_size + 1);
-  int total_read = 0;
+  char *message_data = malloc(literal_size + 1u);
+  size_t total_read = 0u;
+  if (!message_data) return NULL;
 
   while (total_read < literal_size) {
-    size_t to_read = (size_t)(literal_size - total_read);
+    size_t to_read = literal_size - total_read;
     if (imap_read_exact(client, message_data + total_read, to_read) != 0) {
       free(message_data);
       return NULL;
@@ -587,24 +634,16 @@ email_message_t *imap_fetch_message_uid(imap_client_t *client, int uid) {
   }
 
   // Parse literal size
-  char *literal_start = strstr(client->line_buffer, "{");
-  if (!literal_start) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Invalid FETCH response: no literal");
-    return NULL;
-  }
-
-  int literal_size = atoi(literal_start + 1);
-  if (literal_size <= 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Invalid literal size: {}", literal_size);
-    return NULL;
-  }
+  size_t literal_size = 0u;
+  if (imap_parse_literal_size(client, &literal_size) != 0) return NULL;
 
   // Read literal data
-  char *message_data = malloc(literal_size + 1);
-  int total_read = 0;
+  char *message_data = malloc(literal_size + 1u);
+  size_t total_read = 0u;
+  if (!message_data) return NULL;
 
   while (total_read < literal_size) {
-    size_t to_read = (size_t)(literal_size - total_read);
+    size_t to_read = literal_size - total_read;
     if (imap_read_exact(client, message_data + total_read, to_read) != 0) {
       free(message_data);
       return NULL;

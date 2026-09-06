@@ -24,15 +24,15 @@ TurboScript while keeping third-party headers and types private:
 MD5 is implemented from the algorithm and test vectors in RFC 1321; no RFC
 sample source code was copied. HMAC follows RFC 2104 and is verified against
 RFC 4231 vectors. SHA-256 and Monocypher are private sources of the exported
-`TurboNet::Crypto` static library. Temporary HMAC key material is erased with
+`SaltsNet::Crypto` static library. Temporary HMAC key material is erased with
 Monocypher `crypto_wipe()`.
 
-Consumers include only `turbo_crypto.h` and link `TurboNet::Crypto`. All
+Consumers include only `turbo_crypto.h` and link `SaltsNet::Crypto`. All
 adapters use `TURBO_CRYPTO_*` sizes, types, and error codes; no Monocypher
 header or type crosses the package boundary.
 
 libecc is vendored from https://github.com/libecc/libecc at commit
-`6e8f214f41f65d5f30b04da75472f9c24f2100db`. TurboNet selects the upstream
+`6e8f214f41f65d5f30b04da75472f9c24f2100db`. SaltsNet selects the upstream
 BSD license and compiles only WEI448, SHAKE256, and EDDSA448 into the same
 `turbo_crypto` archive. The public adapter accepts RFC 8032's 57-byte private
 seed and keeps all libecc types and headers private. libecc's scalar-blinding

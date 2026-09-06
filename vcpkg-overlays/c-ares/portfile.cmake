@@ -1,4 +1,4 @@
-# TurboNet embeds c-ares in CoroNet and must not acquire a runtime c-ares DLL.
+# SaltsNet uses the static c-ares overlay and must not acquire a runtime c-ares DLL.
 vcpkg_check_linkage(ONLY_STATIC_LIBRARY)
 
 vcpkg_from_github(

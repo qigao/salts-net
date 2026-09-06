@@ -1,33 +1,21 @@
 /**
- * stun_service.c - Minimal STUN binding service
+ * stun_service.c - Minimal caller-driven CNet STUN binding service
  */
 
-#include "ice/turbo_stun.h"
-#include "turbo_coro.h"
+#include "ice/salts_stun.h"
+#include "ice_cnet_datagram.h"
+
+#include <salts/error_codes.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <arpa/inet.h>
-#include <netinet/in.h>
+#ifndef _WIN32
 #include <signal.h>
 #endif
 
-typedef struct {
-    const char *bind_host;
-    uint16_t bind_port;
-} stun_service_config_t;
-
-typedef struct {
-    coro_context_t *ctx;
-    stun_service_config_t config;
-} stun_service_state_t;
+enum { STUN_SERVICE_POLL_TIMEOUT_MS = 1000, STUN_SERVICE_SEND_TIMEOUT_MS = 3000 };
 
 static volatile int g_running = 1;
 
@@ -38,129 +26,80 @@ static void on_signal(int signo) {
 }
 #endif
 
-static void format_sockaddr_ipv4(const struct sockaddr_storage *addr, char *host, size_t host_len,
-                                 uint16_t *port_out) {
-    const struct sockaddr_in *addr4 = (const struct sockaddr_in *)addr;
-
-    if (!addr || addr->ss_family != AF_INET) {
-        snprintf(host, host_len, "unknown");
-        if (port_out) {
-            *port_out = 0;
-        }
-        return;
-    }
-
-    inet_ntop(AF_INET, &addr4->sin_addr, host, (socklen_t)host_len);
-    if (port_out) {
-        *port_out = ntohs(addr4->sin_port);
-    }
-}
-
-static int bind_udp_socket(coro_socket_t *socket, const char *host, uint16_t port) {
-    struct sockaddr_in bind_addr;
-
-    memset(&bind_addr, 0, sizeof(bind_addr));
-    bind_addr.sin_family = AF_INET;
-    bind_addr.sin_port = htons(port);
-    if (inet_pton(AF_INET, host, &bind_addr.sin_addr) != 1) {
-        return -1;
-    }
-
-    return coro_socket_bind(socket, (const struct sockaddr *)&bind_addr);
-}
-
-static void stun_service_task(coro_t *co, void *arg) {
-    const stun_service_state_t *state = (const stun_service_state_t *)arg;
-    const stun_service_config_t *config = &state->config;
-    coro_context_t *ctx = state->ctx;
-    coro_socket_t *socket;
-
-    (void)co;
-    socket = coro_socket_create(ctx, CORO_SOCKET_UDP_V4);
-    if (!socket) {
-        fprintf(stderr, "Failed to create UDP socket\n");
-        coro_context_stop(ctx);
-        return;
-    }
-
-    coro_socket_set_timeout(socket, 1000);
-    if (bind_udp_socket(socket, config->bind_host, config->bind_port) != 0) {
-        fprintf(stderr, "Failed to bind %s:%u\n", config->bind_host, config->bind_port);
-        coro_socket_destroy(socket);
-        coro_context_stop(ctx);
-        return;
-    }
-
-    printf("STUN service listening on %s:%u\n", config->bind_host, config->bind_port);
-
-    while (g_running) {
-        char *data = NULL;
-        size_t len = 0;
-        struct sockaddr_storage from;
-        int rc;
-
-        memset(&from, 0, sizeof(from));
-        rc = coro_socket_recvfrom(socket, &data, &len, &from);
-        if (rc == TURBO_ETIMEDOUT) {
-            continue;
-        }
-        if (rc != 0 || !data || len < STUN_HEADER_SIZE) {
-            coro_socket_free_recv(data);
-            continue;
-        }
-
-        if (stun_is_stun_message((const uint8_t *)data, len)) {
-            const uint8_t *message = (const uint8_t *)data;
-            uint16_t msg_type = (uint16_t)((message[0] << 8) | message[1]);
-            if (msg_type == STUN_MSG_BINDING_REQUEST && from.ss_family == AF_INET) {
-                stun_transaction_id_t txn_id;
-                uint8_t response[STUN_MAX_MESSAGE_SIZE];
-                char remote_host[64];
-                uint16_t remote_port = 0;
-                size_t response_len;
-
-                memcpy(txn_id.id, message + 8, STUN_TRANSACTION_ID_LEN);
-                format_sockaddr_ipv4(&from, remote_host, sizeof(remote_host), &remote_port);
-                response_len = stun_build_binding_response(response, &txn_id, remote_host, remote_port);
-                if (response_len > 0) {
-                    printf("Binding request from %s:%u\n", remote_host, remote_port);
-                    (void)coro_socket_sendto(socket, (const char *)response, response_len,
-                                             (const struct sockaddr *)&from);
-                }
-            }
-        }
-
-        coro_socket_free_recv(data);
-    }
-
-    coro_socket_destroy(socket);
-    coro_context_stop(ctx);
-}
-
 int main(int argc, char **argv) {
-    stun_service_state_t state;
+    const char *bind_host = argc > 1 ? argv[1] : "0.0.0.0";
+    const uint16_t bind_port = (uint16_t)(argc > 2 ? strtoul(argv[2], NULL, 10) : 3478);
+    ice_cnet_datagram_t transport;
+    uint16_t actual_port = 0u;
+    int result = 0;
 
-    state.config.bind_host = argc > 1 ? argv[1] : "0.0.0.0";
-    state.config.bind_port = (uint16_t)(argc > 2 ? strtoul(argv[2], NULL, 10) : 3478);
+    if (bind_port == 0u) {
+        fprintf(stderr, "Invalid STUN service port\n");
+        return 1;
+    }
 
 #ifndef _WIN32
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 #endif
 
-    state.ctx = coro_context_create(NULL);
-    if (!state.ctx) {
-        fprintf(stderr, "Failed to create coroutine context\n");
+    if (ice_cnet_datagram_init(&transport, bind_host, bind_port, STUN_MAX_MESSAGE_SIZE) !=
+            SALTS_OK ||
+        ice_cnet_datagram_port(&transport, &actual_port) != SALTS_OK) {
+        fprintf(stderr, "Failed to bind %s:%u with CNet\n", bind_host, bind_port);
         return 1;
     }
 
-    if (coro_context_spawn(state.ctx, stun_service_task, &state) != 0) {
-        fprintf(stderr, "Failed to spawn STUN service coroutine\n");
-        coro_context_destroy(state.ctx);
-        return 1;
+    printf("STUN service listening on %s:%u\n", bind_host, actual_port);
+    while (g_running) {
+        cnet_datagram_peer peer;
+        uint8_t request[STUN_MAX_MESSAGE_SIZE];
+        size_t request_len = 0u;
+        int rc = ice_cnet_datagram_receive(&transport, &peer, request, sizeof(request),
+                                           &request_len, STUN_SERVICE_POLL_TIMEOUT_MS);
+        if (rc == SALTS_ETIMEDOUT) {
+            continue;
+        }
+        if (rc != SALTS_OK) {
+            fprintf(stderr, "CNet receive failed: %d\n", rc);
+            result = 1;
+            break;
+        }
+        if (request_len < STUN_HEADER_SIZE || !stun_is_stun_message(request, request_len) ||
+            (uint16_t)((request[0] << 8) | request[1]) != STUN_MSG_BINDING_REQUEST) {
+            continue;
+        }
+
+        stun_transaction_id_t transaction_id;
+        uint8_t response[STUN_MAX_MESSAGE_SIZE];
+        char remote_host[64];
+        uint16_t remote_port = 0u;
+        size_t response_len;
+
+        memcpy(transaction_id.id, request + 8, STUN_TRANSACTION_ID_LEN);
+        if (ice_cnet_datagram_peer_to_text(&peer, remote_host, sizeof(remote_host),
+                                           &remote_port) != SALTS_OK) {
+            continue;
+        }
+        response_len = stun_build_binding_response(response, &transaction_id,
+                                                   remote_host, remote_port);
+        if (response_len == 0u) {
+            continue;
+        }
+
+        printf("Binding request from %s:%u\n", remote_host, remote_port);
+        rc = ice_cnet_datagram_send(&transport, &peer, response, response_len,
+                                    STUN_SERVICE_SEND_TIMEOUT_MS);
+        if (rc != SALTS_OK) {
+            fprintf(stderr, "CNet send failed: %d\n", rc);
+            result = 1;
+            break;
+        }
     }
 
-    coro_context_run(state.ctx, TURBO_RUN_DEFAULT);
-    coro_context_destroy(state.ctx);
-    return 0;
+    if (ice_cnet_datagram_destroy(&transport) != SALTS_OK) {
+        fprintf(stderr, "CNet STUN service shutdown failed\n");
+        return 1;
+    }
+    return result;
 }

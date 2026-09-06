@@ -1,4 +1,4 @@
-# TurboNet CMake Utilities
+# SaltsNet CMake Utilities
 
 function(cmake_config_api target_name api_macro)
   if(NOT TARGET ${target_name})

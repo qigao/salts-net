@@ -6,10 +6,101 @@
 #include "snmp_usm.h"
 #include "snmp_builder.h"
 #include "snmp_parser.h"
+#include "asn1_types.h"
 #include "tinytest.h"
+#include <stdlib.h>
 #include <string.h>
 
+static size_t find_test_bytes(const uint8_t *data, size_t data_len,
+                              const uint8_t *needle, size_t needle_len) {
+    if (!data || !needle || needle_len == 0 || needle_len > data_len) return SIZE_MAX;
+    for (size_t offset = 0; offset <= data_len - needle_len; ++offset) {
+        if (memcmp(data + offset, needle, needle_len) == 0) return offset;
+    }
+    return SIZE_MAX;
+}
+
+static int build_test_auth_request(uint8_t *request, size_t *request_len,
+                                   snmp_v3_user_t *user, snmp_oid_t *oid) {
+    static uint8_t engine_id[] = {0x80, 0x00, 0x1f, 0x88, 0x80, 0x12, 0x34};
+    snmp_usm_params_t usm_params = {0};
+    int result = usm_create_user("authuser", "myauthpassword", SNMP_AUTH_SHA1,
+                                 NULL, SNMP_PRIV_NONE, engine_id,
+                                 sizeof(engine_id), user);
+    if (result != USM_OK) return result;
+    result = snmp_oid_from_string("1.3.6.1.2.1.1.3.0", oid);
+    if (result != SNMP_BUILD_OK) {
+        free(user->user_name);
+        user->user_name = NULL;
+        return result;
+    }
+    usm_params.authoritative_engine_id = engine_id;
+    usm_params.engine_id_len = sizeof(engine_id);
+    usm_params.engine_boots = 10;
+    usm_params.engine_time = 5000;
+    usm_params.user_name = "authuser";
+    result = snmp_build_v3_get_request(99999, oid, 1, &usm_params, user,
+                                       SNMP_SEC_LEVEL_AUTH_NOPRIV,
+                                       request, request_len);
+    if (result != SNMP_BUILD_OK) {
+        snmp_oid_free(oid);
+        free(user->user_name);
+        user->user_name = NULL;
+    }
+    return result;
+}
+
+static int test_usm_parameter_lengths(const uint8_t *message, size_t message_len,
+                                      size_t *auth_len, size_t *priv_len) {
+    asn1_value_t *root = NULL;
+    asn1_value_t *usm = NULL;
+    int result = -1;
+    if (!message || !auth_len || !priv_len ||
+        scan_binary_asn1(message, message_len, &root) != 0 || !root ||
+        root->tag != 0x30 || root->value.sequence.count != 4) {
+        goto cleanup;
+    }
+    asn1_value_t *security = root->value.sequence.children[2];
+    if (security->tag != 0x04 ||
+        scan_binary_asn1(security->value.octet_string.data,
+                         security->value.octet_string.length, &usm) != 0 ||
+        !usm || usm->tag != 0x30 || usm->value.sequence.count != 6) {
+        goto cleanup;
+    }
+    if (usm->value.sequence.children[4]->tag != 0x04 ||
+        usm->value.sequence.children[5]->tag != 0x04) {
+        goto cleanup;
+    }
+    *auth_len = usm->value.sequence.children[4]->value.octet_string.length;
+    *priv_len = usm->value.sequence.children[5]->value.octet_string.length;
+    result = 0;
+
+cleanup:
+    if (usm) asn1_free(usm);
+    if (root) asn1_free(root);
+    return result;
+}
+
 spec("snmp_v3") {
+  describe("CMeta protocol metadata") {
+    it("reflects stable SNMPv3 security values and names") {
+        snmp_auth_protocol_t parsed_auth = SNMP_AUTH_NONE;
+        snmp_priv_protocol_t parsed_priv = SNMP_PRIV_NONE;
+
+        check_equal((int)SNMP_VERSION_3, 3);
+        check_equal((int)SNMP_SEC_LEVEL_AUTH_PRIV, 3);
+        check_equal((int)SNMP_AUTH_SHA256, 3);
+        check_equal((int)SNMP_PRIV_AES256, 3);
+        check_equal(snmp_version_t_meta()->count, (size_t)3);
+        check_equal(snmp_security_level_t_to_string(SNMP_SEC_LEVEL_AUTH_NOPRIV),
+                    "auth_no_priv");
+        check_true(snmp_auth_protocol_t_from_string("sha1", &parsed_auth));
+        check_equal(parsed_auth, SNMP_AUTH_SHA1);
+        check_true(snmp_priv_protocol_t_from_string("aes256", &parsed_priv));
+        check_equal(parsed_priv, SNMP_PRIV_AES256);
+    }
+  }
+
   describe("USM Password-to-Key Derivation (RFC 3414)") {
     it("should derive MD5 key from password correctly") {
         const char *password = "maplesyrup";
@@ -202,6 +293,46 @@ spec("snmp_v3") {
         check_equal(decrypted_len, sizeof(plaintext) - 1);
         check_equal(decrypted, plaintext, decrypted_len);
     }
+
+    it("rejects AES encryption when the output capacity is too small") {
+        uint8_t key[16] = {0};
+        uint8_t plaintext[16] = {0};
+        uint8_t salt[8] = {0};
+        uint8_t guarded_output[17];
+        size_t output_len = 8;
+        memset(guarded_output, 0xA5, sizeof(guarded_output));
+
+        check_equal(usm_encrypt(plaintext, sizeof(plaintext), key, sizeof(key),
+                                SNMP_PRIV_AES128, 1, 1, salt,
+                                guarded_output, &output_len),
+                    USM_ERROR_INVALID);
+        for (size_t index = 8; index < sizeof(guarded_output); ++index) {
+            check_equal(guarded_output[index], (uint8_t)0xA5);
+        }
+    }
+
+    it("rejects AES decryption when the output capacity is too small") {
+        uint8_t key[16] = {0};
+        uint8_t plaintext[16] = {0};
+        uint8_t salt[8] = {0};
+        uint8_t ciphertext[16] = {0};
+        uint8_t guarded_output[17];
+        size_t ciphertext_len = sizeof(ciphertext);
+        size_t output_len = 8;
+        memset(guarded_output, 0xA5, sizeof(guarded_output));
+        check_equal(usm_encrypt(plaintext, sizeof(plaintext), key, sizeof(key),
+                                SNMP_PRIV_AES128, 1, 1, salt,
+                                ciphertext, &ciphertext_len),
+                    USM_OK);
+
+        check_equal(usm_decrypt(ciphertext, ciphertext_len, key, sizeof(key),
+                                SNMP_PRIV_AES128, 1, 1, salt,
+                                guarded_output, &output_len),
+                    USM_ERROR_INVALID);
+        for (size_t index = 8; index < sizeof(guarded_output); ++index) {
+            check_equal(guarded_output[index], (uint8_t)0xA5);
+        }
+    }
   }
 
   describe("USM Protocol Implementation") {
@@ -355,6 +486,32 @@ spec("snmp_v3") {
         snmp_oid_free(&oid);
     }
 
+    it("encodes empty security parameters for noAuthNoPriv") {
+        static uint8_t engine_id[] = {0x80, 0x00, 0x1f, 0x88, 0x80};
+        snmp_usm_params_t usm_params = {0};
+        snmp_oid_t oid = {0};
+        uint8_t request[1024];
+        size_t request_len = sizeof(request);
+        size_t auth_len = SIZE_MAX;
+        size_t priv_len = SIZE_MAX;
+
+        usm_params.authoritative_engine_id = engine_id;
+        usm_params.engine_id_len = sizeof(engine_id);
+        usm_params.user_name = "public";
+        check_equal(snmp_oid_from_string("1.3.6.1.2.1.1.1.0", &oid),
+                    SNMP_BUILD_OK);
+        check_equal(snmp_build_v3_get_request(12345, &oid, 1, &usm_params, NULL,
+                                              SNMP_SEC_LEVEL_NOAUTH_NOPRIV,
+                                              request, &request_len),
+                    SNMP_BUILD_OK);
+        check_equal(test_usm_parameter_lengths(request, request_len,
+                                               &auth_len, &priv_len), 0);
+        check_equal(auth_len, (size_t)0);
+        check_equal(priv_len, (size_t)0);
+
+        snmp_oid_free(&oid);
+    }
+
     it("should roundtrip authNoPriv messages successfully") {
         /* Create user */
         uint8_t engine_id[] = {0x80, 0x00, 0x1f, 0x88, 0x80, 0x12, 0x34};
@@ -410,6 +567,91 @@ spec("snmp_v3") {
         pool_destroy(pool);
         snmp_oid_free(&oid);
         free(user.user_name);
+    }
+
+    it("rejects an authenticated message whose digest was changed") {
+        uint8_t request[1024];
+        size_t request_len = sizeof(request);
+        snmp_v3_user_t user = {0};
+        snmp_oid_t oid = {0};
+        snmp_message_t decoded = {0};
+        MemoryPool *pool = pool_create(8192);
+
+        check_equal(build_test_auth_request(request, &request_len, &user, &oid),
+                    SNMP_BUILD_OK);
+        check_not_null(pool);
+        check_equal((size_t)snmp_parse_v3(request, request_len, &decoded, &user, pool),
+                    request_len);
+
+        const size_t auth_offset = find_test_bytes(request, request_len,
+                                                   decoded.usm_params.auth_params, 12);
+        check_not_equal(auth_offset, SIZE_MAX);
+        request[auth_offset] ^= 0x01u;
+        pool_destroy(pool);
+        pool = pool_create(8192);
+
+        check_equal(snmp_parse_v3(request, request_len, &decoded, &user, pool), -7);
+
+        pool_destroy(pool);
+        snmp_oid_free(&oid);
+        free(user.user_name);
+    }
+
+    it("rejects an authenticated message without user credentials") {
+        uint8_t request[1024];
+        size_t request_len = sizeof(request);
+        snmp_v3_user_t user = {0};
+        snmp_oid_t oid = {0};
+        snmp_message_t decoded = {0};
+        MemoryPool *pool = pool_create(8192);
+
+        check_equal(build_test_auth_request(request, &request_len, &user, &oid),
+                    SNMP_BUILD_OK);
+        check_not_null(pool);
+        check_equal(snmp_parse_v3(request, request_len, &decoded, NULL, pool), -7);
+
+        pool_destroy(pool);
+        snmp_oid_free(&oid);
+        free(user.user_name);
+    }
+
+    it("rejects an authenticated message for a different user") {
+        uint8_t request[1024];
+        size_t request_len = sizeof(request);
+        snmp_v3_user_t user = {0};
+        snmp_oid_t oid = {0};
+        snmp_message_t decoded = {0};
+        MemoryPool *pool = pool_create(8192);
+
+        check_equal(build_test_auth_request(request, &request_len, &user, &oid),
+                    SNMP_BUILD_OK);
+        check_not_null(pool);
+        user.user_name[0] = 'x';
+        check_equal(snmp_parse_v3(request, request_len, &decoded, &user, pool), -7);
+
+        pool_destroy(pool);
+        snmp_oid_free(&oid);
+        free(user.user_name);
+    }
+
+    it("rejects authNoPriv construction without authentication credentials") {
+        static uint8_t engine_id[] = {0x80, 0x00, 0x1f, 0x88, 0x80};
+        snmp_usm_params_t usm_params = {0};
+        snmp_oid_t oid = {0};
+        uint8_t request[1024];
+        size_t request_len = sizeof(request);
+
+        usm_params.authoritative_engine_id = engine_id;
+        usm_params.engine_id_len = sizeof(engine_id);
+        usm_params.user_name = "authuser";
+        check_equal(snmp_oid_from_string("1.3.6.1.2.1.1.3.0", &oid),
+                    SNMP_BUILD_OK);
+        check_equal(snmp_build_v3_get_request(1, &oid, 1, &usm_params, NULL,
+                                              SNMP_SEC_LEVEL_AUTH_NOPRIV,
+                                              request, &request_len),
+                    SNMP_BUILD_ERROR_INVALID);
+
+        snmp_oid_free(&oid);
     }
   }
 }

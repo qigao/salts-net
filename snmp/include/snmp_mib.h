@@ -34,26 +34,26 @@ typedef struct {
 } snmp_mib_registry_t;
 
 // MIB registry functions
-TURBONET_SNMP_C_API snmp_mib_registry_t *snmp_mib_registry_create(void);
-TURBONET_SNMP_C_API void snmp_mib_registry_destroy(snmp_mib_registry_t *registry);
-TURBONET_SNMP_C_API int snmp_mib_registry_add_module(snmp_mib_registry_t *registry,
+SALTSNET_SNMP_C_API snmp_mib_registry_t *snmp_mib_registry_create(void);
+SALTSNET_SNMP_C_API void snmp_mib_registry_destroy(snmp_mib_registry_t *registry);
+SALTSNET_SNMP_C_API int snmp_mib_registry_add_module(snmp_mib_registry_t *registry,
                                            const snmp_mib_module_t *module);
 
 // OID lookup functions
-TURBONET_SNMP_C_API const snmp_oid_entry_t *snmp_mib_lookup_oid(const snmp_mib_registry_t *registry,
+SALTSNET_SNMP_C_API const snmp_oid_entry_t *snmp_mib_lookup_oid(const snmp_mib_registry_t *registry,
                                                       const snmp_oid_t *oid);
-TURBONET_SNMP_C_API const snmp_oid_entry_t *snmp_mib_lookup_name(const snmp_mib_registry_t *registry,
+SALTSNET_SNMP_C_API const snmp_oid_entry_t *snmp_mib_lookup_name(const snmp_mib_registry_t *registry,
                                                        const char *name);
 
 // OID navigation
-TURBONET_SNMP_C_API const snmp_oid_entry_t *snmp_mib_get_next_oid(const snmp_mib_registry_t *registry,
+SALTSNET_SNMP_C_API const snmp_oid_entry_t *snmp_mib_get_next_oid(const snmp_mib_registry_t *registry,
                                                         const snmp_oid_t *oid);
 
 // Utility functions
-TURBONET_SNMP_C_API char *snmp_oid_to_string(const snmp_oid_t *oid);
-TURBONET_SNMP_C_API int snmp_string_to_oid(const char *str, snmp_oid_t *oid);
-TURBONET_SNMP_C_API int snmp_oid_compare(const snmp_oid_t *oid1, const snmp_oid_t *oid2);
-TURBONET_SNMP_C_API int snmp_oid_is_prefix(const snmp_oid_t *prefix, const snmp_oid_t *oid);
+SALTSNET_SNMP_C_API char *snmp_oid_to_string(const snmp_oid_t *oid);
+SALTSNET_SNMP_C_API int snmp_string_to_oid(const char *str, snmp_oid_t *oid);
+SALTSNET_SNMP_C_API int snmp_oid_compare(const snmp_oid_t *oid1, const snmp_oid_t *oid2);
+SALTSNET_SNMP_C_API int snmp_oid_is_prefix(const snmp_oid_t *prefix, const snmp_oid_t *oid);
 
 #ifdef __cplusplus
 }

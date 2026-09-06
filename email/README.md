@@ -1,4 +1,4 @@
-# TurboNet Email Module
+# SaltsNet Email Module
 
 Complete email client library with SMTP, POP3, and IMAP support.
 
@@ -18,7 +18,9 @@ Complete email client library with SMTP, POP3, and IMAP support.
 - Priority headers (high/normal/low)
 
 ### Integration
-- Async I/O via CoroNet coroutines
+- Synchronous protocol API over caller-driven Salts CNet
+- Bounded command, event, send, receive, and TLS storage
+- Cross-thread interruption through CNet wake
 - Zero-copy MIME parsing
 - Memory pool allocation
 - TLS/SSL configuration fields
@@ -34,11 +36,6 @@ STARTTLS upgrade are available through the same client config.
 ```c
 #include "email/email_smtp.h"
 #include "email/email_message.h"
-#include "CoroNet.h"
-
-// Create context
-coro_context_t *ctx = coro_context_create(NULL);
-
 // Configure SMTP
 smtp_config_t config = {0};
 config.host = "127.0.0.1";
@@ -50,7 +47,7 @@ config.username = NULL;
 config.password = NULL;
 
 // Create client and connect
-smtp_client_t *smtp = smtp_client_create(ctx, &config);
+smtp_client_t *smtp = smtp_client_create(&config);
 smtp_connect(smtp);
 
 // Create message
@@ -60,7 +57,7 @@ mem_init(&pool, 8192);
 email_message_t *msg = email_message_create(&pool);
 email_message_set_from(msg, "Sender", "sender@example.com");
 email_message_add_to(msg, "Recipient", "recipient@example.com");
-email_message_set_subject(msg, "Hello from TurboNet");
+email_message_set_subject(msg, "Hello from SaltsNet");
 email_message_set_text_body(msg, "Plain text body");
 email_message_set_html_body(msg, "<html><body><h1>HTML body</h1></body></html>");
 
@@ -72,7 +69,6 @@ email_message_free(msg);
 mem_destroy(&pool);
 smtp_disconnect(smtp);
 smtp_client_free(smtp);
-coro_context_destroy(ctx);
 ```
 
 Environment overrides used by `examples/example_email_send.c`:
@@ -83,10 +79,7 @@ Environment overrides used by `examples/example_email_send.c`:
 - `SMTP_TO` default `recipient@smtp4dev.local`
 - `SMTP_TLS` default `0`
 - `SMTP_STARTTLS` default `0`
-- `TURBONET_TLS_CA_FILE` optional CA bundle loaded before the TLS handshake
-- `TURBONET_TLS_CA_PATH` optional CA directory loaded before the TLS handshake
-
-If you do want Gmail later, first finish the missing TLS/STARTTLS path in `email_smtp.c`.
+Direct TLS and STARTTLS use CNet's verified platform trust store and hostname validation.
 
 ### Receive Email (POP3, local smtp4dev path)
 
@@ -96,11 +89,6 @@ and the example defaults to those values unless you override them with environme
 
 ```c
 #include "email/email_pop3.h"
-#include "CoroNet.h"
-
-// Create context
-coro_context_t *ctx = coro_context_create(NULL);
-
 // Configure POP3
 pop3_config_t config = {0};
 config.host = "127.0.0.1";
@@ -111,7 +99,7 @@ config.username = getenv("POP3_USERNAME"); // defaults to "turbo"
 config.password = getenv("POP3_PASSWORD"); // defaults to "turbo"
 
 // Create client and connect
-pop3_client_t *pop3 = pop3_client_create(ctx, &config);
+pop3_client_t *pop3 = pop3_client_create(&config);
 pop3_connect(pop3);
 
 // Get mailbox stats
@@ -139,7 +127,6 @@ if (msg) {
 // Cleanup
 pop3_disconnect(pop3);
 pop3_client_free(pop3);
-coro_context_destroy(ctx);
 ```
 
 Environment overrides used by `examples/example_email_receive.c`:
@@ -150,8 +137,6 @@ Environment overrides used by `examples/example_email_receive.c`:
 - `POP3_PASSWORD` default `turbo`
 - `POP3_TLS` default `0`
 - `POP3_STLS` default `0`
-- `TURBONET_TLS_CA_FILE` optional CA bundle loaded before the TLS handshake
-- `TURBONET_TLS_CA_PATH` optional CA directory loaded before the TLS handshake
 
 ### Access Email (IMAP, local smtp4dev path)
 
@@ -176,8 +161,6 @@ Environment overrides used by `examples/example_email_imap.c`:
 - `IMAP_PASSWORD` default `turbo`
 - `IMAP_TLS` default `0`
 - `IMAP_STARTTLS` default `0`
-- `TURBONET_TLS_CA_FILE` optional CA bundle loaded before the TLS handshake
-- `TURBONET_TLS_CA_PATH` optional CA directory loaded before the TLS handshake
 
 ### Add Attachments
 
@@ -210,7 +193,7 @@ email_message_enable_encryption(msg, "recipient-cert.pem");
 ### SMTP Client
 
 ```c
-smtp_client_t *smtp_client_create(coro_context_t *ctx, const smtp_config_t *config);
+smtp_client_t *smtp_client_create(const smtp_config_t *config);
 void smtp_client_free(smtp_client_t *client);
 
 int smtp_connect(smtp_client_t *client);
@@ -228,7 +211,7 @@ int smtp_get_last_code(smtp_client_t *client);
 ### POP3 Client
 
 ```c
-pop3_client_t *pop3_client_create(coro_context_t *ctx, const pop3_config_t *config);
+pop3_client_t *pop3_client_create(const pop3_config_t *config);
 void pop3_client_free(pop3_client_t *client);
 
 int pop3_connect(pop3_client_t *client);
@@ -316,18 +299,18 @@ typedef struct {
 
 ## Building
 
-```bash
-mkdir build && cd build
-cmake ..
-cmake --build .
+```powershell
+cmake --preset win-release-user
+cmake --build --preset win-release-user --target SaltsEmail
+ctest --preset win-release-user -R "email|mime|uri_parser" --output-on-failure
 ```
 
 ## Dependencies
 
-- **CoroNet** - Async coroutine networking
+- **Salts CNet** - Caller-driven bounded TCP/TLS networking
+- **Salts Core** - Strings, buffers, platform primitives, and SIMD scanning
 - **mime_parser** - RFC 2822/MIME parsing
 - **OpenSSL** - TLS/SSL and S/MIME
-- **turbo_utils** - String utilities and Base64
 
 ## Examples
 
@@ -335,12 +318,6 @@ See `examples/` directory:
 - `example_email_send.c` - SMTP sending
 - `example_email_receive.c` - POP3 receiving
 
-## TODO
-
-- [ ] RFC 2047 encoded-word for non-ASCII subjects
-- [ ] IMAP FETCH body parsing
-- [ ] Multi-line SMTP/IMAP response handling
-
 ## License
 
-Part of TurboNet project.
+Part of the SaltsNet project.

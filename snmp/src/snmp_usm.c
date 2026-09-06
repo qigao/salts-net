@@ -1,21 +1,17 @@
 /**
  * @file snmp_usm.c
- * @brief SNMPv3 USM Implementation (Skeleton)
- *
- * TODO: This is a skeleton implementation. Complete implementation requires:
- * 1. HMAC-MD5/SHA/SHA256 (use OpenSSL or monocypher)
- * 2. DES-CBC encryption (use OpenSSL)
- * 3. AES-CFB encryption (use OpenSSL or monocypher)
- * 4. Key derivation algorithm (RFC 3414)
- * 5. Key localization algorithm (RFC 3414)
+ * @brief SNMPv3 USM cryptographic primitives
  */
 
 #include "snmp_usm.h"
+#include "snmp_usm_wire.h"
 #include "asn1_types.h"
 #include "memory_pool.h"
+#include <salts/clock.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <limits.h>
 /* OpenSSL headers */
 #include <openssl/md5.h>
 #include <openssl/sha.h>
@@ -167,8 +163,7 @@ int usm_compute_auth(
             md = EVP_sha1();
             break;
         case SNMP_AUTH_SHA256:
-            md = EVP_sha256();
-            break;
+            return USM_ERROR_UNSUPPORTED;
         default:
             return USM_ERROR_UNSUPPORTED;
     }
@@ -196,6 +191,7 @@ int usm_verify_auth(
     const uint8_t *auth_params
 ) {
     uint8_t computed[12];
+    if (!message || !key || !auth_params) return USM_ERROR_INVALID;
     int result = usm_compute_auth(message, message_len, key, key_len, auth_protocol, computed);
 
     if (result != USM_OK) {
@@ -244,9 +240,13 @@ int usm_encrypt(
 
     if (priv_protocol == SNMP_PRIV_DES) {
         /* DES-CBC encryption (RFC 3414) */
-        if (key_len < 16) {
+        if (key_len < 16 || plaintext_len > (size_t)LONG_MAX ||
+            plaintext_len > SIZE_MAX - 7u) {
             return USM_ERROR_INVALID;
         }
+
+        size_t padded_len = ((plaintext_len + 7u) / 8u) * 8u;
+        if (*ciphertext_len < padded_len) return USM_ERROR_INVALID;
 
         /* Pre-IV: salt XOR key[8..15] */
         uint8_t iv[8];
@@ -262,7 +262,6 @@ int usm_encrypt(
         DES_set_key_unchecked(&des_key, &schedule);
 
         /* Pad plaintext to 8-byte blocks */
-        size_t padded_len = ((plaintext_len + 7) / 8) * 8;
         uint8_t *padded = (uint8_t *)malloc(padded_len);
         if (!padded) {
             return USM_ERROR_INVALID;
@@ -286,7 +285,7 @@ int usm_encrypt(
         int key_bits = (priv_protocol == SNMP_PRIV_AES128) ? 128 : 256;
         size_t required_key_len = key_bits / 8;
 
-        if (key_len < required_key_len) {
+        if (key_len < required_key_len || *ciphertext_len < plaintext_len) {
             return USM_ERROR_INVALID;
         }
 
@@ -336,7 +335,8 @@ int usm_decrypt(
 
     if (priv_protocol == SNMP_PRIV_DES) {
         /* DES-CBC decryption (RFC 3414) */
-        if (key_len < 16 || ciphertext_len % 8 != 0) {
+        if (key_len < 16 || ciphertext_len % 8 != 0 ||
+            ciphertext_len > (size_t)LONG_MAX || *plaintext_len < ciphertext_len) {
             return USM_ERROR_INVALID;
         }
 
@@ -386,7 +386,7 @@ int usm_decrypt(
         int key_bits = (priv_protocol == SNMP_PRIV_AES128) ? 128 : 256;
         size_t required_key_len = key_bits / 8;
 
-        if (key_len < required_key_len) {
+        if (key_len < required_key_len || *plaintext_len < ciphertext_len) {
             return USM_ERROR_INVALID;
         }
 
@@ -499,12 +499,15 @@ int usm_create_user(
  *     msgPrivacyParameters         OCTET STRING
  * }
  */
-int usm_encode_security_params(
+int snmp_usm_encode_security_params_sized(
     const snmp_usm_params_t *params,
+    size_t auth_params_len,
+    size_t priv_params_len,
     uint8_t *out,
     size_t *out_len
 ) {
-    if (!params || !out || !out_len) {
+    if (!params || !out || !out_len || auth_params_len > sizeof(params->auth_params) ||
+        priv_params_len > sizeof(params->priv_params)) {
         return USM_ERROR_INVALID;
     }
 
@@ -556,7 +559,7 @@ int usm_encode_security_params(
     /* 5. msgAuthenticationParameters - OCTET STRING (12 bytes) */
     asn1_value_t *auth_params = asn1_create_octet_string(
         params->auth_params,
-        12
+        auth_params_len
     );
     if (!auth_params) {
         asn1_free(seq);
@@ -567,7 +570,7 @@ int usm_encode_security_params(
     /* 6. msgPrivacyParameters - OCTET STRING (8 bytes) */
     asn1_value_t *priv_params = asn1_create_octet_string(
         params->priv_params,
-        8
+        priv_params_len
     );
     if (!priv_params) {
         asn1_free(seq);
@@ -580,6 +583,15 @@ int usm_encode_security_params(
     asn1_free(seq);
 
     return (result == 0) ? USM_OK : USM_ERROR_INVALID;
+}
+
+int usm_encode_security_params(
+    const snmp_usm_params_t *params,
+    uint8_t *out,
+    size_t *out_len
+) {
+    return snmp_usm_encode_security_params_sized(
+        params, sizeof(params->auth_params), sizeof(params->priv_params), out, out_len);
 }
 
 /*
@@ -665,18 +677,26 @@ int usm_decode_security_params(
     params->user_name = user_name_str;
 
     /* 5. msgAuthenticationParameters - OCTET STRING */
-    if (children[4]->tag != 0x04 || children[4]->value.octet_string.length != 12) {
+    if (children[4]->tag != 0x04 || children[4]->value.octet_string.length > 12) {
         asn1_free(root);
         return USM_ERROR_INVALID;
     }
-    memcpy(params->auth_params, children[4]->value.octet_string.data, 12);
+    memset(params->auth_params, 0, sizeof(params->auth_params));
+    if (children[4]->value.octet_string.length > 0u) {
+        memcpy(params->auth_params, children[4]->value.octet_string.data,
+               children[4]->value.octet_string.length);
+    }
 
     /* 6. msgPrivacyParameters - OCTET STRING */
-    if (children[5]->tag != 0x04 || children[5]->value.octet_string.length != 8) {
+    if (children[5]->tag != 0x04 || children[5]->value.octet_string.length > 8) {
         asn1_free(root);
         return USM_ERROR_INVALID;
     }
-    memcpy(params->priv_params, children[5]->value.octet_string.data, 8);
+    memset(params->priv_params, 0, sizeof(params->priv_params));
+    if (children[5]->value.octet_string.length > 0u) {
+        memcpy(params->priv_params, children[5]->value.octet_string.data,
+               children[5]->value.octet_string.length);
+    }
 
     asn1_free(root);
     return USM_OK;
@@ -686,7 +706,7 @@ int usm_decode_security_params(
  * Get current timestamp in milliseconds
  */
 static uint64_t get_current_time_ms(void) {
-    return turbo_monotonic_ms();
+    return salts_monotonic_ms();
 }
 
 /*

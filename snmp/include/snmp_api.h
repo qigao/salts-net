@@ -1,12 +1,12 @@
-#ifndef TURBONET_SNMP_API_H
-#define TURBONET_SNMP_API_H
+#ifndef SALTSNET_SNMP_API_H
+#define SALTSNET_SNMP_API_H
 
-#ifndef TURBONET_SNMP_C_API
+#ifndef SALTSNET_SNMP_C_API
   #if !defined(_WIN32) && defined(__GNUC__) && __GNUC__ >= 4
-    #define TURBONET_SNMP_C_API __attribute__((visibility("default")))
+    #define SALTSNET_SNMP_C_API __attribute__((visibility("default")))
   #else
-    #define TURBONET_SNMP_C_API
+    #define SALTSNET_SNMP_C_API
   #endif
 #endif
 
-#endif /* TURBONET_SNMP_API_H */
+#endif /* SALTSNET_SNMP_API_H */

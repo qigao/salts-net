@@ -6,9 +6,9 @@ if(POLICY CMP0167)
   cmake_policy(SET CMP0167 OLD)
 endif()
 
-# TurboNet Project - Unified High-Performance Networking Library
+# SaltsNet Project - Network tools built on Salts
 project(
-  TurboNet
+  SaltsNet
   VERSION 1.0.0
   LANGUAGES C CXX)
 
@@ -47,29 +47,25 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-find_package(kcp CONFIG REQUIRED)
-find_package(c-ares CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
-find_package(PkgConfig REQUIRED)
 
+if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
+  message(FATAL_ERROR "Required dependency root is not defined: SALTS_ROOT")
+endif()
+if(NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
+  message(FATAL_ERROR "SALTS_ROOT is not a directory: $ENV{SALTS_ROOT}")
+endif()
 find_package(
-  Rocida CONFIG REQUIRED
-  PATHS "$ENV{ROCIDA_ROOT}"
-  NO_DEFAULT_PATH) 
-find_package(
-  TurboParser CONFIG REQUIRED
-  PATHS "$ENV{TURBOPARSER_ROOT}"
+  Salts CONFIG REQUIRED
+  PATHS "$ENV{SALTS_ROOT}"
   NO_DEFAULT_PATH)
-
 # Additional components
 add_subdirectory(tools)
 include(FindTools)
 add_subdirectory(vendor)
-set(TURBONET_CARES_TARGET c-ares::cares)
 
-add_subdirectory(CoroNet)
-if(TURBONET_ENABLE_LSQUIC)
+if(SALTSNET_ENABLE_LSQUIC)
   add_subdirectory(lsquic)
 endif()
 
@@ -77,35 +73,37 @@ add_subdirectory(ice)
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 add_subdirectory(email)
+add_subdirectory(lb)
+add_subdirectory(tproxy)
 
 # Package Configuration
 include(CMakePackageConfigHelpers)
 
 # Generate the config file
 configure_package_config_file(
-  "${CMAKE_SOURCE_DIR}/cmake/TurboNetConfig.cmake.in"
-  "${CMAKE_BINARY_DIR}/TurboNetConfig.cmake"
-  INSTALL_DESTINATION "lib/cmake/TurboNet")
+  "${CMAKE_SOURCE_DIR}/cmake/SaltsNetConfig.cmake.in"
+  "${CMAKE_BINARY_DIR}/SaltsNetConfig.cmake"
+  INSTALL_DESTINATION "lib/cmake/SaltsNet")
 
 # Generate the version file
 write_basic_package_version_file(
-  "${CMAKE_BINARY_DIR}/TurboNetConfigVersion.cmake"
+  "${CMAKE_BINARY_DIR}/SaltsNetConfigVersion.cmake"
   VERSION ${PROJECT_VERSION}
   COMPATIBILITY AnyNewerVersion)
 
 # Install the config files
-install(FILES "${CMAKE_BINARY_DIR}/TurboNetConfig.cmake"
-              "${CMAKE_BINARY_DIR}/TurboNetConfigVersion.cmake"
-        DESTINATION "lib/cmake/TurboNet")
+install(FILES "${CMAKE_BINARY_DIR}/SaltsNetConfig.cmake"
+              "${CMAKE_BINARY_DIR}/SaltsNetConfigVersion.cmake"
+        DESTINATION "lib/cmake/SaltsNet")
 
 # Install the export set
 export(
-  EXPORT TurboNetTargets
-  FILE "${CMAKE_BINARY_DIR}/TurboNetTargets.cmake"
-  NAMESPACE TurboNet::)
+  EXPORT SaltsNetTargets
+  FILE "${CMAKE_BINARY_DIR}/SaltsNetTargets.cmake"
+  NAMESPACE SaltsNet::)
 
 install(
-  EXPORT TurboNetTargets
-  FILE TurboNetTargets.cmake
-  NAMESPACE TurboNet::
-  DESTINATION "lib/cmake/TurboNet")
+  EXPORT SaltsNetTargets
+  FILE SaltsNetTargets.cmake
+  NAMESPACE SaltsNet::
+  DESTINATION "lib/cmake/SaltsNet")

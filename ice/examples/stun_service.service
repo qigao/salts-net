@@ -1,12 +1,12 @@
 [Unit]
-Description=TurboNet STUN Service
+Description=SaltsNet STUN Service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/turbonet/bin/stun_service 0.0.0.0 3479
-Environment=LD_LIBRARY_PATH=/opt/turbonet/lib
+ExecStart=/opt/saltsnet/bin/stun_service 0.0.0.0 3479
+Environment=LD_LIBRARY_PATH=/opt/saltsnet/lib
 Restart=always
 RestartSec=2
 

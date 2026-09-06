@@ -1,56 +1,64 @@
 /**
  * @file ldap_client.c
- * @brief LDAP Client implementation on top of CoroNet coroutine sockets.
+ * @brief LDAP Client implementation on top of caller-driven CNet streams.
  */
 
 #include "ldap_client.h"
 #include "ldap_builder.h"
 #include "ldap_parser.h"
-#include <CoroNet/turbo_coro_context.h>
-#include <CoroNet/turbo_coro_socket.h>
-#include <fmt.h>
+#include <cnet/cnet.h>
+#include <salts/clock.h>
+#include <salts/error_codes.h>
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* Client error codes (match ldap_client.h) */
-#define LDAP_CLIENT_OK              0
-#define LDAP_CLIENT_ERROR_MEMORY   -1
-#define LDAP_CLIENT_ERROR_INVALID  -2
-#define LDAP_CLIENT_ERROR_NETWORK  -3
-#define LDAP_CLIENT_ERROR_TIMEOUT  -4
+#define LDAP_CLIENT_OK 0
+#define LDAP_CLIENT_ERROR_MEMORY -1
+#define LDAP_CLIENT_ERROR_INVALID -2
+#define LDAP_CLIENT_ERROR_NETWORK -3
+#define LDAP_CLIENT_ERROR_TIMEOUT -4
 #define LDAP_CLIENT_ERROR_PROTOCOL -5
-#define LDAP_CLIENT_ERROR_AUTH     -6
-#define LDAP_CLIENT_ERROR_TLS      -7
+#define LDAP_CLIENT_ERROR_AUTH -6
+#define LDAP_CLIENT_ERROR_TLS -7
 
-#define LDAP_DEFAULT_PORT 389
-#define LDAP_DEFAULT_TIMEOUT_MS 30000
-#define LDAP_RECV_BUFFER_SIZE 65536
-#define LDAP_SEND_BUFFER_SIZE 4096
-
-typedef int (*ldap_coro_op_fn)(ldap_client_t *client, void *arg);
-
-typedef struct {
-  ldap_client_t *client;
-  ldap_coro_op_fn fn;
-  void *arg;
-  int result;
-} ldap_sync_op_t;
+enum {
+  LDAP_DEFAULT_PORT = 389,
+  LDAP_DEFAULT_TLS_PORT = 636,
+  LDAP_DEFAULT_TIMEOUT_MS = 30000,
+  LDAP_RECV_BUFFER_SIZE = 65536,
+  LDAP_SEND_BUFFER_SIZE = 4096,
+  LDAP_CNET_QUEUE_CAPACITY = 4,
+  LDAP_CNET_URI_CAPACITY = 320,
+  LDAP_CNET_STOP_TIMEOUT_MS = 5000
+};
 
 struct ldap_client_s {
   char *host;
   uint16_t port;
   uint32_t timeout_ms;
+  int use_tls;
 
   int32_t next_message_id;
   char error_msg[256];
   int last_result_code;
 
-  coro_context_t *ctx;
-  coro_socket_t *socket;
+  /* The synchronous caller is the sole CNet poll owner. */
+  cnet_client net;
+  cnet_connection connection;
+  int net_initialized;
   int connected;
+  int terminal;
+  int terminal_failed;
+  int transport_status;
+  int receive_armed;
+  int receive_ready;
+  int receive_error;
+  int send_pending;
 
-  uint8_t *recv_buf;
-  size_t recv_buf_size;
+  uint8_t recv_buf[LDAP_RECV_BUFFER_SIZE];
   size_t recv_buf_used;
 
   ldap_message_t *pending_response;
@@ -111,63 +119,147 @@ typedef struct {
   ldap_result_data_t *result;
 } ldap_compare_args_t;
 
-static int parse_url(const char *url, char **host, uint16_t *port, int *use_tls) {
-  const char *cursor = url;
-  const char *colon;
-  const char *slash;
-  size_t host_len;
+static native_io_backend_kind ldap_client_backend(void) {
+#if defined(_WIN32)
+  return NATIVE_IO_BACKEND_IOCP;
+#elif defined(__linux__)
+  return NATIVE_IO_BACKEND_EPOLL;
+#else
+  return NATIVE_IO_BACKEND_KQUEUE;
+#endif
+}
 
-  *use_tls = 0;
-  *port = LDAP_DEFAULT_PORT;
+static char *ldap_client_duplicate(const char *value, size_t length) {
+  char *copy = (char *)malloc(length + 1u);
+  if (copy == NULL) return NULL;
+  memcpy(copy, value, length);
+  copy[length] = '\0';
+  return copy;
+}
 
-  if (!url || !host || !port || !use_tls) return -1;
-
-  if (strncmp(cursor, "ldaps://", 8) == 0) {
-    *use_tls = 1;
-    *port = 636;
-    cursor += 8;
-  } else if (strncmp(cursor, "ldap://", 7) == 0) {
-    cursor += 7;
+static int ldap_client_parse_port(const char *first, const char *last, uint16_t *port) {
+  unsigned int value = 0u;
+  const char *cursor;
+  if (first == last) return -1;
+  for (cursor = first; cursor != last; ++cursor) {
+    unsigned int digit;
+    if (*cursor < '0' || *cursor > '9') return -1;
+    digit = (unsigned int)(*cursor - '0');
+    if (value > (65535u - digit) / 10u) return -1;
+    value = value * 10u + digit;
   }
-
-  colon = strchr(cursor, ':');
-  slash = strchr(cursor, '/');
-
-  if (colon && (!slash || colon < slash)) {
-    host_len = (size_t)(colon - cursor);
-    *port = (uint16_t)atoi(colon + 1);
-  } else if (slash) {
-    host_len = (size_t)(slash - cursor);
-  } else {
-    host_len = strlen(cursor);
-  }
-
-  *host = (char *)malloc(host_len + 1);
-  if (!*host) return -1;
-
-  memcpy(*host, cursor, host_len);
-  (*host)[host_len] = '\0';
+  if (value == 0u) return -1;
+  *port = (uint16_t)value;
   return 0;
 }
 
-static int ldap_client_append_recv(ldap_client_t *client, const char *data, size_t len) {
-  if (!client || !data || len == 0) return 0;
+static int parse_url(const char *url, char **host, uint16_t *port, int *use_tls) {
+  const char *cursor;
+  const char *authority_end;
+  const char *host_first;
+  const char *host_last;
+  const char *port_first = NULL;
 
-  if (client->recv_buf_used + len > client->recv_buf_size) {
-    size_t new_size = client->recv_buf_size ? client->recv_buf_size : LDAP_RECV_BUFFER_SIZE;
-    while (new_size < client->recv_buf_used + len) {
-      new_size *= 2;
-    }
+  if (url == NULL || host == NULL || port == NULL || use_tls == NULL) return -1;
+  if (strlen(url) >= LDAP_CNET_URI_CAPACITY) return -1;
+  *host = NULL;
+  *use_tls = 0;
+  *port = LDAP_DEFAULT_PORT;
+  cursor = url;
 
-    uint8_t *new_buf = (uint8_t *)realloc(client->recv_buf, new_size);
-    if (!new_buf) return LDAP_CLIENT_ERROR_MEMORY;
-    client->recv_buf = new_buf;
-    client->recv_buf_size = new_size;
+  if (strncmp(cursor, "ldaps://", 8u) == 0) {
+    *use_tls = 1;
+    *port = LDAP_DEFAULT_TLS_PORT;
+    cursor += 8;
+  } else if (strncmp(cursor, "ldap://", 7u) == 0) {
+    cursor += 7;
+  } else if (strstr(cursor, "://") != NULL) {
+    return -1;
   }
 
+  authority_end = strchr(cursor, '/');
+  if (authority_end == NULL) authority_end = cursor + strlen(cursor);
+  if (cursor == authority_end) return -1;
+
+  if (*cursor == '[') {
+    const char *closing = memchr(cursor + 1, ']', (size_t)(authority_end - cursor - 1));
+    if (closing == NULL || closing == cursor + 1) return -1;
+    host_first = cursor + 1;
+    host_last = closing;
+    if (closing + 1 != authority_end) {
+      if (closing[1] != ':') return -1;
+      port_first = closing + 2;
+    }
+  } else {
+    const char *colon = memchr(cursor, ':', (size_t)(authority_end - cursor));
+    host_first = cursor;
+    host_last = colon != NULL ? colon : authority_end;
+    if (colon != NULL) port_first = colon + 1;
+  }
+
+  if (host_first == host_last) return -1;
+  if (port_first != NULL && ldap_client_parse_port(port_first, authority_end, port) != 0) return -1;
+  *host = ldap_client_duplicate(host_first, (size_t)(host_last - host_first));
+  return *host != NULL ? 0 : -1;
+}
+
+static void ldap_client_set_transport_error(ldap_client_t *client, const char *operation,
+                                            int status) {
+  client->transport_status = status;
+  (void)snprintf(client->error_msg, sizeof(client->error_msg), "%s failed with CNet status %d",
+                 operation, status);
+}
+
+static void ldap_client_on_state(void *user, cnet_connection connection,
+                                 cnet_connection_state state, const cnet_error *error) {
+  ldap_client_t *client = (ldap_client_t *)user;
+  (void)connection;
+  if (state == CNET_CONNECTION_CONNECTED) {
+    client->connected = 1;
+  } else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+    client->connected = 0;
+    client->terminal = 1;
+    client->terminal_failed = state == CNET_CONNECTION_FAILED;
+    if (client->transport_status == SALTS_OK) {
+      client->transport_status = error != NULL ? error->status : SALTS_EIO;
+    }
+  }
+}
+
+static int ldap_client_append_recv(ldap_client_t *client, const void *data, size_t len) {
+  if (!client || !data || len == 0) return 0;
+  if (len > LDAP_RECV_BUFFER_SIZE - client->recv_buf_used) return LDAP_CLIENT_ERROR_PROTOCOL;
   memcpy(client->recv_buf + client->recv_buf_used, data, len);
   client->recv_buf_used += len;
   return LDAP_CLIENT_OK;
+}
+
+static void ldap_client_on_receive(void *user, cnet_connection connection,
+                                   const cnet_receive_view *view) {
+  ldap_client_t *client = (ldap_client_t *)user;
+  int status;
+  (void)connection;
+  client->receive_armed = 0;
+  if (view == NULL || view->kind != CNET_MESSAGE_BYTES ||
+      (view->size != 0u && view->data == NULL)) {
+    client->receive_error = LDAP_CLIENT_ERROR_PROTOCOL;
+    ldap_client_set_transport_error(client, "receive", SALTS_EPROTO);
+    return;
+  }
+  status = ldap_client_append_recv(client, view->data, view->size);
+  if (status != LDAP_CLIENT_OK) {
+    client->receive_error = status;
+    ldap_client_set_transport_error(client, "receive buffer", SALTS_EMSGSIZE);
+    return;
+  }
+  client->receive_ready = 1;
+}
+
+static void ldap_client_on_send(void *user, cnet_connection connection, size_t size) {
+  ldap_client_t *client = (ldap_client_t *)user;
+  (void)connection;
+  (void)size;
+  client->send_pending = 0;
 }
 
 static void ldap_client_consume_recv(ldap_client_t *client, size_t consumed) {
@@ -194,43 +286,43 @@ static int ldap_client_process_message(ldap_client_t *client, ldap_message_t *ms
   }
 
   switch (msg->protocol_op) {
-    case LDAP_RES_SEARCH_ENTRY:
-      if (client->search_callback) {
-        client->search_callback(client, &msg->payload.search_entry, client->search_user_data);
-      }
-      ldap_message_free(msg);
-      return LDAP_CLIENT_OK;
+  case LDAP_RES_SEARCH_ENTRY:
+    if (client->search_callback) {
+      client->search_callback(client, &msg->payload.search_entry, client->search_user_data);
+    }
+    ldap_message_free(msg);
+    return LDAP_CLIENT_OK;
 
-    case LDAP_RES_SEARCH_DONE:
-      client->last_result_code = msg->payload.search_done.result_code;
-      if (client->search_result) {
-        *client->search_result = msg->payload.search_done;
-        memset(&msg->payload.search_done, 0, sizeof(ldap_result_data_t));
-      }
-      ldap_message_free(msg);
-      ldap_client_finish_with_result(client, LDAP_CLIENT_OK);
-      return LDAP_CLIENT_OK;
+  case LDAP_RES_SEARCH_DONE:
+    client->last_result_code = msg->payload.search_done.result_code;
+    if (client->search_result) {
+      *client->search_result = msg->payload.search_done;
+      memset(&msg->payload.search_done, 0, sizeof(ldap_result_data_t));
+    }
+    ldap_message_free(msg);
+    ldap_client_finish_with_result(client, LDAP_CLIENT_OK);
+    return LDAP_CLIENT_OK;
 
+  default:
+    client->pending_response = msg;
+    switch (msg->protocol_op) {
+    case LDAP_RES_BIND:
+      client->last_result_code = msg->payload.bind_response.result_code;
+      break;
+    case LDAP_RES_MODIFY:
+    case LDAP_RES_ADD:
+    case LDAP_RES_DELETE:
+    case LDAP_RES_MODDN:
+    case LDAP_RES_COMPARE:
+    case LDAP_RES_SEARCH_REF:
+      client->last_result_code = msg->payload.generic_result.result_code;
+      break;
     default:
-      client->pending_response = msg;
-      switch (msg->protocol_op) {
-        case LDAP_RES_BIND:
-          client->last_result_code = msg->payload.bind_response.result_code;
-          break;
-        case LDAP_RES_MODIFY:
-        case LDAP_RES_ADD:
-        case LDAP_RES_DELETE:
-        case LDAP_RES_MODDN:
-        case LDAP_RES_COMPARE:
-        case LDAP_RES_SEARCH_REF:
-          client->last_result_code = msg->payload.generic_result.result_code;
-          break;
-        default:
-          client->last_result_code = 0;
-          break;
-      }
-      ldap_client_finish_with_result(client, LDAP_CLIENT_OK);
-      return LDAP_CLIENT_OK;
+      client->last_result_code = 0;
+      break;
+    }
+    ldap_client_finish_with_result(client, LDAP_CLIENT_OK);
+    return LDAP_CLIENT_OK;
   }
 }
 
@@ -238,7 +330,8 @@ static int ldap_client_drain_recv_buffer(ldap_client_t *client) {
   while (client && client->recv_buf_used > 0) {
     ldap_parse_result_t parse_result;
     int complete = ldap_message_complete(client->recv_buf, client->recv_buf_used);
-    if (complete <= 0) return LDAP_CLIENT_OK;
+    if (complete < 0) return LDAP_CLIENT_ERROR_PROTOCOL;
+    if (complete == 0) return LDAP_CLIENT_OK;
 
     memset(&parse_result, 0, sizeof(parse_result));
     int rc = ldap_parse_message(client->recv_buf, client->recv_buf_used, &parse_result);
@@ -253,49 +346,63 @@ static int ldap_client_drain_recv_buffer(ldap_client_t *client) {
   return LDAP_CLIENT_OK;
 }
 
-static int ldap_client_recv_until_response(ldap_client_t *client) {
-  while (client && !client->response_received) {
-    char *chunk = NULL;
-    size_t chunk_len = 0;
-    int rc = coro_socket_recv(client->socket, &chunk, &chunk_len);
+static uint32_t ldap_client_remaining_ms(uint64_t deadline) {
+  const uint64_t now = salts_monotonic_ms();
+  const uint64_t remaining = deadline > now ? deadline - now : 0u;
+  return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
+}
 
-    if (rc == TURBO_ETIMEDOUT) {
-      if (chunk) coro_socket_free_recv(chunk);
-      fmt_text(client->error_msg, sizeof(client->error_msg), "Operation timeout");
-      return LDAP_CLIENT_ERROR_TIMEOUT;
+static int ldap_client_recv_until_response(ldap_client_t *client, uint64_t deadline) {
+  while (client != NULL && !client->response_received) {
+    int status;
+    size_t events = 0u;
+    uint32_t wait_ms;
+
+    if (client->receive_error != LDAP_CLIENT_OK) return client->receive_error;
+    if (client->receive_ready) {
+      client->receive_ready = 0;
+      status = ldap_client_drain_recv_buffer(client);
+      if (status != LDAP_CLIENT_OK) {
+        (void)snprintf(client->error_msg, sizeof(client->error_msg), "LDAP parse/protocol failure");
+        return status;
+      }
+      if (client->response_received) break;
     }
-    if (rc != 0) {
-      if (chunk) coro_socket_free_recv(chunk);
-      client->connected = 0;
-      fmt(client->error_msg, sizeof(client->error_msg), "Receive failed ({})", rc);
+    if (client->terminal) {
+      ldap_client_set_transport_error(client, "receive", client->transport_status);
       return LDAP_CLIENT_ERROR_NETWORK;
     }
+    if (!client->receive_armed) {
+      status = cnet_receive(&client->net, client->connection, 1u);
+      if (status != SALTS_OK) {
+        ldap_client_set_transport_error(client, "receive admission", status);
+        return LDAP_CLIENT_ERROR_NETWORK;
+      }
+      client->receive_armed = 1;
+    }
 
-    if (chunk && chunk_len > 0) {
-      rc = ldap_client_append_recv(client, chunk, chunk_len);
-      coro_socket_free_recv(chunk);
-      if (rc != LDAP_CLIENT_OK) {
-        fmt_text(client->error_msg, sizeof(client->error_msg), "Receive buffer allocation failed");
-        return rc;
-      }
-      rc = ldap_client_drain_recv_buffer(client);
-      if (rc != LDAP_CLIENT_OK) {
-        fmt_text(client->error_msg, sizeof(client->error_msg), "LDAP parse/protocol failure");
-        return rc;
-      }
-    } else if (chunk) {
-      coro_socket_free_recv(chunk);
+    wait_ms = ldap_client_remaining_ms(deadline);
+    if (wait_ms == 0u) {
+      (void)snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
+      return LDAP_CLIENT_ERROR_TIMEOUT;
+    }
+    status = cnet_client_poll(&client->net, wait_ms, &events);
+    if (status != SALTS_OK) {
+      ldap_client_set_transport_error(client, "request poll", status);
+      return status == SALTS_ETIMEDOUT ? LDAP_CLIENT_ERROR_TIMEOUT : LDAP_CLIENT_ERROR_NETWORK;
     }
   }
 
-  return client ? client->pending_result : LDAP_CLIENT_ERROR_INVALID;
+  return client != NULL ? client->pending_result : LDAP_CLIENT_ERROR_INVALID;
 }
 
 static int ldap_client_send_and_wait(ldap_client_t *client, const uint8_t *data, size_t len,
                                      int message_id) {
-  if (!client || !client->connected || !client->socket) {
+  uint64_t deadline;
+  int status;
+  if (!client || !client->connected) {
     if (client) {
-      fmt_text(client->error_msg, sizeof(client->error_msg), "Not connected");
+      (void)snprintf(client->error_msg, sizeof(client->error_msg), "Not connected");
     }
     return LDAP_CLIENT_ERROR_NETWORK;
   }
@@ -308,80 +415,92 @@ static int ldap_client_send_and_wait(ldap_client_t *client, const uint8_t *data,
   client->pending_result = LDAP_CLIENT_ERROR_TIMEOUT;
   client->response_received = 0;
   client->expected_message_id = message_id;
+  client->receive_error = LDAP_CLIENT_OK;
+  client->receive_ready = 0;
 
-  int rc = coro_socket_send(client->socket, (const char *)data, len);
-  if (rc == TURBO_ETIMEDOUT) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Operation timeout");
-    return LDAP_CLIENT_ERROR_TIMEOUT;
+  if (!client->receive_armed) {
+    status = cnet_receive(&client->net, client->connection, 1u);
+    if (status != SALTS_OK) {
+      ldap_client_set_transport_error(client, "receive admission", status);
+      return LDAP_CLIENT_ERROR_NETWORK;
+    }
+    client->receive_armed = 1;
   }
-  if (rc != 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Send failed ({})", rc);
+
+  client->send_pending = 1;
+  status = cnet_send(&client->net, client->connection, data, len);
+  if (status != SALTS_OK) {
+    client->send_pending = 0;
+    ldap_client_set_transport_error(client, "send admission", status);
     return LDAP_CLIENT_ERROR_NETWORK;
   }
-
-  return ldap_client_recv_until_response(client);
+  deadline = salts_monotonic_ms() + client->timeout_ms;
+  return ldap_client_recv_until_response(client, deadline);
 }
 
-static void ldap_sync_entry(coro_t *co, void *arg) {
-  (void)co;
-  ldap_sync_op_t *op = (ldap_sync_op_t *)arg;
-  op->result = op->fn(op->client, op->arg);
-  coro_context_stop(op->client->ctx);
-}
+static int ldap_client_connect_impl(ldap_client_t *client) {
+  cnet_connect_options options;
+  const char *format;
+  char uri[LDAP_CNET_URI_CAPACITY];
+  uint64_t deadline;
+  int uri_size;
+  int status;
 
-static int ldap_client_run_sync(ldap_client_t *client, ldap_coro_op_fn fn, void *arg) {
-  ldap_sync_op_t op;
-  int rc;
+  if (client == NULL || !client->net_initialized) return LDAP_CLIENT_ERROR_INVALID;
+  if (client->connected) return LDAP_CLIENT_OK;
 
-  if (!client || !client->ctx || !fn) return LDAP_CLIENT_ERROR_INVALID;
-
-  op.client = client;
-  op.fn = fn;
-  op.arg = arg;
-  op.result = LDAP_CLIENT_ERROR_INVALID;
-
-  rc = coro_context_spawn(client->ctx, ldap_sync_entry, &op);
-  if (rc != 0) return LDAP_CLIENT_ERROR_MEMORY;
-
-  coro_context_run(client->ctx, TURBO_RUN_DEFAULT);
-  return op.result;
-}
-
-static int ldap_client_connect_coro(ldap_client_t *client, void *arg) {
-  (void)arg;
-
-  if (!client) return LDAP_CLIENT_ERROR_INVALID;
-  if (client->connected && client->socket) return LDAP_CLIENT_OK;
-
-  if (client->socket) {
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
+  format = strchr(client->host, ':') != NULL ? (client->use_tls ? "tls://[%s]:%u" : "tcp://[%s]:%u")
+                                             : (client->use_tls ? "tls://%s:%u" : "tcp://%s:%u");
+  uri_size = snprintf(uri, sizeof(uri), format, client->host, (unsigned int)client->port);
+  if (uri_size < 0 || (size_t)uri_size >= sizeof(uri)) {
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "LDAP URL is too long");
+    return LDAP_CLIENT_ERROR_INVALID;
   }
 
-  client->socket = coro_socket_create(client->ctx, CORO_SOCKET_TCP_V4);
-  if (!client->socket) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
-    return LDAP_CLIENT_ERROR_MEMORY;
+  client->connected = 0;
+  client->terminal = 0;
+  client->terminal_failed = 0;
+  client->transport_status = SALTS_OK;
+  client->receive_armed = 0;
+  client->receive_ready = 0;
+  client->receive_error = LDAP_CLIENT_OK;
+  client->send_pending = 0;
+  client->recv_buf_used = 0u;
+  client->connection = (cnet_connection){0};
+  options = (cnet_connect_options){.uri = uri,
+                                   .observer = {.on_state = ldap_client_on_state,
+                                                .on_receive = ldap_client_on_receive,
+                                                .user = client,
+                                                .on_send = ldap_client_on_send}};
+  status = cnet_connect(&client->net, &options, &client->connection);
+  if (status != SALTS_OK) {
+    ldap_client_set_transport_error(client, "connect admission", status);
+    return client->use_tls ? LDAP_CLIENT_ERROR_TLS : LDAP_CLIENT_ERROR_NETWORK;
   }
 
-  coro_socket_set_timeout(client->socket, client->timeout_ms);
-
-  int rc = coro_socket_connect(client->socket, client->host, client->port);
-  if (rc == TURBO_ETIMEDOUT) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Operation timeout");
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
-    return LDAP_CLIENT_ERROR_TIMEOUT;
+  deadline = salts_monotonic_ms() + client->timeout_ms;
+  while (!client->connected && !client->terminal) {
+    size_t events = 0u;
+    const uint32_t wait_ms = ldap_client_remaining_ms(deadline);
+    if (wait_ms == 0u) {
+      (void)cnet_close(&client->net, client->connection);
+      (void)snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
+      return LDAP_CLIENT_ERROR_TIMEOUT;
+    }
+    status = cnet_client_poll(&client->net, wait_ms, &events);
+    if (status != SALTS_OK) {
+      ldap_client_set_transport_error(client, "connect poll", status);
+      return status == SALTS_ETIMEDOUT
+                 ? LDAP_CLIENT_ERROR_TIMEOUT
+                 : (client->use_tls ? LDAP_CLIENT_ERROR_TLS : LDAP_CLIENT_ERROR_NETWORK);
+    }
   }
-  if (rc != 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Connect failed ({})", rc);
-    coro_socket_destroy(client->socket);
-    client->socket = NULL;
-    return LDAP_CLIENT_ERROR_NETWORK;
+  if (client->terminal) {
+    ldap_client_set_transport_error(client, "connect", client->transport_status);
+    return client->transport_status == SALTS_ETIMEDOUT
+               ? LDAP_CLIENT_ERROR_TIMEOUT
+               : (client->use_tls ? LDAP_CLIENT_ERROR_TLS : LDAP_CLIENT_ERROR_NETWORK);
   }
-
-  client->connected = 1;
-  client->recv_buf_used = 0;
   return LDAP_CLIENT_OK;
 }
 
@@ -405,7 +524,7 @@ static void ldap_client_transfer_pending(ldap_client_t *client, ldap_result_data
   ldap_message_free(msg);
 }
 
-static int ldap_client_simple_bind_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_simple_bind_impl(ldap_client_t *client, void *opaque) {
   ldap_bind_args_t *args = (ldap_bind_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
@@ -414,13 +533,13 @@ static int ldap_client_simple_bind_coro(ldap_client_t *client, void *opaque) {
 
   if (!client || !args) return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
   rc = ldap_build_bind_request(message_id, 3, args->dn, args->password, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build BindRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build BindRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -435,7 +554,7 @@ static int ldap_client_simple_bind_coro(ldap_client_t *client, void *opaque) {
   return (client->last_result_code == LDAP_SUCCESS) ? LDAP_CLIENT_OK : LDAP_CLIENT_ERROR_AUTH;
 }
 
-static int ldap_client_search_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_search_impl(ldap_client_t *client, void *opaque) {
   ldap_search_args_t *args = (ldap_search_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
@@ -444,7 +563,7 @@ static int ldap_client_search_coro(ldap_client_t *client, void *opaque) {
 
   if (!client || !args || !args->params) return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
@@ -453,7 +572,7 @@ static int ldap_client_search_coro(ldap_client_t *client, void *opaque) {
                                  args->params->types_only ? 1 : 0, args->params->filter,
                                  args->params->attrs, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build SearchRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build SearchRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -469,7 +588,7 @@ static int ldap_client_search_coro(ldap_client_t *client, void *opaque) {
   return rc;
 }
 
-static int ldap_client_add_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_add_impl(ldap_client_t *client, void *opaque) {
   ldap_add_args_t *args = (ldap_add_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
@@ -478,13 +597,13 @@ static int ldap_client_add_coro(ldap_client_t *client, void *opaque) {
 
   if (!client || !args || !args->dn) return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
   rc = ldap_build_add_request(message_id, args->dn, args->attrs, args->attr_count, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build AddRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build AddRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -499,7 +618,7 @@ static int ldap_client_add_coro(ldap_client_t *client, void *opaque) {
   return LDAP_CLIENT_OK;
 }
 
-static int ldap_client_delete_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_delete_impl(ldap_client_t *client, void *opaque) {
   ldap_delete_args_t *args = (ldap_delete_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
@@ -508,13 +627,13 @@ static int ldap_client_delete_coro(ldap_client_t *client, void *opaque) {
 
   if (!client || !args || !args->dn) return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
   rc = ldap_build_delete_request(message_id, args->dn, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build DeleteRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build DeleteRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -529,7 +648,7 @@ static int ldap_client_delete_coro(ldap_client_t *client, void *opaque) {
   return LDAP_CLIENT_OK;
 }
 
-static int ldap_client_modify_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_modify_impl(ldap_client_t *client, void *opaque) {
   ldap_modify_args_t *args = (ldap_modify_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
@@ -538,13 +657,13 @@ static int ldap_client_modify_coro(ldap_client_t *client, void *opaque) {
 
   if (!client || !args || !args->dn) return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
   rc = ldap_build_modify_request(message_id, args->dn, args->mods, args->mod_count, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -559,7 +678,7 @@ static int ldap_client_modify_coro(ldap_client_t *client, void *opaque) {
   return LDAP_CLIENT_OK;
 }
 
-static int ldap_client_rename_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_rename_impl(ldap_client_t *client, void *opaque) {
   ldap_rename_args_t *args = (ldap_rename_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
@@ -568,14 +687,14 @@ static int ldap_client_rename_coro(ldap_client_t *client, void *opaque) {
 
   if (!client || !args || !args->dn || !args->new_rdn) return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
   rc = ldap_build_modifydn_request(message_id, args->dn, args->new_rdn, args->delete_old_rdn,
                                    args->new_parent, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyDNRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build ModifyDNRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -590,23 +709,24 @@ static int ldap_client_rename_coro(ldap_client_t *client, void *opaque) {
   return LDAP_CLIENT_OK;
 }
 
-static int ldap_client_compare_coro(ldap_client_t *client, void *opaque) {
+static int ldap_client_compare_impl(ldap_client_t *client, void *opaque) {
   ldap_compare_args_t *args = (ldap_compare_args_t *)opaque;
   uint8_t buf[LDAP_SEND_BUFFER_SIZE];
   size_t len = sizeof(buf);
   int message_id;
   int rc;
 
-  if (!client || !args || !args->dn || !args->attr || !args->value) return LDAP_CLIENT_ERROR_INVALID;
+  if (!client || !args || !args->dn || !args->attr || !args->value)
+    return LDAP_CLIENT_ERROR_INVALID;
 
-  rc = ldap_client_connect_coro(client, NULL);
+  rc = ldap_client_connect_impl(client);
   if (rc != LDAP_CLIENT_OK) return rc;
 
   message_id = client->next_message_id++;
-  rc = ldap_build_compare_request(message_id, args->dn, args->attr,
-                                  (const uint8_t *)args->value, args->value_len, buf, &len);
+  rc = ldap_build_compare_request(message_id, args->dn, args->attr, (const uint8_t *)args->value,
+                                  args->value_len, buf, &len);
   if (rc != LDAP_BUILD_OK) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to build CompareRequest");
+    (void)snprintf(client->error_msg, sizeof(client->error_msg), "Failed to build CompareRequest");
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
@@ -621,45 +741,71 @@ static int ldap_client_compare_coro(ldap_client_t *client, void *opaque) {
   return LDAP_CLIENT_OK;
 }
 
-static int ldap_client_unbind_coro(ldap_client_t *client, void *arg) {
+static int ldap_client_unbind_impl(ldap_client_t *client) {
   uint8_t buf[64];
   size_t len = sizeof(buf);
+  uint64_t deadline;
   int message_id;
+  int status;
 
-  (void)arg;
-
-  if (!client || !client->connected || !client->socket) return LDAP_CLIENT_ERROR_INVALID;
+  if (!client || !client->connected) return LDAP_CLIENT_ERROR_INVALID;
 
   message_id = client->next_message_id++;
   if (ldap_build_unbind_request(message_id, buf, &len) != LDAP_BUILD_OK) {
     return LDAP_CLIENT_ERROR_INVALID;
   }
 
-  if (coro_socket_send(client->socket, (const char *)buf, len) != 0) {
+  client->terminal = 0;
+  client->terminal_failed = 0;
+  client->transport_status = SALTS_OK;
+  client->send_pending = 1;
+  status = cnet_send_and_close(&client->net, client->connection, buf, len);
+  if (status != SALTS_OK) {
+    client->send_pending = 0;
+    ldap_client_set_transport_error(client, "unbind admission", status);
     return LDAP_CLIENT_ERROR_NETWORK;
   }
 
-  coro_socket_destroy(client->socket);
-  client->socket = NULL;
+  deadline = salts_monotonic_ms() + client->timeout_ms;
+  while (!client->terminal) {
+    size_t events = 0u;
+    const uint32_t wait_ms = ldap_client_remaining_ms(deadline);
+    if (wait_ms == 0u) {
+      (void)snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
+      return LDAP_CLIENT_ERROR_TIMEOUT;
+    }
+    status = cnet_client_poll(&client->net, wait_ms, &events);
+    if (status != SALTS_OK) {
+      ldap_client_set_transport_error(client, "unbind poll", status);
+      return status == SALTS_ETIMEDOUT ? LDAP_CLIENT_ERROR_TIMEOUT : LDAP_CLIENT_ERROR_NETWORK;
+    }
+  }
+
+  if (client->terminal_failed) {
+    ldap_client_set_transport_error(client, "unbind", client->transport_status);
+    return LDAP_CLIENT_ERROR_NETWORK;
+  }
   client->connected = 0;
-  client->recv_buf_used = 0;
+  client->receive_armed = 0;
+  client->recv_buf_used = 0u;
   return LDAP_CLIENT_OK;
 }
 
 ldap_client_t *ldap_client_create(const ldap_client_config_t *config) {
   ldap_client_t *client;
-  int use_tls = 0;
+  cnet_client_config net_config;
+  int status;
 
   client = (ldap_client_t *)calloc(1, sizeof(*client));
   if (!client) return NULL;
 
   if (config && config->url) {
-    if (parse_url(config->url, &client->host, &client->port, &use_tls) != 0) {
+    if (parse_url(config->url, &client->host, &client->port, &client->use_tls) != 0) {
       free(client);
       return NULL;
     }
   } else {
-    client->host = strdup("localhost");
+    client->host = ldap_client_duplicate("localhost", sizeof("localhost") - 1u);
     client->port = LDAP_DEFAULT_PORT;
     if (!client->host) {
       free(client);
@@ -667,50 +813,52 @@ ldap_client_t *ldap_client_create(const ldap_client_config_t *config) {
     }
   }
 
-  client->timeout_ms = (config && config->timeout_ms > 0) ? (uint32_t)config->timeout_ms
-                                                          : LDAP_DEFAULT_TIMEOUT_MS;
+  client->timeout_ms =
+      (config && config->timeout_ms > 0) ? (uint32_t)config->timeout_ms : LDAP_DEFAULT_TIMEOUT_MS;
   client->next_message_id = 1;
-  client->recv_buf_size = LDAP_RECV_BUFFER_SIZE;
-  client->recv_buf = (uint8_t *)malloc(client->recv_buf_size);
-  if (!client->recv_buf) {
+  net_config = (cnet_client_config){.backend = ldap_client_backend(),
+                                    .connection_capacity = 1u,
+                                    .command_capacity = LDAP_CNET_QUEUE_CAPACITY,
+                                    .request_capacity = LDAP_CNET_QUEUE_CAPACITY,
+                                    .completion_batch_capacity = LDAP_CNET_QUEUE_CAPACITY,
+                                    .event_capacity = LDAP_CNET_QUEUE_CAPACITY,
+                                    .max_send_bytes = LDAP_SEND_BUFFER_SIZE,
+                                    .receive_buffer_bytes = LDAP_RECV_BUFFER_SIZE,
+                                    .connect_timeout_ms = client->timeout_ms,
+                                    .read_timeout_ms = client->timeout_ms,
+                                    .write_timeout_ms = client->timeout_ms,
+                                    .tls_io_buffer_bytes = CNET_TLS_MIN_IO_BUFFER_BYTES,
+                                    .tls_handshake_timeout_ms = client->timeout_ms,
+                                    .command_buffer_bytes = LDAP_SEND_BUFFER_SIZE,
+                                    .event_buffer_bytes = LDAP_RECV_BUFFER_SIZE};
+  status = cnet_client_init(&client->net, &net_config);
+  if (status != SALTS_OK) {
     free(client->host);
     free(client);
     return NULL;
   }
-
-  client->ctx = coro_context_create(NULL);
-  if (!client->ctx) {
-    free(client->recv_buf);
-    free(client->host);
-    free(client);
-    return NULL;
-  }
-
-  (void)use_tls;
+  client->net_initialized = 1;
   return client;
 }
 
 void ldap_client_destroy(ldap_client_t *client) {
   if (!client) return;
 
+  if (client->net_initialized) {
+    (void)cnet_client_stop(&client->net, LDAP_CNET_STOP_TIMEOUT_MS);
+    if (cnet_client_destroy(&client->net) != SALTS_OK) return;
+  }
   if (client->pending_response) {
     ldap_message_free(client->pending_response);
   }
-  if (client->socket) {
-    coro_socket_destroy(client->socket);
-  }
-  if (client->ctx) {
-    coro_context_destroy(client->ctx);
-  }
 
-  free(client->recv_buf);
   free(client->host);
   free(client);
 }
 
 int ldap_client_connect(ldap_client_t *client) {
   if (!client) return LDAP_CLIENT_ERROR_INVALID;
-  return ldap_client_run_sync(client, ldap_client_connect_coro, NULL);
+  return ldap_client_connect_impl(client);
 }
 
 int ldap_client_simple_bind(ldap_client_t *client, const char *dn, const char *password,
@@ -720,12 +868,12 @@ int ldap_client_simple_bind(ldap_client_t *client, const char *dn, const char *p
   args.dn = dn ? dn : "";
   args.password = password ? password : "";
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_simple_bind_coro, &args);
+  return ldap_client_simple_bind_impl(client, &args);
 }
 
 int ldap_client_unbind(ldap_client_t *client) {
   if (!client) return LDAP_CLIENT_ERROR_INVALID;
-  return ldap_client_run_sync(client, ldap_client_unbind_coro, NULL);
+  return ldap_client_unbind_impl(client);
 }
 
 int ldap_client_search(ldap_client_t *client, const ldap_search_params_t *params,
@@ -735,7 +883,7 @@ int ldap_client_search(ldap_client_t *client, const ldap_search_params_t *params
   args.callback = callback;
   args.user_data = user_data;
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_search_coro, &args);
+  return ldap_client_search_impl(client, &args);
 }
 
 int ldap_client_add(ldap_client_t *client, const char *dn, const ldap_attribute_t *attrs,
@@ -745,14 +893,14 @@ int ldap_client_add(ldap_client_t *client, const char *dn, const ldap_attribute_
   args.attrs = attrs;
   args.attr_count = attr_count;
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_add_coro, &args);
+  return ldap_client_add_impl(client, &args);
 }
 
 int ldap_client_delete(ldap_client_t *client, const char *dn, ldap_result_data_t *result) {
   ldap_delete_args_t args;
   args.dn = dn;
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_delete_coro, &args);
+  return ldap_client_delete_impl(client, &args);
 }
 
 int ldap_client_modify(ldap_client_t *client, const char *dn, const ldap_modification_t *mods,
@@ -762,42 +910,50 @@ int ldap_client_modify(ldap_client_t *client, const char *dn, const ldap_modific
   args.mods = mods;
   args.mod_count = mod_count;
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_modify_coro, &args);
+  return ldap_client_modify_impl(client, &args);
 }
 
 int ldap_client_rename(ldap_client_t *client, const char *dn, const char *new_rdn,
-                       const char *new_parent, int delete_old_rdn,
-                       ldap_result_data_t *result) {
+                       const char *new_parent, int delete_old_rdn, ldap_result_data_t *result) {
   ldap_rename_args_t args;
   args.dn = dn;
   args.new_rdn = new_rdn;
   args.new_parent = new_parent;
   args.delete_old_rdn = delete_old_rdn;
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_rename_coro, &args);
+  return ldap_client_rename_impl(client, &args);
 }
 
-int ldap_client_compare(ldap_client_t *client, const char *dn, const char *attr,
-                        const char *value, size_t value_len, ldap_result_data_t *result) {
+int ldap_client_compare(ldap_client_t *client, const char *dn, const char *attr, const char *value,
+                        size_t value_len, ldap_result_data_t *result) {
   ldap_compare_args_t args;
   args.dn = dn;
   args.attr = attr;
   args.value = value;
   args.value_len = value_len;
   args.result = result;
-  return ldap_client_run_sync(client, ldap_client_compare_coro, &args);
+  return ldap_client_compare_impl(client, &args);
 }
 
 const char *ldap_err2string(int err) {
   switch (err) {
-    case LDAP_CLIENT_OK:             return "Success";
-    case LDAP_CLIENT_ERROR_MEMORY:   return "Memory allocation failed";
-    case LDAP_CLIENT_ERROR_INVALID:  return "Invalid parameter";
-    case LDAP_CLIENT_ERROR_NETWORK:  return "Network error";
-    case LDAP_CLIENT_ERROR_TIMEOUT:  return "Operation timeout";
-    case LDAP_CLIENT_ERROR_PROTOCOL: return "Protocol error";
-    case LDAP_CLIENT_ERROR_AUTH:     return "Authentication failed";
-    case LDAP_CLIENT_ERROR_TLS:      return "TLS error";
-    default:                         return "Unknown error";
+  case LDAP_CLIENT_OK:
+    return "Success";
+  case LDAP_CLIENT_ERROR_MEMORY:
+    return "Memory allocation failed";
+  case LDAP_CLIENT_ERROR_INVALID:
+    return "Invalid parameter";
+  case LDAP_CLIENT_ERROR_NETWORK:
+    return "Network error";
+  case LDAP_CLIENT_ERROR_TIMEOUT:
+    return "Operation timeout";
+  case LDAP_CLIENT_ERROR_PROTOCOL:
+    return "Protocol error";
+  case LDAP_CLIENT_ERROR_AUTH:
+    return "Authentication failed";
+  case LDAP_CLIENT_ERROR_TLS:
+    return "TLS error";
+  default:
+    return "Unknown error";
   }
 }

@@ -1,4 +1,4 @@
-set(TARGET_NAME turbonet_email)
+set(TARGET_NAME SaltsEmail)
 
 add_subdirectory(uri_parser)
 add_subdirectory(mime_parser)
@@ -13,14 +13,14 @@ cmake_add_source(SOURCE_FILES
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES})
 
 cmake_config_target(${TARGET_NAME}
-  ALIAS TurboNet::Email
+  ALIAS SaltsNet::Email
   FOLDER "email"
   EXPORT_NAME Email)
 
 target_link_libraries(${TARGET_NAME}
   PUBLIC
-    TurboNet::MimeParser
-    TurboNet::CoroNet
+    SaltsNet::MimeParser
+    Salts::CNet
     OpenSSL::SSL
     OpenSSL::Crypto)
 
@@ -30,7 +30,7 @@ target_include_directories(${TARGET_NAME}
 
 install(
   TARGETS ${TARGET_NAME}
-  EXPORT TurboNetTargets
+  EXPORT SaltsNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
@@ -44,9 +44,10 @@ cmake_add_test(
   SOURCES
     test/test_email_smtp.c
     test/test_email_pop3.c
+    test/test_email_cnet.c
     test/test_email_message.c
     test/test_email_integration.c
-  LIBS   ${TARGET_NAME} Rocida::TinyTest
+  LIBS   ${TARGET_NAME} Salts::TinyTest
   FOLDER "email/test")
 
 # ── Examples ───────────────────────────────────────────────────────────

@@ -13,6 +13,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Error codes */
 #define SNMP_BUILD_OK               0
 #define SNMP_BUILD_ERROR_INVALID   -1   /* Invalid input */
@@ -41,7 +45,7 @@
  *       SNMP_VERSION_2C, "public", 1234, oids, 2, packet, &packet_len
  *   );
  */
-TURBONET_SNMP_C_API int snmp_build_get_request(
+SALTSNET_SNMP_C_API int snmp_build_get_request(
     snmp_version_t version,
     const char *community,
     int32_t request_id,
@@ -54,7 +58,7 @@ TURBONET_SNMP_C_API int snmp_build_get_request(
 /**
  * Build SNMP GetNextRequest message (for MIB walking)
  */
-TURBONET_SNMP_C_API int snmp_build_get_next_request(
+SALTSNET_SNMP_C_API int snmp_build_get_next_request(
     snmp_version_t version,
     const char *community,
     int32_t request_id,
@@ -67,7 +71,7 @@ TURBONET_SNMP_C_API int snmp_build_get_next_request(
 /**
  * Build SNMP SetRequest message
  */
-TURBONET_SNMP_C_API int snmp_build_set_request(
+SALTSNET_SNMP_C_API int snmp_build_set_request(
     snmp_version_t version,
     const char *community,
     int32_t request_id,
@@ -83,7 +87,7 @@ TURBONET_SNMP_C_API int snmp_build_set_request(
  * @param non_repeaters Number of non-repeating variables
  * @param max_repetitions Maximum repetitions for repeating variables
  */
-TURBONET_SNMP_C_API int snmp_build_get_bulk_request(
+SALTSNET_SNMP_C_API int snmp_build_get_bulk_request(
     const char *community,
     int32_t request_id,
     int32_t non_repeaters,
@@ -103,23 +107,23 @@ TURBONET_SNMP_C_API int snmp_build_get_bulk_request(
  *
  * NOTE: Caller must free oid->components when done
  */
-TURBONET_SNMP_C_API int snmp_oid_from_string(const char *oid_str, snmp_oid_t *oid);
+SALTSNET_SNMP_C_API int snmp_oid_from_string(const char *oid_str, snmp_oid_t *oid);
 
 /**
  * Helper: Convert OID to string
  */
-TURBONET_SNMP_C_API int snmp_oid_to_string(const snmp_oid_t *oid, char *buf, size_t buf_len);
+SALTSNET_SNMP_C_API int snmp_oid_to_string(const snmp_oid_t *oid, char *buf, size_t buf_len);
 
 /**
  * Helper: Compare two OIDs
  * @return 0 if equal, <0 if oid1 < oid2, >0 if oid1 > oid2
  */
-TURBONET_SNMP_C_API int snmp_oid_compare(const snmp_oid_t *oid1, const snmp_oid_t *oid2);
+SALTSNET_SNMP_C_API int snmp_oid_compare(const snmp_oid_t *oid1, const snmp_oid_t *oid2);
 
 /**
  * Helper: Free OID components
  */
-TURBONET_SNMP_C_API void snmp_oid_free(snmp_oid_t *oid);
+SALTSNET_SNMP_C_API void snmp_oid_free(snmp_oid_t *oid);
 
 /**
  * Build SNMPv3 GetRequest message with USM security
@@ -134,7 +138,7 @@ TURBONET_SNMP_C_API void snmp_oid_free(snmp_oid_t *oid);
  * @param out_len [in] Buffer size, [out] Encoded length
  * @return SNMP_BUILD_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int snmp_build_v3_get_request(
+SALTSNET_SNMP_C_API int snmp_build_v3_get_request(
     int32_t request_id,
     const snmp_oid_t *oids,
     size_t oid_count,
@@ -144,5 +148,34 @@ TURBONET_SNMP_C_API int snmp_build_v3_get_request(
     uint8_t *out,
     size_t *out_len
 );
+
+/** Build an SNMPv3 GetNextRequest using the same USM ownership contract as
+ * snmp_build_v3_get_request(). */
+SALTSNET_SNMP_C_API int snmp_build_v3_get_next_request(
+    int32_t request_id,
+    const snmp_oid_t *oids,
+    size_t oid_count,
+    const snmp_usm_params_t *usm_params,
+    const snmp_v3_user_t *user,
+    snmp_security_level_t security_level,
+    uint8_t *out,
+    size_t *out_len
+);
+
+/** Build an SNMPv3 SetRequest with typed variable bindings. */
+SALTSNET_SNMP_C_API int snmp_build_v3_set_request(
+    int32_t request_id,
+    const snmp_varbind_t *varbinds,
+    size_t varbind_count,
+    const snmp_usm_params_t *usm_params,
+    const snmp_v3_user_t *user,
+    snmp_security_level_t security_level,
+    uint8_t *out,
+    size_t *out_len
+);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SNMP_BUILDER_H */

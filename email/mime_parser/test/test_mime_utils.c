@@ -5,7 +5,7 @@
 
 #include "mime_utils.h"
 #include "tinytest.h"
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 #include <string.h>
 
 spec("mime_utils") {

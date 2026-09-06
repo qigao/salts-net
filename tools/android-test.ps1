@@ -2,7 +2,7 @@
 
 <#
 .SYNOPSIS
-Builds, deploys, runs, or debugs one TurboNet test on an Android device.
+Builds, deploys, runs, or debugs one SaltsNet test on an Android device.
 
 .DESCRIPTION
 Uses the repository's Android CMake preset to build one EXCLUDE_FROM_ALL test
@@ -85,7 +85,7 @@ param(
     [string]$BuildDirectory,
 
     [ValidatePattern('^/data/local/tmp/[A-Za-z0-9._/-]+$')]
-    [string]$RemoteDirectory = '/data/local/tmp/turbonet-tests',
+    [string]$RemoteDirectory = '/data/local/tmp/saltsnet-tests',
 
     [string]$Filter,
     [switch]$Tap,

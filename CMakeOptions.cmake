@@ -16,7 +16,7 @@ option(BUILD_TESTS "Build test suite" ON)
 cmake_dependent_option(BUILD_BENCHMARKS "Build benchmark executables" ON
                        "BUILD_TESTS" OFF)
 
-option(TURBONET_ENABLE_LSQUIC
-       "Build the LSQUIC QUIC engine and its CoroNet adapter" ON)
+option(SALTSNET_ENABLE_LSQUIC
+       "Build the LSQUIC QUIC engine and its CNet adapter" ON)
 
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)

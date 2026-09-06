@@ -5,7 +5,7 @@
 
 #include "email/email_smtp.h"
 #include "tinytest.h"
-#include "turbo_error.h"
+#include <salts/error_codes.h>
 #include <string.h>
 
 spec("email_smtp") {
@@ -40,12 +40,21 @@ spec("email_smtp") {
       config.host = "smtp.example.com";
       config.port = 587;
 
-      // NULL context should fail
-      smtp_client_t *client = smtp_client_create(NULL, &config);
-      check(client == NULL);
+      check_null(smtp_client_create(NULL));
 
-      // NULL config should fail
-      // Note: Can't test without valid coro_context_t
+      smtp_client_t *client = smtp_client_create(&config);
+      check_not_null(client);
+      smtp_client_free(client);
+
+      config.host = NULL;
+      check_null(smtp_client_create(&config));
+      config.host = "smtp.example.com";
+      config.port = 0;
+      check_null(smtp_client_create(&config));
+      config.port = 465;
+      config.use_tls = 1;
+      config.use_starttls = 1;
+      check_null(smtp_client_create(&config));
     }
   }
 
@@ -63,71 +72,26 @@ spec("email_smtp") {
 
     it("should reject interrupt without an active socket") {
       smtp_config_t config = {0};
-      coro_context_t *ctx = coro_context_create(NULL);
       smtp_client_t *client;
       config.host = "127.0.0.1";
       config.port = 25;
-      check_not_null(ctx);
-      client = smtp_client_create(ctx, &config);
+      client = smtp_client_create(&config);
       check_not_null(client);
-      check_equal(smtp_interrupt(NULL, TURBO_ESHUTDOWN), TURBO_EINVAL);
-      check_equal(smtp_interrupt(client, TURBO_ESHUTDOWN), TURBO_ENOTCONN);
+      check_equal(smtp_interrupt(NULL, SALTS_ESHUTDOWN), SALTS_EINVAL);
+      check_equal(smtp_interrupt(client, SALTS_ESHUTDOWN), SALTS_ENOTCONN);
       smtp_client_free(client);
-      coro_context_destroy(ctx);
     }
 
     it("should accept client_hostname in config") {
       smtp_config_t config = {0};
-      coro_context_t *ctx = coro_context_create(NULL);
       config.host = "127.0.0.1";
       config.port = 25;
       config.client_hostname = "my-client-domain.test";
 
-      smtp_client_t *client = smtp_client_create(ctx, &config);
+      smtp_client_t *client = smtp_client_create(&config);
       check_not_null(client);
 
       smtp_client_free(client);
-      coro_context_destroy(ctx);
     }
   }
 }
-
-// Integration test example (best with local smtp4dev on 127.0.0.1:25)
-/*
-void test_smtp_integration(void) {
-  coro_context_t *ctx = coro_context_create();
-
-  smtp_config_t config = {0};
-  config.host = "127.0.0.1";
-  config.port = 25;
-  config.use_tls = 0;
-  config.use_starttls = 0;
-  config.auth_method = SMTP_AUTH_NONE;
-  config.username = NULL;
-  config.password = NULL;
-
-  smtp_client_t *client = smtp_client_create(ctx, &config);
-  assert(client != NULL);
-
-  int ret = smtp_connect(client);
-  assert(ret == 0);
-
-  mem_pool_t pool;
-  mem_init(&pool, 4096);
-
-  email_message_t *msg = email_message_create(&pool);
-  email_message_set_from(msg, "Sender", "sender@example.com");
-  email_message_add_to(msg, "Recipient", "recipient@example.com");
-  email_message_set_subject(msg, "Test Email");
-  email_message_set_text_body(msg, "This is a test email.");
-
-  ret = smtp_send_message(client, msg);
-  assert(ret == 0);
-
-  smtp_disconnect(client);
-  smtp_client_free(client);
-  email_message_free(msg);
-  mem_destroy(&pool);
-  coro_context_destroy(ctx);
-}
-*/

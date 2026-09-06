@@ -115,6 +115,79 @@ spec("snmp") {
       snmp_oid_free(&oids[0]);
       snmp_oid_free(&oids[1]);
     }
+
+    it("should reject the community builder for SNMPv3") {
+      snmp_oid_t oid;
+      uint8_t packet[256];
+      size_t packet_len = sizeof(packet);
+      check_equal(snmp_oid_from_string("1.3.6.1.2.1.1.1.0", &oid), 0);
+      check_equal(snmp_build_get_request(SNMP_VERSION_3, "public", 1, &oid, 1,
+                                         packet, &packet_len),
+                  SNMP_BUILD_ERROR_INVALID);
+      snmp_oid_free(&oid);
+    }
+
+    it("should round-trip typed SetRequest values") {
+      snmp_varbind_t varbinds[2] = {0};
+      uint8_t text[] = {'s', 'a', 'l', 't', 's'};
+      uint8_t packet[512];
+      size_t packet_len = sizeof(packet);
+      MemoryPool *pool = pool_create(4096);
+      snmp_message_t msg;
+
+      check_not_null(pool);
+      check_equal(snmp_oid_from_string("1.3.6.1.2.1.1.7.0", &varbinds[0].oid),
+                  SNMP_BUILD_OK);
+      check_equal(snmp_oid_from_string("1.3.6.1.2.1.1.5.0", &varbinds[1].oid),
+                  SNMP_BUILD_OK);
+      varbinds[0].value_type = SNMP_TYPE_INTEGER;
+      varbinds[0].value.i32 = 72;
+      varbinds[1].value_type = SNMP_TYPE_OCTET_STRING;
+      varbinds[1].value.bytes.data = text;
+      varbinds[1].value.bytes.len = sizeof(text);
+
+      check_equal(snmp_build_set_request(SNMP_VERSION_2C, "private", 2201,
+                                         varbinds, 2, packet, &packet_len),
+                  SNMP_BUILD_OK);
+      check(snmp_parse(packet, packet_len, &msg, pool) > 0);
+      check_equal(msg.pdu.type, SNMP_PDU_SET_REQUEST);
+      check_equal(msg.pdu.request_id, 2201);
+      check_equal(msg.pdu.varbind_count, (size_t)2);
+      check_equal(msg.pdu.varbinds[0].value_type, SNMP_TYPE_INTEGER);
+      check_equal(msg.pdu.varbinds[0].value.i32, 72);
+      check_equal(msg.pdu.varbinds[1].value_type, SNMP_TYPE_OCTET_STRING);
+      check_equal(msg.pdu.varbinds[1].value.bytes.len, sizeof(text));
+      check_equal(msg.pdu.varbinds[1].value.bytes.data, text, sizeof(text));
+
+      pool_destroy(pool);
+      snmp_oid_free(&varbinds[0].oid);
+      snmp_oid_free(&varbinds[1].oid);
+    }
+
+    it("should round-trip GetBulkRequest controls") {
+      snmp_oid_t oid;
+      uint8_t packet[256];
+      size_t packet_len = sizeof(packet);
+      MemoryPool *pool = pool_create(4096);
+      snmp_message_t msg;
+
+      check_not_null(pool);
+      check_equal(snmp_oid_from_string("1.3.6.1.2.1.2.2", &oid),
+                  SNMP_BUILD_OK);
+      check_equal(snmp_build_get_bulk_request("public", 2202, 1, 16, &oid, 1,
+                                              packet, &packet_len),
+                  SNMP_BUILD_OK);
+      check(snmp_parse(packet, packet_len, &msg, pool) > 0);
+      check_equal(msg.version, SNMP_VERSION_2C);
+      check_equal(msg.pdu.type, SNMP_PDU_GET_BULK_REQUEST);
+      check_equal(msg.pdu.request_id, 2202);
+      check_equal(msg.pdu.non_repeaters, 1);
+      check_equal(msg.pdu.max_repetitions, 16);
+      check_equal(msg.pdu.varbind_count, (size_t)1);
+
+      pool_destroy(pool);
+      snmp_oid_free(&oid);
+    }
   }
 
   describe("Round-trip Parsing") {

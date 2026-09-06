@@ -20,15 +20,15 @@ typedef struct {
 } mib_compile_context_t;
 
 // Main compiler functions
-TURBONET_ASN1_C_API int mib_compile_file(const char *mib_file, const char *output_dir);
-TURBONET_ASN1_C_API int mib_compile_string(const char *mib_content, const char *output_dir);
-TURBONET_ASN1_C_API mib_compile_context_t *mib_compile_create_context(void);
-TURBONET_ASN1_C_API void mib_compile_destroy_context(mib_compile_context_t *ctx);
+SALTSNET_ASN1_C_API int mib_compile_file(const char *mib_file, const char *output_dir);
+SALTSNET_ASN1_C_API int mib_compile_string(const char *mib_content, const char *output_dir);
+SALTSNET_ASN1_C_API mib_compile_context_t *mib_compile_create_context(void);
+SALTSNET_ASN1_C_API void mib_compile_destroy_context(mib_compile_context_t *ctx);
 
 // Code generation
-TURBONET_ASN1_C_API int mib_generate_c_header(mib_compile_context_t *ctx, const char *filename);
-TURBONET_ASN1_C_API int mib_generate_c_source(mib_compile_context_t *ctx, const char *filename);
-TURBONET_ASN1_C_API int mib_generate_runtime_table(mib_compile_context_t *ctx, const char *filename);
+SALTSNET_ASN1_C_API int mib_generate_c_header(mib_compile_context_t *ctx, const char *filename);
+SALTSNET_ASN1_C_API int mib_generate_c_source(mib_compile_context_t *ctx, const char *filename);
+SALTSNET_ASN1_C_API int mib_generate_runtime_table(mib_compile_context_t *ctx, const char *filename);
 
 // OID management
 typedef struct {
@@ -44,8 +44,8 @@ typedef struct {
     size_t capacity;
 } mib_oid_table_t;
 
-TURBONET_ASN1_C_API mib_oid_table_t *mib_extract_oids(AstNode *root);
-TURBONET_ASN1_C_API void mib_oid_table_destroy(mib_oid_table_t *table);
+SALTSNET_ASN1_C_API mib_oid_table_t *mib_extract_oids(AstNode *root);
+SALTSNET_ASN1_C_API void mib_oid_table_destroy(mib_oid_table_t *table);
 
 #ifdef __cplusplus
 }

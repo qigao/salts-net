@@ -1,7 +1,8 @@
 # `stun_service`
 
 `stun_service` is the minimal UDP STUN binding service built from the same
-`turbo_webrtc/ice` module used by mesh ICE gathering and checks.
+SaltsNet ICE module used by mesh ICE gathering and checks. The service owns a
+bounded CNet datagram endpoint and advances it on the main thread.
 
 ## Purpose
 
@@ -16,15 +17,15 @@ Standalone build:
 ```sh
 cd ice
 cmake -S . -B build-standalone \
-  -DCMAKE_PREFIX_PATH="/opt/turbonet;/opt/vcpkg/packages/libuv_x64-linux;/opt/vcpkg/packages/kcp_x64-linux;/opt/vcpkg/packages/quickjs-ng_x64-linux;/opt/vcpkg/packages/c-ares_x64-linux;/opt/vcpkg/packages/cjson_x64-linux;/opt/vcpkg/packages/aklomp-base64_x64-linux;/opt/vcpkg/packages/stb_x64-linux;/opt/vcpkg/packages/zstd_x64-linux;/opt/vcpkg/packages/openssl_x64-linux" \
-  -DTurboNet_DIR=/opt/turbonet/lib/cmake/TurboNet
+  -DCMAKE_PREFIX_PATH="/opt/saltsnet;/opt/salts" \
+  -DSaltsNet_DIR=/opt/saltsnet/lib/cmake/SaltsNet
 cmake --build build-standalone --parallel --target test_stun stun_discovery stun_service
 ```
 
 ## Run
 
 ```sh
-LD_LIBRARY_PATH=/opt/turbonet/lib ./stun_service 0.0.0.0 3479
+LD_LIBRARY_PATH=/opt/saltsnet/lib ./stun_service 0.0.0.0 3479
 ```
 
 Arguments:
@@ -54,8 +55,8 @@ Current EU endpoint:
 
 Installed binary:
 
-- `/opt/turbonet/bin/stun_service`
+- `/opt/saltsnet/bin/stun_service`
 
 Suggested systemd unit:
 
-- [stun_service.service](C:/projects/cpp/turbonet/turbonet/ice/examples/stun_service.service)
+- `ice/examples/stun_service.service`

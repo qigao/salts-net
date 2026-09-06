@@ -6,9 +6,9 @@
 #include "email/email_client.h"
 #include "email/email_message.h"
 #include "email/email_pop3.h"
-#include "CoroNet.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const char *env_or_default(const char *name, const char *fallback) {
   const char *value = getenv(name);
@@ -26,9 +26,7 @@ static int env_flag_or_default(const char *name, int fallback) {
   return strcmp(value, "0") != 0;
 }
 
-// POP3 operations must run inside a coroutine
-static void pop3_test_coro(coro_t *co, void *arg) {
-  coro_context_t *ctx = (coro_context_t *)arg;
+static int run_example(void) {
 
   // Configure POP3 for local smtp4dev testing
   pop3_config_t pop3_config = {0};
@@ -41,10 +39,10 @@ static void pop3_test_coro(coro_t *co, void *arg) {
   pop3_config.timeout_ms = 30000;
 
   // Create POP3 client
-  pop3_client_t *pop3 = pop3_client_create(ctx, &pop3_config);
+  pop3_client_t *pop3 = pop3_client_create(&pop3_config);
   if (!pop3) {
     fprintf(stderr, "Failed to create POP3 client\n");
-    return;
+    return 1;
   }
 
   // Connect
@@ -52,7 +50,7 @@ static void pop3_test_coro(coro_t *co, void *arg) {
   if (pop3_connect(pop3) != 0) {
     fprintf(stderr, "POP3 connect failed: %s\n", pop3_get_error(pop3));
     pop3_client_free(pop3);
-    return;
+    return 1;
   }
 
   printf("Connected successfully!\n");
@@ -64,7 +62,7 @@ static void pop3_test_coro(coro_t *co, void *arg) {
     fprintf(stderr, "STAT failed: %s\n", pop3_get_error(pop3));
     pop3_disconnect(pop3);
     pop3_client_free(pop3);
-    return;
+    return 1;
   }
 
   printf("Mailbox has %d messages (%d bytes total)\n", msg_count, total_size);
@@ -98,28 +96,7 @@ static void pop3_test_coro(coro_t *co, void *arg) {
   // Cleanup
   pop3_disconnect(pop3);
   pop3_client_free(pop3);
-}
-
-int main(void) {
-  // Create coroutine context
-  coro_context_t *ctx = coro_context_create(NULL);
-  if (!ctx) {
-    fprintf(stderr, "Failed to create coroutine context\n");
-    return 1;
-  }
-
-  // Spawn coroutine
-  if (coro_context_spawn(ctx, pop3_test_coro, ctx) != 0) {
-    fprintf(stderr, "Failed to spawn coroutine\n");
-    coro_context_destroy(ctx);
-    return 1;
-  }
-
-  // Run event loop
-  coro_context_run(ctx, TURBO_RUN_DEFAULT);
-
-  // Cleanup
-  coro_context_destroy(ctx);
-
   return 0;
 }
+
+int main(void) { return run_example(); }

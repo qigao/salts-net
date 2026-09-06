@@ -38,7 +38,7 @@ adb devices -l
 ```text
 Preset:           android-arm64-v8a-release-win
 Build directory: build/android-arm64-v8a-release
-Remote directory:/data/local/tmp/turbonet-tests
+Remote directory:/data/local/tmp/saltsnet-tests
 LLDB port:        5039
 ```
 
@@ -181,7 +181,7 @@ try {
 
 ### 补充动态库
 
-脚本会自动解析可执行文件和已发现 `.so` 的 `DT_NEEDED`。TurboNet 依赖外部
+脚本会自动解析可执行文件和已发现 `.so` 的 `DT_NEEDED`。SaltsNet 依赖外部
 TurboUtils build tree，因此首次运行应把对应的 `bin` 加入搜索目录：
 
 ```powershell

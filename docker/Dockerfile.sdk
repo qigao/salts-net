@@ -1,10 +1,12 @@
-ARG TURBONET_BUILD_BASE=turbonet_build_base
-FROM ${TURBONET_BUILD_BASE}
+ARG SALTS_SDK_IMAGE=salts-sdk:bookworm
+FROM ${SALTS_SDK_IMAGE}
 
-ENV CMAKE_PREFIX_PATH=/opt/turbonet
-ENV LD_LIBRARY_PATH=/opt/turbonet/lib
+RUN test -f /opt/salts/release/lib/cmake/Salts/SaltsConfig.cmake
 
-WORKDIR /src/turbonet
+ENV CMAKE_PREFIX_PATH=/opt/saltsnet/release
+ENV LD_LIBRARY_PATH=/opt/saltsnet/release/lib
+
+WORKDIR /src/saltsnet
 
 COPY . ./
 

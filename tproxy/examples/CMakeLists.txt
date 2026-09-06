@@ -1,9 +1,3 @@
-set(folder_name ${TARGET_NAME}/examples)
-
-file(GLOB EXTRA_SOURCES *.c)
-foreach(test_source ${EXTRA_SOURCES})
-    get_filename_component(test_name ${test_source} NAME_WE)
-    add_executable(${test_name} ${test_source})
-    target_link_libraries(${test_name} PRIVATE ${TARGET_NAME})
-    set_target_properties(${test_name} PROPERTIES FOLDER ${folder_name})
-endforeach()
+add_executable(salts_tcp_proxy_example salts_tcp_proxy_example.c)
+target_link_libraries(salts_tcp_proxy_example PRIVATE SaltsNet::TCPProxy Salts::Core)
+set_target_properties(salts_tcp_proxy_example PROPERTIES FOLDER tproxy/examples)

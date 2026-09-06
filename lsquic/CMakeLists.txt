@@ -186,12 +186,12 @@ ENDIF()
 if(LSQUIC_EMBEDDED)
     if(NOT TARGET OpenSSL::SSL OR NOT TARGET OpenSSL::Crypto)
         message(FATAL_ERROR
-            "TURBONET_ENABLE_LSQUIC requires OpenSSL::SSL and OpenSSL::Crypto targets")
+            "SALTSNET_ENABLE_LSQUIC requires OpenSSL::SSL and OpenSSL::Crypto targets")
     endif()
     find_package(ZLIB REQUIRED)
     if(NOT TARGET ZLIB::ZLIB)
         message(FATAL_ERROR
-            "TURBONET_ENABLE_LSQUIC requires the ZLIB::ZLIB target")
+            "SALTSNET_ENABLE_LSQUIC requires the ZLIB::ZLIB target")
     endif()
     set(LSQUIC_TLS_DEFINITIONS HAVE_BORINGSSL)
     set(LSQUIC_LINK_LIBRARIES OpenSSL::SSL OpenSSL::Crypto ZLIB::ZLIB)
@@ -450,7 +450,7 @@ ENDIF()
 add_subdirectory(src)
 
 if(LSQUIC_EMBEDDED)
-    add_subdirectory(coronnet)
+    add_subdirectory(cnet)
 endif()
 
 IF(LSQUIC_TESTS AND CMAKE_BUILD_TYPE STREQUAL "Debug")

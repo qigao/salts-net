@@ -1,8 +1,8 @@
 #include "mime_parser.h"
-#include "turbo_simd_scan.h"
+#include "salts_simd_scan.h"
 #include <string.h>
 #include <ctype.h>
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 
 /* ── Error messages ────────────────────────────────────────────────── */
 
@@ -27,7 +27,7 @@ const char *mime_extract_boundary(const char *content_type,
   if (!content_type || !boundary_len) return NULL;
 
   const char *content_type_end = content_type + content_type_len;
-  const char *boundary_start = turbo_scan_mem(content_type, content_type_len, "boundary=", 9);
+  const char *boundary_start = salts_scan_mem(content_type, content_type_len, "boundary=", 9);
   if (!boundary_start) return NULL;
 
   boundary_start += 9; // strlen("boundary=")
@@ -36,12 +36,12 @@ const char *mime_extract_boundary(const char *content_type,
   // Skip quotes if present
   if (*boundary_start == '"') {
     boundary_start++;
-    const char *end = turbo_scan_char(boundary_start, content_type_end, '"');
+    const char *end = salts_scan_char(boundary_start, content_type_end, '"');
     if (!end) return NULL;
     *boundary_len = end - boundary_start;
   } else {
     // Find end (semicolon or end of string)
-    const char *end = turbo_scan_to_any3(boundary_start, content_type_end, ';', '\r', '\n');
+    const char *end = salts_scan_to_any3(boundary_start, content_type_end, ';', '\r', '\n');
     *boundary_len = end - boundary_start;
   }
 
@@ -59,7 +59,7 @@ int mime_find_boundary(const char *data, size_t len,
     return -1;
   }
 
-  const char *hit = turbo_scan_mem(data, len, boundary, boundary_len);
+  const char *hit = salts_scan_mem(data, len, boundary, boundary_len);
   return hit ? (int)(hit - data) : -1;
 }
 
@@ -93,7 +93,7 @@ void mime_parser_reset(mime_parser_t *parser) {
 
 static int parse_header_line(mime_parser_t *parser, const char *line, size_t len) {
   // Find colon separator
-  const char *colon = turbo_scan_char(line, line + len, ':');
+  const char *colon = salts_scan_char(line, line + len, ':');
   if (!colon) {
     parser->error = MIME_ERROR_INVALID_HEADER;
     return -1;
@@ -105,7 +105,7 @@ static int parse_header_line(mime_parser_t *parser, const char *line, size_t len
 
   // Skip leading whitespace in value
   const char *value_end = value + value_len;
-  value = turbo_scan_skip_sp_tab(value, value_end);
+  value = salts_scan_skip_sp_tab(value, value_end);
   value_len = (size_t)(value_end - value);
 
   // Trim trailing whitespace
@@ -167,7 +167,7 @@ static int parse_headers(mime_parser_t *parser, const char **data_ptr, size_t *l
 
   while (len > 0) {
     // Find line end
-    const char *line_end = turbo_scan_char(line_start, line_start + len, '\n');
+    const char *line_end = salts_scan_char(line_start, line_start + len, '\n');
     if (!line_end) {
       // Need more data
       *data_ptr = line_start;

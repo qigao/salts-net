@@ -1,31 +1,29 @@
-set(TARGET_NAME TurboLB)
+add_library(SaltsLB SHARED src/salts_lb.c)
+cmake_config_api(SaltsLB SALTSNET_LB_C_API)
+cmake_config_target(
+  SaltsLB
+  ALIAS SaltsNet::LB
+  EXPORT_NAME LB
+  FOLDER lb)
 
-# Get all source files
-file(GLOB_RECURSE HEADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
-file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
-
-# Build SHARED library
-add_library(${TARGET_NAME} SHARED ${HEADER_FILES} ${SOURCE_FILES})
-add_library(TurboNet::LB ALIAS ${TARGET_NAME})
-cmake_config_api(${TARGET_NAME} TURBONET_LB_C_API)
-
-# Set target properties
-set_target_properties(
-  ${TARGET_NAME}
-  PROPERTIES VERSION ${PROJECT_VERSION}
-             SOVERSION ${PROJECT_VERSION_MAJOR}
-             FOLDER "TurboLB")
-
-# Include directories
 target_include_directories(
-  ${TARGET_NAME}
+  SaltsLB
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../CoroNet/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../common/include>)
+         $<INSTALL_INTERFACE:include>)
+target_link_libraries(SaltsLB PUBLIC Salts::CNet PRIVATE Salts::Core)
 
-# Link libraries
-target_link_libraries(${TARGET_NAME} PUBLIC TurboNet::CoroNet)
+install(
+  TARGETS SaltsLB
+  EXPORT SaltsNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)
 
-add_subdirectory(tests)
+if(BUILD_TESTS)
+  add_subdirectory(tests)
+endif()
 
-add_subdirectory(examples)
+if(BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()

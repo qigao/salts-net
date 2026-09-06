@@ -13,6 +13,7 @@
 #else
 #include <arpa/inet.h>
 #endif
+#include <stdatomic.h>
 #include <string.h>
 
 #define TEST_ICE_CONSENT_TRANSACTION_CAPACITY 10
@@ -71,6 +72,43 @@ typedef struct {
 } ice_poll_task_state_t;
 
 typedef struct {
+    atomic_int close_requested;
+    salts_mutex_t mutex;
+    int owner_active;
+} test_ice_progress_owner_view_t;
+
+typedef struct {
+    salts_ice_agent_t *agent;
+    ice_restart_options_t options;
+    int rc;
+    atomic_int done;
+} ice_restart_task_state_t;
+
+typedef struct {
+    salts_ice_agent_t *agent;
+    const char *candidate;
+    int rc;
+    atomic_int done;
+} ice_candidate_task_state_t;
+
+typedef struct {
+    atomic_int restart_entered;
+    atomic_int release_restart;
+    int close_callback_on_owner_thread;
+} ice_restart_close_observer_t;
+
+typedef struct {
+    atomic_int close_entered;
+    atomic_int release_close;
+} ice_close_handoff_observer_t;
+
+typedef struct {
+    salts_ice_agent_t *agent;
+    int rc;
+    atomic_int done;
+} ice_role_task_state_t;
+
+typedef struct {
     salts_ice_agent_t *self;
     salts_ice_agent_t *remote;
     int candidate_tx;
@@ -87,7 +125,7 @@ typedef struct {
     int close_callback_on_poll_thread;
 } ice_lifecycle_observer_t;
 
-static SALTS_THREAD_LOCAL int ice_test_poll_thread;
+static SALTS_THREAD_LOCAL int ice_test_owner_thread;
 
 static void on_lifecycle_state_change(salts_ice_agent_t *agent, ice_state_t old_state,
                                       ice_state_t new_state, void *user_data) {
@@ -101,7 +139,7 @@ static void on_lifecycle_state_change(salts_ice_agent_t *agent, ice_state_t old_
     observer->last_old_state = old_state;
     observer->last_new_state = new_state;
     if (new_state == ICE_STATE_CLOSED) {
-        observer->close_callback_on_poll_thread = ice_test_poll_thread;
+        observer->close_callback_on_poll_thread = ice_test_owner_thread;
     }
     if (new_state == observer->close_on_state) {
         ice_agent_close(agent);
@@ -195,10 +233,98 @@ static void ice_start_checks_task(void *arg) {
 static void ice_poll_task(void *arg) {
     ice_poll_task_state_t *state = (ice_poll_task_state_t *)arg;
     if (!state || !state->agent) return;
-    ice_test_poll_thread = 1;
+    ice_test_owner_thread = 1;
     ice_agent_poll_selected_pair(state->agent, state->timeout_ms);
-    ice_test_poll_thread = 0;
+    ice_test_owner_thread = 0;
     state->done = 1;
+}
+
+static void on_restart_close_state_change(salts_ice_agent_t *agent,
+                                          ice_state_t old_state,
+                                          ice_state_t new_state,
+                                          void *user_data) {
+    ice_restart_close_observer_t *observer =
+        (ice_restart_close_observer_t *)user_data;
+    (void)agent;
+    (void)old_state;
+
+    if (!observer) return;
+    if (new_state == ICE_STATE_NEW) {
+        atomic_store_explicit(&observer->restart_entered, 1, memory_order_release);
+        while (!atomic_load_explicit(&observer->release_restart, memory_order_acquire)) {
+            salts_sleep_ms(1u);
+        }
+    } else if (new_state == ICE_STATE_CLOSED) {
+        observer->close_callback_on_owner_thread = ice_test_owner_thread;
+    }
+}
+
+static void ice_restart_task(void *arg) {
+    ice_restart_task_state_t *state = (ice_restart_task_state_t *)arg;
+    if (!state || !state->agent) return;
+    ice_test_owner_thread = 1;
+    state->rc = ice_agent_restart(state->agent, &state->options);
+    ice_test_owner_thread = 0;
+    atomic_store_explicit(&state->done, 1, memory_order_release);
+}
+
+static void ice_candidate_task(void *arg) {
+    ice_candidate_task_state_t *state = (ice_candidate_task_state_t *)arg;
+    if (!state || !state->agent || !state->candidate) return;
+    ice_test_owner_thread = 1;
+    state->rc = ice_agent_add_remote_candidate(state->agent, state->candidate);
+    ice_test_owner_thread = 0;
+    atomic_store_explicit(&state->done, 1, memory_order_release);
+}
+
+static void on_close_handoff_state_change(salts_ice_agent_t *agent,
+                                          ice_state_t old_state,
+                                          ice_state_t new_state,
+                                          void *user_data) {
+    ice_close_handoff_observer_t *observer =
+        (ice_close_handoff_observer_t *)user_data;
+    (void)agent;
+    (void)old_state;
+
+    if (!observer || new_state != ICE_STATE_CLOSED) return;
+    atomic_store_explicit(&observer->close_entered, 1, memory_order_release);
+    while (!atomic_load_explicit(&observer->release_close, memory_order_acquire)) {
+        salts_sleep_ms(1u);
+    }
+}
+
+static void ice_close_task(void *arg) {
+    salts_ice_agent_t *agent = (salts_ice_agent_t *)arg;
+    ice_test_owner_thread = 1;
+    ice_agent_close(agent);
+    ice_test_owner_thread = 0;
+}
+
+static void ice_role_task(void *arg) {
+    ice_role_task_state_t *state = (ice_role_task_state_t *)arg;
+    if (!state || !state->agent) return;
+    ice_test_owner_thread = 1;
+    state->rc = ice_agent_set_role(state->agent, 0);
+    ice_test_owner_thread = 0;
+    atomic_store_explicit(&state->done, 1, memory_order_release);
+}
+
+static int ice_test_wait_for_owner(salts_ice_agent_t *agent, uint64_t timeout_ms) {
+    test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+    test_ice_progress_owner_view_t *progress;
+    uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+
+    if (!view || !view->progress_owner_reserved) return 0;
+    progress = (test_ice_progress_owner_view_t *)view->progress_owner_reserved;
+    do {
+        int owner_active;
+        salts_mutex_lock(&progress->mutex);
+        owner_active = progress->owner_active;
+        salts_mutex_unlock(&progress->mutex);
+        if (owner_active) return 1;
+        salts_sleep_ms(1u);
+    } while (salts_monotonic_ms() < deadline);
+    return 0;
 }
 
 spec("ice") {
@@ -901,6 +1027,139 @@ spec("ice") {
         check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
         check_equal(observer.close_callback_on_poll_thread, 1);
         ice_agent_destroy(agent);
+    }
+
+    it("should defer a cross-thread close until restart returns to its owner") {
+        ice_config_t config = ice_default_config();
+        salts_ice_agent_t *agent = ice_agent_create(&config);
+        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        ice_callbacks_t callbacks;
+        ice_restart_close_observer_t observer;
+        ice_restart_task_state_t restart_task;
+        salts_thread_t restart_thread = NULL;
+        uint64_t deadline;
+
+        check_not_null(agent);
+        view->state = ICE_STATE_CONNECTED;
+        memset(&observer, 0, sizeof(observer));
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.on_state_change = on_restart_close_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        memset(&restart_task, 0, sizeof(restart_task));
+        restart_task.agent = agent;
+        restart_task.options = ice_restart_options_default();
+        check_equal(salts_thread_create(&restart_thread, ice_restart_task, &restart_task), 0);
+        deadline = salts_monotonic_ms() + 1000u;
+        while (!atomic_load_explicit(&observer.restart_entered, memory_order_acquire) &&
+               salts_monotonic_ms() < deadline) {
+            salts_sleep_ms(1u);
+        }
+        check(atomic_load_explicit(&observer.restart_entered, memory_order_acquire));
+
+        ice_agent_close(agent);
+        atomic_store_explicit(&observer.release_restart, 1, memory_order_release);
+        check_equal(salts_thread_join(&restart_thread), 0);
+        salts_thread_destroy(&restart_thread);
+
+        check(atomic_load_explicit(&restart_task.done, memory_order_acquire));
+        check_equal(restart_task.rc, ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_equal(observer.close_callback_on_owner_thread, 1);
+
+        memset(&callbacks, 0, sizeof(callbacks));
+        ice_agent_set_callbacks(agent, &callbacks);
+        ice_agent_destroy(agent);
+    }
+
+    it("should hand an ownerless close to one thread before another API enters") {
+        ice_config_t config = ice_default_config();
+        salts_ice_agent_t *agent = ice_agent_create(&config);
+        ice_callbacks_t callbacks;
+        ice_close_handoff_observer_t observer;
+        ice_role_task_state_t role_task;
+        salts_thread_t close_thread = NULL;
+        salts_thread_t role_thread = NULL;
+        uint64_t deadline;
+
+        check_not_null(agent);
+        memset(&observer, 0, sizeof(observer));
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.on_state_change = on_close_handoff_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        check_equal(salts_thread_create(&close_thread, ice_close_task, agent), 0);
+        deadline = salts_monotonic_ms() + 1000u;
+        while (!atomic_load_explicit(&observer.close_entered, memory_order_acquire) &&
+               salts_monotonic_ms() < deadline) {
+            salts_sleep_ms(1u);
+        }
+        check(atomic_load_explicit(&observer.close_entered, memory_order_acquire));
+
+        memset(&role_task, 0, sizeof(role_task));
+        role_task.agent = agent;
+        check_equal(salts_thread_create(&role_thread, ice_role_task, &role_task), 0);
+        salts_sleep_ms(20u);
+        check(!atomic_load_explicit(&role_task.done, memory_order_acquire));
+
+        atomic_store_explicit(&observer.release_close, 1, memory_order_release);
+        check_equal(salts_thread_join(&close_thread), 0);
+        check_equal(salts_thread_join(&role_thread), 0);
+        salts_thread_destroy(&close_thread);
+        salts_thread_destroy(&role_thread);
+
+        check(atomic_load_explicit(&role_task.done, memory_order_acquire));
+        check_equal(role_task.rc, ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+
+        memset(&callbacks, 0, sizeof(callbacks));
+        ice_agent_set_callbacks(agent, &callbacks);
+        ice_agent_destroy(agent);
+    }
+
+    it("should close on the owner while a remote mDNS candidate is resolving") {
+        static const char candidate[] =
+            "candidate:1 1 UDP 2130706431 non-existent-close-test.local 12345 typ host";
+        ice_config_t config = ice_default_config();
+        salts_ice_agent_t *agent;
+        ice_callbacks_t callbacks;
+        ice_lifecycle_observer_t observer;
+        ice_candidate_task_state_t candidate_task;
+        salts_thread_t candidate_thread = NULL;
+#ifdef _WIN32
+        WSADATA wsa_data;
+        check_equal(WSAStartup(MAKEWORD(2, 2), &wsa_data), 0);
+#endif
+
+        agent = ice_agent_create(&config);
+        check_not_null(agent);
+        memset(&observer, 0, sizeof(observer));
+        observer.close_on_state = ICE_STATE_NEW;
+        memset(&callbacks, 0, sizeof(callbacks));
+        callbacks.on_state_change = on_lifecycle_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        memset(&candidate_task, 0, sizeof(candidate_task));
+        candidate_task.agent = agent;
+        candidate_task.candidate = candidate;
+        check_equal(salts_thread_create(&candidate_thread, ice_candidate_task,
+                                        &candidate_task), 0);
+        check(ice_test_wait_for_owner(agent, 1000u));
+        ice_agent_close(agent);
+        check_equal(salts_thread_join(&candidate_thread), 0);
+        salts_thread_destroy(&candidate_thread);
+
+        check(atomic_load_explicit(&candidate_task.done, memory_order_acquire));
+        check_equal(candidate_task.rc, ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_equal(observer.close_callback_on_poll_thread, 1);
+        ice_agent_destroy(agent);
+#ifdef _WIN32
+        check_equal(WSACleanup(), 0);
+#endif
     }
   }
 

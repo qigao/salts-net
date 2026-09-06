@@ -10,6 +10,7 @@
 #include <salts/clock.h>
 #include <salts/error_codes.h>
 #include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,6 +19,7 @@ enum {
     SNMP_CLIENT_REQUEST_CAPACITY = 1024,
     SNMP_CLIENT_URI_CAPACITY = 320,
     SNMP_CLIENT_QUEUE_CAPACITY = 4,
+    SNMP_CLIENT_MAX_WALK_STEPS = 1000,
     SNMP_CLIENT_DEFAULT_STOP_TIMEOUT_MS = 5000
 };
 
@@ -713,15 +715,26 @@ int snmp_client_walk(
     snmp_walk_cb callback,
     void *user_data
 ) {
-    if (!client || !root_oid || !callback) {
+    snmp_oid_t current_oid = {0};
+    int count = 0;
+
+    if (!client || !root_oid || !root_oid->components || root_oid->count == 0u ||
+        !callback) {
         return SNMP_CLIENT_ERROR_INVALID;
     }
+    if (root_oid->count > SIZE_MAX / sizeof(*current_oid.components)) {
+        return SNMP_CLIENT_ERROR_MEMORY;
+    }
+    current_oid.components =
+        (uint32_t *)malloc(root_oid->count * sizeof(*current_oid.components));
+    if (!current_oid.components) {
+        return SNMP_CLIENT_ERROR_MEMORY;
+    }
+    memcpy(current_oid.components, root_oid->components,
+           root_oid->count * sizeof(*current_oid.components));
+    current_oid.count = root_oid->count;
 
-    snmp_oid_t current_oid = *root_oid;
-    int count = 0;
-    const int MAX_WALK = 1000;  /* Safety limit */
-
-    while (count < MAX_WALK) {
+    while (count < SNMP_CLIENT_MAX_WALK_STEPS) {
         snmp_message_t response;
         int result = snmp_client_get_next(client, &current_oid, 1, &response);
 
@@ -747,9 +760,8 @@ int snmp_client_walk(
         }
 
         /* Check if still under root */
-        size_t cmp_len = (root_oid->count < varbind->oid.count) ?
-                         root_oid->count : varbind->oid.count;
-        int still_under_root = 1;
+        size_t cmp_len = root_oid->count;
+        int still_under_root = varbind->oid.count >= root_oid->count;
 
         for (size_t i = 0; i < cmp_len; i++) {
             if (varbind->oid.components[i] != root_oid->components[i]) {
@@ -763,17 +775,36 @@ int snmp_client_walk(
             break;
         }
 
-        /* Call user callback */
-        callback(&varbind->oid, varbind, user_data);
+        /* Preserve the next cursor before releasing the response-owned pool. */
+        if (varbind->oid.count > SIZE_MAX / sizeof(*current_oid.components)) {
+            snmp_client_release_response(client);
+            free(current_oid.components);
+            return SNMP_CLIENT_ERROR_MEMORY;
+        }
+        {
+            uint32_t *next_components =
+                (uint32_t *)realloc(current_oid.components,
+                                    varbind->oid.count *
+                                        sizeof(*current_oid.components));
+            if (!next_components) {
+                snmp_client_release_response(client);
+                free(current_oid.components);
+                return SNMP_CLIENT_ERROR_MEMORY;
+            }
+            current_oid.components = next_components;
+            memcpy(current_oid.components, varbind->oid.components,
+                   varbind->oid.count * sizeof(*current_oid.components));
+            current_oid.count = varbind->oid.count;
+        }
 
-        /* Move to next OID */
-        current_oid = varbind->oid;
+        callback(&varbind->oid, varbind, user_data);
         count++;
 
         /* Cleanup response pool */
         snmp_client_release_response(client);
     }
 
+    free(current_oid.components);
     return count;
 }
 

@@ -30,7 +30,8 @@ typedef enum snmp_test_agent_behavior_e {
   SNMP_TEST_AGENT_STALE_THEN_RESPOND,
   SNMP_TEST_AGENT_DROP_RESPONSE,
   SNMP_TEST_AGENT_MALFORMED_RESPONSE,
-  SNMP_TEST_AGENT_END_OF_MIB
+  SNMP_TEST_AGENT_END_OF_MIB,
+  SNMP_TEST_AGENT_WALK_SEQUENCE
 } snmp_test_agent_behavior_t;
 
 typedef struct snmp_test_agent_s {
@@ -138,8 +139,8 @@ static void snmp_test_agent_run(void *user) {
     response[14] = 0x19u;
     response[25] = 0x0Eu;
     response[27] = 0x0Cu;
-    response[39] = SNMP_TYPE_ENDOFMIBVIEW;
-    response[40] = 0u;
+    response[38] = SNMP_TYPE_ENDOFMIBVIEW;
+    response[39] = 0u;
     response_size -= 2u;
   }
   agent->status =
@@ -147,6 +148,72 @@ static void snmp_test_agent_run(void *user) {
              (const struct sockaddr *)&peer, peer_size) == (int)response_size
           ? 0
           : -1;
+}
+
+static int snmp_test_oid_equals(const snmp_oid_t *oid,
+                                const uint32_t *components, size_t count) {
+  return oid && oid->count == count &&
+         memcmp(oid->components, components, count * sizeof(*components)) == 0;
+}
+
+static void snmp_test_walk_agent_run(void *user) {
+  static const uint32_t expected_oids[][9] = {
+      {1u, 3u, 6u, 1u, 2u, 1u, 1u, 0u, 0u},
+      {1u, 3u, 6u, 1u, 2u, 1u, 1u, 1u, 0u},
+      {1u, 3u, 6u, 1u, 2u, 1u, 1u, 2u, 0u}};
+  static const size_t expected_counts[] = {7u, 9u, 9u};
+  snmp_test_agent_t *agent = (snmp_test_agent_t *)user;
+
+  agent->status = -1;
+  for (size_t exchange = 0u; exchange < 3u; ++exchange) {
+    uint8_t response[] = {
+        0x30, 0x28, 0x02, 0x01, 0x01, 0x04, 0x06, 'p',  'u',  'b',  'l',  'i',  'c',
+        0xA2, 0x1B, 0x02, 0x01, 0x01, 0x02, 0x01, 0x00, 0x02, 0x01, 0x00, 0x30, 0x10,
+        0x30, 0x0E, 0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00, 0x04,
+        0x02, 'o',  'k'};
+    size_t response_size = sizeof(response);
+    struct sockaddr_storage peer;
+#if defined(_WIN32)
+    int peer_size = (int)sizeof(peer);
+#else
+    socklen_t peer_size = (socklen_t)sizeof(peer);
+#endif
+    uint8_t wire_request[1024];
+    snmp_message_t request = {0};
+    const int received = recvfrom(agent->socket, (char *)wire_request,
+                                  (int)sizeof(wire_request), 0,
+                                  (struct sockaddr *)&peer, &peer_size);
+    if (received <= 0 ||
+        snmp_parse(wire_request, (size_t)received, &request, NULL) <= 0 ||
+        request.pdu.type != SNMP_PDU_GET_NEXT_REQUEST ||
+        request.pdu.varbind_count != 1u ||
+        !snmp_test_oid_equals(&request.pdu.varbinds[0].oid,
+                              expected_oids[exchange],
+                              expected_counts[exchange]) ||
+        request.pdu.request_id < 0 || request.pdu.request_id > UINT8_MAX) {
+      snmp_message_free(&request);
+      return;
+    }
+
+    response[17] = (uint8_t)request.pdu.request_id;
+    snmp_message_free(&request);
+    if (exchange > 0u) response[36] = 0x02u;
+    if (exchange == 2u) {
+      response[1] = 0x26u;
+      response[14] = 0x19u;
+      response[25] = 0x0Eu;
+      response[27] = 0x0Cu;
+      response[38] = SNMP_TYPE_ENDOFMIBVIEW;
+      response[39] = 0u;
+      response_size -= 2u;
+    }
+    if (sendto(agent->socket, (const char *)response, (int)response_size, 0,
+               (const struct sockaddr *)&peer, peer_size) !=
+        (int)response_size) {
+      return;
+    }
+  }
+  agent->status = 0;
 }
 
 static void snmp_test_v3_agent_run(void *user) {
@@ -397,7 +464,54 @@ static void snmp_test_walk_callback(const snmp_oid_t *oid,
                                     void *user_data) {
   (void)oid;
   (void)varbind;
-  (void)user_data;
+  if (user_data) ++*(int *)user_data;
+}
+
+typedef struct snmp_test_walk_result_s {
+  int walk_count;
+  int callback_count;
+  int agent_status;
+} snmp_test_walk_result_t;
+
+static snmp_test_walk_result_t snmp_test_walk_sequence(void) {
+  snmp_test_walk_result_t result = {.walk_count = -1,
+                                    .callback_count = 0,
+                                    .agent_status = -1};
+  snmp_test_agent_t agent;
+  salts_thread_t thread = NULL;
+  snmp_client_t *client = NULL;
+  snmp_oid_t root = {0};
+  uint16_t port = 0u;
+
+  if (snmp_test_agent_open(&agent, &port) != 0) return result;
+  agent.behavior = SNMP_TEST_AGENT_WALK_SEQUENCE;
+  agent.expected_request_type = SNMP_PDU_GET_NEXT_REQUEST;
+  if (salts_thread_create(&thread, snmp_test_walk_agent_run, &agent) != 0) {
+    snmp_test_agent_close(&agent);
+    return result;
+  }
+  {
+    const snmp_client_config_t config = {.host = "127.0.0.1",
+                                         .port = port,
+                                         .community = "public",
+                                         .version = SNMP_VERSION_2C,
+                                         .timeout_ms = 1000u,
+                                         .retries = 0u,
+                                         .recv_buffer_size = 1024u};
+    client = snmp_client_create(&config);
+  }
+  if (client != NULL && snmp_oid_from_string("1.3.6.1.2.1.1", &root) == 0) {
+    result.walk_count =
+        snmp_client_walk(client, &root, snmp_test_walk_callback,
+                         &result.callback_count);
+  }
+
+  snmp_client_destroy(client);
+  snmp_oid_free(&root);
+  if (salts_thread_join(&thread) == 0) result.agent_status = agent.status;
+  salts_thread_destroy(&thread);
+  snmp_test_agent_close(&agent);
+  return result;
 }
 
 static int snmp_test_walk_to_end_of_mib(void) {
@@ -575,5 +689,12 @@ spec("SNMP CNet transport") {
 
   it("releases an end-of-MIB walk response exactly once") {
     check_equal(snmp_test_walk_to_end_of_mib(), 0);
+  }
+
+  it("retains each walk OID through the following request") {
+    const snmp_test_walk_result_t result = snmp_test_walk_sequence();
+    check_equal(result.walk_count, 2);
+    check_equal(result.callback_count, 2);
+    check_equal(result.agent_status, 0);
   }
 }

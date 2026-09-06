@@ -82,10 +82,9 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
     varbind->value_type = SNMP_TYPE_OID;
     return parse_oid(asn1_val, &varbind->value.oid, pool);
 
-  /* SNMP Application types - these come as context-specific tags */
+  /* SNMP application values and v2 exception values use distinct tag classes. */
   default:
-    /* Handle context-specific tags based on tag_number */
-    if (asn1_val->tag_class == 2) { /* Context-specific */
+    if (asn1_val->tag_class == 1) { /* Application */
       switch (asn1_val->tag_number) {
         case 0: /* IpAddress */
           varbind->value_type = SNMP_TYPE_IPADDRESS;
@@ -158,6 +157,21 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
             }
             varbind->value.i64 = (int64_t)val;
           }
+          break;
+        default:
+          return SNMP_PARSE_ERROR_VALUE_TYPE;
+      }
+    } else if (asn1_val->tag_class == 2 &&
+               asn1_val->value.octet_string.length == 0u) {
+      switch (asn1_val->tag_number) {
+        case 0:
+          varbind->value_type = SNMP_TYPE_NOSUCHOBJECT;
+          break;
+        case 1:
+          varbind->value_type = SNMP_TYPE_NOSUCHINSTANCE;
+          break;
+        case 2:
+          varbind->value_type = SNMP_TYPE_ENDOFMIBVIEW;
           break;
         default:
           return SNMP_PARSE_ERROR_VALUE_TYPE;

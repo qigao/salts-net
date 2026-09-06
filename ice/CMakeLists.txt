@@ -24,7 +24,7 @@ target_include_directories(
 target_link_libraries(
   SaltsICE
   PUBLIC Salts::CNet Salts::CMeta
-  PRIVATE OpenSSL::SSL OpenSSL::Crypto Salts::Core)
+  PRIVATE OpenSSL::SSL OpenSSL::Crypto Salts::Core Threads::Threads)
 if(WIN32)
   target_link_libraries(SaltsICE PRIVATE ws2_32 iphlpapi psapi)
 endif()

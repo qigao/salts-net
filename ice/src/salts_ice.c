@@ -156,6 +156,7 @@ typedef struct {
   atomic_int close_requested;
   salts_mutex_t mutex;
   int owner_active;
+  unsigned int owner_depth;
 #if defined(_WIN32)
   DWORD owner_thread;
 #else
@@ -291,17 +292,34 @@ static int ice_progress_current_thread_is_owner(const ice_progress_owner_t *prog
 #endif
 }
 
-static void ice_agent_owner_enter(salts_ice_agent_t *agent) {
-  ice_progress_owner_t *progress = ice_agent_progress(agent);
-  if (!progress) return;
-  salts_mutex_lock(&progress->mutex);
+static void ice_progress_set_current_thread_owner(ice_progress_owner_t *progress) {
   progress->owner_active = 1;
+  progress->owner_depth = 1u;
 #if defined(_WIN32)
   progress->owner_thread = GetCurrentThreadId();
 #else
   progress->owner_thread = pthread_self();
 #endif
-  salts_mutex_unlock(&progress->mutex);
+}
+
+static void ice_agent_owner_enter(salts_ice_agent_t *agent) {
+  ice_progress_owner_t *progress = ice_agent_progress(agent);
+  if (!progress) return;
+  for (;;) {
+    salts_mutex_lock(&progress->mutex);
+    if (!progress->owner_active) {
+      ice_progress_set_current_thread_owner(progress);
+      salts_mutex_unlock(&progress->mutex);
+      return;
+    }
+    if (ice_progress_current_thread_is_owner(progress)) {
+      progress->owner_depth++;
+      salts_mutex_unlock(&progress->mutex);
+      return;
+    }
+    salts_mutex_unlock(&progress->mutex);
+    salts_sleep_ms(1u);
+  }
 }
 
 static void ice_agent_owner_leave(salts_ice_agent_t *agent) {
@@ -309,16 +327,29 @@ static void ice_agent_owner_leave(salts_ice_agent_t *agent) {
   int finish_close;
   if (!progress) return;
   salts_mutex_lock(&progress->mutex);
+  if (!ice_progress_current_thread_is_owner(progress)) {
+    salts_mutex_unlock(&progress->mutex);
+    return;
+  }
+  if (progress->owner_depth > 1u) {
+    progress->owner_depth--;
+    salts_mutex_unlock(&progress->mutex);
+    return;
+  }
   progress->wait_target = NULL;
   progress->wait_wake = NULL;
   finish_close = atomic_load_explicit(&progress->close_requested,
                                       memory_order_acquire);
-  if (!finish_close) progress->owner_active = 0;
+  if (!finish_close) {
+    progress->owner_active = 0;
+    progress->owner_depth = 0u;
+  }
   salts_mutex_unlock(&progress->mutex);
   if (finish_close) {
     ice_agent_finish_close(agent);
     salts_mutex_lock(&progress->mutex);
     progress->owner_active = 0;
+    progress->owner_depth = 0u;
     salts_mutex_unlock(&progress->mutex);
   }
 }
@@ -964,16 +995,26 @@ ice_config_t ice_default_config(void) {
 }
 
 int ice_agent_set_role(salts_ice_agent_t *agent, int is_controlling) {
+  int rc = 0;
+
   if (!agent)
     return -1;
-  if (ice_agent_is_closed(agent))
-    return ICE_AGENT_ERROR_CLOSED;
-  if (agent->state != ICE_STATE_NEW && agent->state != ICE_STATE_GATHERING)
-    return -2;
+  ice_agent_owner_enter(agent);
+  if (ice_agent_is_closed(agent)) {
+    rc = ICE_AGENT_ERROR_CLOSED;
+    goto done;
+  }
+  if (agent->state != ICE_STATE_NEW && agent->state != ICE_STATE_GATHERING) {
+    rc = -2;
+    goto done;
+  }
 
   agent->config.is_controlling = is_controlling ? 1 : 0;
   agent->role = is_controlling ? ICE_ROLE_CONTROLLING : ICE_ROLE_CONTROLLED;
-  return 0;
+
+done:
+  ice_agent_owner_leave(agent);
+  return rc;
 }
 
 
@@ -1080,7 +1121,9 @@ void ice_agent_destroy(salts_ice_agent_t *agent) {
 
 void ice_agent_set_callbacks(salts_ice_agent_t *agent, const ice_callbacks_t *callbacks) {
   if (agent && callbacks) {
+    ice_agent_owner_enter(agent);
     agent->callbacks = *callbacks;
+    ice_agent_owner_leave(agent);
   }
 }
 
@@ -1099,26 +1142,32 @@ void ice_agent_get_local_credentials(salts_ice_agent_t *agent, char *ufrag, size
 }
 
 int ice_agent_set_remote_credentials(salts_ice_agent_t *agent, const char *ufrag, const char *pwd) {
+  int rc = 0;
   size_t ufrag_len;
   size_t pwd_len;
 
-  if (!agent)
-    return -1;
-  if (ice_agent_is_closed(agent))
-    return ICE_AGENT_ERROR_CLOSED;
-  if (!ufrag || !pwd)
+  if (!agent || !ufrag || !pwd)
     return -1;
   ufrag_len = strlen(ufrag);
   pwd_len = strlen(pwd);
+  ice_agent_owner_enter(agent);
+  if (ice_agent_is_closed(agent)) {
+    rc = ICE_AGENT_ERROR_CLOSED;
+    goto done;
+  }
   if (ufrag_len == 0 || ufrag_len >= sizeof(agent->remote_ufrag) ||
-      pwd_len == 0 || pwd_len >= sizeof(agent->remote_pwd))
-    return -2;
+      pwd_len == 0 || pwd_len >= sizeof(agent->remote_pwd)) {
+    rc = -2;
+    goto done;
+  }
 
   memcpy(agent->remote_ufrag, ufrag, ufrag_len + 1);
   memcpy(agent->remote_pwd, pwd, pwd_len + 1);
   agent->remote_credentials_set = 1;
 
-  return 0;
+done:
+  ice_agent_owner_leave(agent);
+  return rc;
 }
 
 ice_restart_options_t ice_restart_options_default(void) {
@@ -1132,27 +1181,37 @@ ice_restart_options_t ice_restart_options_default(void) {
 
 int ice_agent_restart(salts_ice_agent_t *agent,
                       const ice_restart_options_t *options) {
+  int rc = 0;
   char next_ufrag[sizeof(agent->local_ufrag)];
   char next_pwd[sizeof(agent->local_pwd)];
   uint64_t next_tie_breaker;
 
   if (!agent || !options)
     return -1;
-  if (ice_agent_is_closed(agent))
-    return ICE_AGENT_ERROR_CLOSED;
+  ice_agent_owner_enter(agent);
+  if (ice_agent_is_closed(agent)) {
+    rc = ICE_AGENT_ERROR_CLOSED;
+    goto done;
+  }
   if (options->version != ICE_RESTART_OPTIONS_VERSION_1 ||
       options->struct_size < sizeof(*options) ||
-      options->flags != 0 || options->reserved != 0)
-    return ICE_AGENT_ERROR_INVALID_OPTIONS;
+      options->flags != 0 || options->reserved != 0) {
+    rc = ICE_AGENT_ERROR_INVALID_OPTIONS;
+    goto done;
+  }
   if ((agent->state == ICE_STATE_GATHERING &&
        agent->gathering_state != ICE_GATHERING_COMPLETE) ||
       agent->state == ICE_STATE_CONNECTING ||
-      agent->checks_in_progress)
-    return ICE_AGENT_ERROR_BUSY;
+      agent->checks_in_progress) {
+    rc = ICE_AGENT_ERROR_BUSY;
+    goto done;
+  }
   if (generate_random_u64(&next_tie_breaker) != 0 ||
       generate_random_string(next_ufrag, sizeof(next_ufrag)) != 0 ||
-      generate_random_string(next_pwd, sizeof(next_pwd)) != 0)
-    return -2;
+      generate_random_string(next_pwd, sizeof(next_pwd)) != 0) {
+    rc = -2;
+    goto done;
+  }
 
   memcpy(agent->local_ufrag, next_ufrag, sizeof(next_ufrag));
   memcpy(agent->local_pwd, next_pwd, sizeof(next_pwd));
@@ -1189,7 +1248,11 @@ int ice_agent_restart(salts_ice_agent_t *agent,
   agent->next_consent_check_ms = 0;
 
   set_state(agent, ICE_STATE_NEW);
-  return ice_agent_is_closed(agent) ? ICE_AGENT_ERROR_CLOSED : 0;
+  if (ice_agent_is_closed(agent)) rc = ICE_AGENT_ERROR_CLOSED;
+
+done:
+  ice_agent_owner_leave(agent);
+  return rc;
 }
 
 int ice_agent_gather_candidates(salts_ice_agent_t *agent) {
@@ -1274,33 +1337,40 @@ int ice_agent_gather_candidates(salts_ice_agent_t *agent) {
 
 int ice_agent_add_remote_candidate(salts_ice_agent_t *agent, const char *candidate_str) {
   ice_candidate_t parsed;
-  int rc;
+  int rc = 0;
 
-  if (!agent)
+  if (!agent || !candidate_str)
     return -1;
-  if (ice_agent_is_closed(agent))
-    return ICE_AGENT_ERROR_CLOSED;
-  if (!candidate_str)
-    return -1;
+  ice_agent_owner_enter(agent);
+  if (ice_agent_is_closed(agent)) {
+    rc = ICE_AGENT_ERROR_CLOSED;
+    goto done;
+  }
 
-  if (agent->remote_candidate_count >= ICE_MAX_CANDIDATES)
-    return -2;
+  if (agent->remote_candidate_count >= ICE_MAX_CANDIDATES) {
+    rc = -2;
+    goto done;
+  }
 
   memset(&parsed, 0, sizeof(parsed));
 
   if (ice_candidate_parse(candidate_str, &parsed) != 0) {
     ice_tracef("ice_agent_add_remote_candidate parse_failed current_remote=%d candidate=%s",
                agent->remote_candidate_count, candidate_str);
-    return -3;
+    rc = -3;
+    goto done;
   }
 
   rc = parsed.mdns_name[0] != '\0' ? resolve_mdns_hostname(&parsed) : 0;
-  if (ice_agent_is_closed(agent))
-    return ICE_AGENT_ERROR_CLOSED;
+  if (ice_agent_is_closed(agent)) {
+    rc = ICE_AGENT_ERROR_CLOSED;
+    goto done;
+  }
   if (rc != 0) {
     ice_tracef("ice_agent_add_remote_candidate mdns_resolve_failed current_remote=%d candidate=%s",
                agent->remote_candidate_count, candidate_str);
-    return -4;
+    rc = -4;
+    goto done;
   }
 
   parsed.is_local = 0;
@@ -1312,7 +1382,7 @@ int ice_agent_add_remote_candidate(salts_ice_agent_t *agent, const char *candida
       if (agent->state == ICE_STATE_CONNECTING) {
         rebuild_candidate_pairs(agent);
       }
-      return 0;
+      goto done;
     }
   }
 
@@ -1327,14 +1397,22 @@ int ice_agent_add_remote_candidate(salts_ice_agent_t *agent, const char *candida
     rebuild_candidate_pairs(agent);
   }
 
-  return 0;
+done:
+  ice_agent_owner_leave(agent);
+  return rc;
 }
 
 void ice_agent_end_of_candidates(salts_ice_agent_t *agent) {
-  if (agent && !ice_agent_is_closed(agent)) {
+  if (agent) {
+    ice_agent_owner_enter(agent);
+    if (ice_agent_is_closed(agent)) {
+      ice_agent_owner_leave(agent);
+      return;
+    }
     agent->remote_candidates_complete = 1;
     ice_tracef("ice_agent_end_of_candidates remote=%d state=%d",
                agent->remote_candidate_count, (int)agent->state);
+    ice_agent_owner_leave(agent);
   }
 }
 
@@ -2622,8 +2700,14 @@ int ice_agent_get_local_candidate(salts_ice_agent_t *agent, int index, ice_candi
 }
 
 void ice_agent_set_allow_loopback(salts_ice_agent_t *agent, int allow) {
-  if (agent && !ice_agent_is_closed(agent)) {
+  if (agent) {
+    ice_agent_owner_enter(agent);
+    if (ice_agent_is_closed(agent)) {
+      ice_agent_owner_leave(agent);
+      return;
+    }
     agent->config.allow_loopback = allow;
+    ice_agent_owner_leave(agent);
   }
 }
 
@@ -2631,6 +2715,7 @@ void ice_agent_close(salts_ice_agent_t *agent) {
   ice_progress_owner_t *progress;
   int owner_active;
   int current_is_owner;
+  int finish_here = 0;
   if (!agent) return;
   progress = ice_agent_progress(agent);
   if (!progress) return;
@@ -2638,12 +2723,23 @@ void ice_agent_close(salts_ice_agent_t *agent) {
   atomic_store_explicit(&progress->close_requested, 1, memory_order_release);
   owner_active = progress->owner_active;
   current_is_owner = ice_progress_current_thread_is_owner(progress);
+  if (!owner_active) {
+    ice_progress_set_current_thread_owner(progress);
+    current_is_owner = 1;
+    finish_here = 1;
+  }
   if (owner_active && !current_is_owner && progress->wait_wake &&
       progress->wait_target) {
     (void)progress->wait_wake(progress->wait_target);
   }
   salts_mutex_unlock(&progress->mutex);
-  if (!owner_active || current_is_owner) ice_agent_finish_close(agent);
+  if (current_is_owner) ice_agent_finish_close(agent);
+  if (finish_here) {
+    salts_mutex_lock(&progress->mutex);
+    progress->owner_active = 0;
+    progress->owner_depth = 0u;
+    salts_mutex_unlock(&progress->mutex);
+  }
 }
 
 /* ============================================================================

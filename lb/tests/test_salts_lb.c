@@ -279,7 +279,7 @@ spec("Salts CNet load balancer") {
     it("forwards bytes bidirectionally") {
       salts_lb_config_t config = salts_lb_config_default();
       lb_test_peer_t worker = {.is_worker = 1, .prefix = "[W]"};
-      lb_test_peer_t client = {.request = "hello"};
+      lb_test_peer_t client = {.request = "hello", .expected_response_size = 8u};
       lb_test_run_pair(&config, &worker, &client);
       check_equal(client.response_size, 8u);
       check(memcmp(client.response, "[W]hello", 8u) == 0);
@@ -288,7 +288,7 @@ spec("Salts CNet load balancer") {
     it("routes the first bytes to a registered group") {
       salts_lb_config_t config = salts_lb_config_default();
       lb_test_peer_t worker = {.is_worker = 1, .registration = "api", .prefix = "[API]"};
-      lb_test_peer_t client = {.request = "API:list"};
+      lb_test_peer_t client = {.request = "API:list", .expected_response_size = 13u};
       config.route = lb_test_route;
       lb_test_run_pair(&config, &worker, &client);
       check(client.response_size >= 5u);
@@ -301,7 +301,7 @@ spec("Salts CNet load balancer") {
                                .registration = "api",
                                .registration_fragment_size = 1u,
                                .prefix = "[API]"};
-      lb_test_peer_t client = {.request = "API:list"};
+      lb_test_peer_t client = {.request = "API:list", .expected_response_size = 13u};
       config.route = lb_test_route;
       lb_test_run_pair(&config, &worker, &client);
       check(client.response_size >= 5u);
@@ -312,7 +312,7 @@ spec("Salts CNet load balancer") {
       salts_lb_config_t config = salts_lb_config_default();
       salts_lb_t *lb;
       salts_thread_t client_thread = NULL;
-      lb_test_peer_t client = {.request = "BLOCK:payload"};
+      lb_test_peer_t client = {.request = "BLOCK:payload", .expected_response_size = 7u};
       uint16_t port = 0u;
       config.filter = lb_test_filter;
       lb = salts_lb_create(&config);

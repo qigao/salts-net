@@ -78,8 +78,8 @@ add_library(
   ${TARGET_NAME} SHARED ${SOURCE_FILES} ${ASN1_SCANNER_GEN} ${ASN1_GRAMMAR_GEN}
                         ${ASN1_BINARY_GRAMMAR_GEN})
 
-add_library(TurboNet::Asn1Parser ALIAS ${TARGET_NAME})
-cmake_config_api(${TARGET_NAME} TURBONET_ASN1_C_API)
+add_library(SaltsNet::Asn1Parser ALIAS ${TARGET_NAME})
+cmake_config_api(${TARGET_NAME} SALTSNET_ASN1_C_API)
 
 target_include_directories(
   ${TARGET_NAME}
@@ -89,7 +89,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(${TARGET_NAME} PUBLIC Rocida::Core OpenSSL::Crypto)
+target_link_libraries(${TARGET_NAME} PUBLIC Salts::Core OpenSSL::Crypto)
 
 set_target_properties(
   ${TARGET_NAME}
@@ -114,7 +114,7 @@ set_target_properties(mib_compiler PROPERTIES FOLDER snmp/asn1/tools)
 # Install
 install(
   TARGETS ${TARGET_NAME} mib_compiler
-  EXPORT TurboNetTargets
+  EXPORT SaltsNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)

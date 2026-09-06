@@ -1,5 +1,7 @@
-ARG TURBONET_BUILD_BASE=turbonet-build-base:bookworm
-FROM ${TURBONET_BUILD_BASE}
+ARG SALTS_SDK_IMAGE=salts-sdk:bookworm
+FROM ${SALTS_SDK_IMAGE}
+
+RUN test -f /opt/salts/release/lib/cmake/Salts/SaltsConfig.cmake
 
 WORKDIR /workspace
 

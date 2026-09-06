@@ -343,7 +343,7 @@ int turbo_crypto_md5(const void* data, size_t len,
 }
 
 int turbo_crypto_random(void* out, size_t len) {
-    return turbo_secure_random(out, len) == 0 ? TURBO_CRYPTO_OK
+    return salts_secure_random(out, len) == 0 ? TURBO_CRYPTO_OK
                                                : TURBO_CRYPTO_ERANDOM;
 }
 

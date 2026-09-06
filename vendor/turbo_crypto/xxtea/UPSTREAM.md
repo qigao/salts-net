@@ -5,9 +5,9 @@
 - Commit date: 2020-06-15
 - License: MIT; see `LICENSE.md`.
 
-The source snapshot is from upstream `master`. TurboNet carries two local
+The source snapshot is from upstream `master`. SaltsNet carries two local
 integration changes: `CMakeLists.txt` is adapted for use below the repository's
 vendor tree, and `xxtea.c` checks its output allocation before writing to it.
-`../CMakeLists.txt` compiles only `xxtea.c` into `TurboNet::Crypto`; upstream
-examples and standalone shared/static targets are not part of the TurboNet
+`../CMakeLists.txt` compiles only `xxtea.c` into `SaltsNet::Crypto`; upstream
+examples and standalone shared/static targets are not part of the SaltsNet
 build.

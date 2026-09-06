@@ -1,5 +1,5 @@
-#ifndef TURBO_URI_PARSER_H
-#define TURBO_URI_PARSER_H
+#ifndef SALTSNET_URI_PARSER_H
+#define SALTSNET_URI_PARSER_H
 
 #include <stdint.h>
 
@@ -45,4 +45,4 @@ int uri_parse(const char *url_string, uri_t *result);
  */
 void uri_copy_substring(const char *src, int start, int len, char *dest, int dest_size);
 
-#endif // TURBO_URI_PARSER_H
+#endif // SALTSNET_URI_PARSER_H

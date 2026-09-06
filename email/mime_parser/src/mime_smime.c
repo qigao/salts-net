@@ -3,7 +3,7 @@
 #include "asn1_types.h"
 #include "base64_utils.h"
 #include "turbo_crypto.h"
-#include "turbo_simd_scan.h"
+#include "salts_simd_scan.h"
 
 #include <openssl/evp.h>
 #include <openssl/pem.h>
@@ -18,7 +18,7 @@
 
 #define MIME_SMIME_AES_KEY_SIZE 32U
 #define MIME_SMIME_AES_IV_SIZE 16U
-#define MIME_SMIME_BOUNDARY "turbonet-smime-boundary"
+#define MIME_SMIME_BOUNDARY "saltsnet-smime-boundary"
 
 #define OID_CMS_DATA "1.2.840.113549.1.7.1"
 #define OID_CMS_SIGNED_DATA "1.2.840.113549.1.7.2"
@@ -905,20 +905,20 @@ cleanup:
 
 int mime_is_smime_encrypted(const char *content_type, size_t len) {
   if (!content_type || len < 20) return 0;
-  return turbo_scan_mem(content_type, len, "application/pkcs7-mime", 22) !=
+  return salts_scan_mem(content_type, len, "application/pkcs7-mime", 22) !=
              NULL &&
-         turbo_scan_mem(content_type, len, "smime-type=enveloped-data", 25) !=
+         salts_scan_mem(content_type, len, "smime-type=enveloped-data", 25) !=
              NULL;
 }
 
 int mime_is_smime_signed(const char *content_type, size_t len) {
   if (!content_type || len < 20) return 0;
-  return (turbo_scan_mem(content_type, len, "application/pkcs7-mime", 22) !=
+  return (salts_scan_mem(content_type, len, "application/pkcs7-mime", 22) !=
               NULL &&
-          turbo_scan_mem(content_type, len, "smime-type=signed-data", 22) !=
+          salts_scan_mem(content_type, len, "smime-type=signed-data", 22) !=
               NULL) ||
-         (turbo_scan_mem(content_type, len, "multipart/signed", 16) != NULL &&
-          turbo_scan_mem(content_type, len,
+         (salts_scan_mem(content_type, len, "multipart/signed", 16) != NULL &&
+          salts_scan_mem(content_type, len,
                          "protocol=application/pkcs7-signature", 36) != NULL);
 }
 

@@ -1,8 +1,8 @@
 #include "mime_utils.h"
 #include "base64_utils.h"
-#include "turbo_simd_scan.h"
-#include "turbo_str.h"
-#include "turbo_buffer.h"
+#include "salts_simd_scan.h"
+#include "salts_str.h"
+#include "salts_buffer.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -169,7 +169,7 @@ int mime_decode_body(mem_pool_t *pool,
 /* ── Content-Type parser ───────────────────────────────────────────── */
 
 static void skip_whitespace(const char **ptr, const char *end) {
-  *ptr = turbo_scan_skip_sp_tab(*ptr, end);
+  *ptr = salts_scan_skip_sp_tab(*ptr, end);
 }
 
 static const char *find_param(const char *start, const char *end,
@@ -197,12 +197,12 @@ static const char *find_param(const char *start, const char *end,
           // Quoted value
           ptr++;
           value_start = ptr;
-          ptr = turbo_scan_to_char(ptr, end, '"');
+          ptr = salts_scan_to_char(ptr, end, '"');
           *value_len = ptr - value_start;
           return value_start;
         } else {
           // Unquoted value (until semicolon or end)
-          ptr = turbo_scan_to_char(ptr, end, ';');
+          ptr = salts_scan_to_char(ptr, end, ';');
           *value_len = ptr - value_start;
           // Trim trailing whitespace
           while (*value_len > 0 && (value_start[*value_len - 1] == ' ' ||
@@ -215,7 +215,7 @@ static const char *find_param(const char *start, const char *end,
     }
 
     // Skip to next parameter
-    ptr = turbo_scan_to_char(ptr, end, ';');
+    ptr = salts_scan_to_char(ptr, end, ';');
     if (ptr < end) ptr++; // Skip semicolon
   }
 
@@ -233,7 +233,7 @@ int mime_parse_content_type(const char *content_type, size_t len,
 
   // Parse type/subtype
   const char *type_start = ptr;
-  ptr = turbo_scan_to_any2(ptr, end, '/', ';');
+  ptr = salts_scan_to_any2(ptr, end, '/', ';');
 
   if (ptr >= end || *ptr != '/') return -1;
 
@@ -242,7 +242,7 @@ int mime_parse_content_type(const char *content_type, size_t len,
   ptr++; // Skip '/'
 
   const char *subtype_start = ptr;
-  ptr = turbo_scan_to_any2(ptr, end, ';', ' ');
+  ptr = salts_scan_to_any2(ptr, end, ';', ' ');
 
   result->subtype = subtype_start;
   result->subtype_len = ptr - subtype_start;

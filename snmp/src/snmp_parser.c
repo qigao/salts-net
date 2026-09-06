@@ -4,6 +4,7 @@
  */
 
 #include "snmp_parser.h"
+#include "snmp_usm_wire.h"
 #include "snmp_usm.h"
 #include "asn1_types.h"
 #include <stdlib.h>
@@ -81,10 +82,9 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
     varbind->value_type = SNMP_TYPE_OID;
     return parse_oid(asn1_val, &varbind->value.oid, pool);
 
-  /* SNMP Application types - these come as context-specific tags */
+  /* SNMP application values and v2 exception values use distinct tag classes. */
   default:
-    /* Handle context-specific tags based on tag_number */
-    if (asn1_val->tag_class == 2) { /* Context-specific */
+    if (asn1_val->tag_class == 1 && !asn1_val->constructed) { /* Application */
       switch (asn1_val->tag_number) {
         case 0: /* IpAddress */
           varbind->value_type = SNMP_TYPE_IPADDRESS;
@@ -140,7 +140,13 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
         case 4: /* Opaque */
           varbind->value_type = SNMP_TYPE_OPAQUE;
           varbind->value.bytes.len = asn1_val->value.octet_string.length;
-          varbind->value.bytes.data = asn1_val->value.octet_string.data;
+          if (varbind->value.bytes.len > 0u) {
+            varbind->value.bytes.data =
+                (uint8_t *)snmp_parse_alloc(pool, varbind->value.bytes.len);
+            if (!varbind->value.bytes.data) return SNMP_PARSE_ERROR_MEMORY;
+            memcpy(varbind->value.bytes.data, asn1_val->value.octet_string.data,
+                   varbind->value.bytes.len);
+          }
           break;
         case 6: /* Counter64 */
           varbind->value_type = SNMP_TYPE_COUNTER64;
@@ -151,6 +157,21 @@ static int parse_varbind_value(const asn1_value_t *asn1_val, snmp_varbind_t *var
             }
             varbind->value.i64 = (int64_t)val;
           }
+          break;
+        default:
+          return SNMP_PARSE_ERROR_VALUE_TYPE;
+      }
+    } else if (asn1_val->tag_class == 2 && !asn1_val->constructed &&
+               asn1_val->value.octet_string.length == 0u) {
+      switch (asn1_val->tag_number) {
+        case 0:
+          varbind->value_type = SNMP_TYPE_NOSUCHOBJECT;
+          break;
+        case 1:
+          varbind->value_type = SNMP_TYPE_NOSUCHINSTANCE;
+          break;
+        case 2:
+          varbind->value_type = SNMP_TYPE_ENDOFMIBVIEW;
           break;
         default:
           return SNMP_PARSE_ERROR_VALUE_TYPE;
@@ -353,9 +374,11 @@ void snmp_message_free(snmp_message_t *msg) {
   if (!msg)
     return;
 
-  /* Free community string */
-  /* NOTE: If using memory pool, don't free - pool handles it */
-  /* This function is only for malloc-based parsing */
+  free(msg->community);
+  free(msg->usm_params.authoritative_engine_id);
+  free(msg->usm_params.user_name);
+  free(msg->scoped_pdu.context_engine_id);
+  free(msg->scoped_pdu.context_name);
 
   /* Free varbinds */
   if (msg->pdu.varbinds) {
@@ -363,6 +386,10 @@ void snmp_message_free(snmp_message_t *msg) {
       free(msg->pdu.varbinds[i].oid.components);
       if (msg->pdu.varbinds[i].value_type == SNMP_TYPE_OID) {
         free(msg->pdu.varbinds[i].value.oid.components);
+      } else if (msg->pdu.varbinds[i].value_type == SNMP_TYPE_OCTET_STRING ||
+                 msg->pdu.varbinds[i].value_type == SNMP_TYPE_IPADDRESS ||
+                 msg->pdu.varbinds[i].value_type == SNMP_TYPE_OPAQUE) {
+        free(msg->pdu.varbinds[i].value.bytes.data);
       }
     }
     free(msg->pdu.varbinds);
@@ -439,15 +466,43 @@ int snmp_parse_v3(const uint8_t *data, size_t len, snmp_message_t *msg, const sn
   int is_authenticated = (msg->v3_header.msg_flags & SNMP_MSG_FLAG_AUTH) != 0;
   int is_encrypted = (msg->v3_header.msg_flags & SNMP_MSG_FLAG_PRIV) != 0;
 
-  /* TODO: Temporarily skip HMAC verification for debugging */
-  (void)is_authenticated;
-  (void)user;
-
-  /*
-  if (is_authenticated && user && user->auth_protocol != SNMP_AUTH_NONE) {
-      // HMAC verification code...
+  if (is_encrypted && !is_authenticated) {
+    asn1_free(root);
+    return SNMP_PARSE_ERROR_AUTH;
   }
-  */
+  if (is_authenticated) {
+    const uint8_t *auth_field = NULL;
+    size_t auth_field_len = 0u;
+    uint8_t *message_copy = NULL;
+    int auth_result;
+    if (!user || !user->user_name || !msg->usm_params.user_name ||
+        strcmp(user->user_name, msg->usm_params.user_name) != 0 ||
+        (user->auth_protocol != SNMP_AUTH_MD5 &&
+         user->auth_protocol != SNMP_AUTH_SHA1) ||
+        (user->auth_protocol == SNMP_AUTH_MD5 && user->auth_key_len != 16u) ||
+        (user->auth_protocol == SNMP_AUTH_SHA1 && user->auth_key_len != 20u) ||
+        len > 65535u ||
+        snmp_usm_find_auth_field(data, len, &auth_field, &auth_field_len) != 0 ||
+        auth_field_len != sizeof(msg->usm_params.auth_params)) {
+      asn1_free(root);
+      return SNMP_PARSE_ERROR_AUTH;
+    }
+    message_copy = (uint8_t *)malloc(len);
+    if (!message_copy) {
+      asn1_free(root);
+      return SNMP_PARSE_ERROR_MEMORY;
+    }
+    memcpy(message_copy, data, len);
+    memset(message_copy + (size_t)(auth_field - data), 0, auth_field_len);
+    auth_result = usm_verify_auth(message_copy, len, user->auth_key,
+                                  user->auth_key_len, user->auth_protocol,
+                                  msg->usm_params.auth_params);
+    free(message_copy);
+    if (auth_result != USM_OK) {
+      asn1_free(root);
+      return SNMP_PARSE_ERROR_AUTH;
+    }
+  }
 
   /* 5. msgData (either plaintext scopedPDU or encrypted) */
   asn1_value_t *msg_data = children[3];

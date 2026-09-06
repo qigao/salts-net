@@ -46,7 +46,7 @@ Following Linus Torvalds' "Good Taste" principles:
 
 ```c
 #include "mime_parser.h"
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 
 // Setup callbacks
 mime_settings_t settings = {0};
@@ -261,11 +261,9 @@ struct mime_settings_s {
 ## Building
 
 ```bash
-cd parser/internal/mime_parser
-cmake -B build -S .
-cmake --build build
-./build/test_mime_parser
-./build/test_mime_utils
+cmake --preset win-release-user
+cmake --build --preset win-release-user --target test_mime_parser test_mime_utils
+ctest --preset win-release-user -R "mime_(parser|utils)"
 ```
 
 ## Integration
@@ -273,8 +271,8 @@ cmake --build build
 Add to your CMakeLists.txt:
 
 ```cmake
-add_subdirectory(parser/internal/mime_parser)
-target_link_libraries(your_target mime_parser turbo_utils)
+find_package(SaltsNet CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE SaltsNet::MimeParser)
 ```
 
 ## Design Notes
@@ -379,4 +377,4 @@ snprintf(header, sizeof(header),
 
 ## License
 
-Part of TurboUtils project.
+Part of the SaltsNet project.

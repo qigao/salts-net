@@ -17,14 +17,14 @@ It does **not**:
 
 - copy this repository into the image
 - run `vcpkg install` for a specific manifest
-- configure or build TurboNet
-- install TurboNet into `/usr/local`
+- configure or build SaltsNet
+- install SaltsNet into `/usr/local`
 - export project-specific preset variables such as `VCPKG_ROOT`
 
 ## Build The Base Image
 
 ```bash
-docker build -t turbonet-build-base:bookworm .
+docker build -t saltsnet-build-base:bookworm .
 ```
 
 ## Build A Derived Project Image
@@ -36,38 +36,18 @@ Example:
 ```bash
 docker build \
   -f docker/Dockerfile.build-example \
-  --build-arg TURBONET_BUILD_BASE=turbonet-build-base:bookworm \
-  -t turbonet-project-build .
+  --build-arg SALTS_SDK_IMAGE=salts-sdk:bookworm \
+  -t saltsnet-project-build .
 ```
 
-## Compose Variant
-
-The repo also ships `docker-compose.yml`.
-
-Build the base image first:
-
-```bash
-docker compose build build-base
-```
-
-Then build the derived project image:
-
-```bash
-docker compose build project-build
-```
-
-This keeps the expensive toolchain layer in `build-base`, while `project-build`
-reuses it through `FROM turbonet-build-base:bookworm`.
-
-To build an SDK image that installs TurboNet for downstream consumers:
-
-```bash
-docker compose build turbonet-sdk
-```
+Both derived Dockerfiles require a compatible `salts-sdk:bookworm` image with
+Salts installed at `/opt/salts/release`. Override `SALTS_SDK_IMAGE` when the
+image uses another repository or tag. They fail before configuration when the
+required `SaltsConfig.cmake` package is absent.
 
 ## Typical Derived Steps
 
-1. `FROM` the base image
+1. `FROM` a Salts SDK image
 2. `COPY vcpkg.json` and run `vcpkg install`
 3. `COPY . .`
 4. run `cmake --preset linux-dev-user` or `linux-release-user`
@@ -93,19 +73,19 @@ Project-specific layers belong in derived images:
 - manifest dependencies
 - configure/build/test/install steps
 
-## TurboNet SDK For Downstream Projects
+## SaltsNet SDK For Downstream Projects
 
 Use `docker/Dockerfile.sdk` when another project, such as `mqtt`, should
-consume TurboNet via its installed CMake package.
+consume SaltsNet via its installed CMake package.
 
-The SDK image installs TurboNet into `/opt/turbonet`.
+The SDK image installs SaltsNet into `/opt/saltsnet/release`.
 
 Example downstream Dockerfile:
 
 ```dockerfile
-ARG TURBONET_SDK_IMAGE=turbonet-sdk:bookworm
+ARG SALTSNET_SDK_IMAGE=saltsnet-sdk:bookworm
 
-FROM ${TURBONET_SDK_IMAGE} AS mqtt-build
+FROM ${SALTSNET_SDK_IMAGE} AS mqtt-build
 
 WORKDIR /src/mqtt
 COPY . ./
@@ -115,42 +95,46 @@ RUN cmake --preset linux-release-user \
 
 FROM debian:bookworm AS mqtt-runtime
 COPY --from=mqtt-build /src/mqtt/build/bin/mqtt /app/mqtt
-COPY --from=mqtt-build /opt/turbonet/lib /opt/turbonet/lib
-ENV LD_LIBRARY_PATH=/opt/turbonet/lib
+COPY --from=mqtt-build /opt/saltsnet/release/lib /opt/saltsnet/release/lib
+ENV LD_LIBRARY_PATH=/opt/saltsnet/release/lib
 CMD ["/app/mqtt"]
 ```
 
 Example downstream CMake:
 
 ```cmake
-find_package(TurboNet CONFIG REQUIRED)
-target_link_libraries(mqtt PRIVATE TurboNet::CoroNet)
+find_package(SaltsNet CONFIG REQUIRED)
+target_link_libraries(mqtt PRIVATE SaltsNet::SNMP)
 ```
 
 The repo also ships `docker/Dockerfile.mqtt-example` as a copyable downstream template.
 
 ## Recommended Build Chain
 
-1. Build the toolchain base:
+1. Build the toolchain base, then use it in the Salts repository to produce a
+   `salts-sdk:bookworm` image containing `/opt/salts/release`:
 
 ```bash
-docker compose build build-base
+docker build -t saltsnet-build-base:bookworm .
 ```
 
-2. Build the TurboNet SDK image:
+2. Build the SaltsNet SDK image from that Salts SDK:
 
 ```bash
-docker compose build turbonet-sdk
+docker build \
+  -f docker/Dockerfile.sdk \
+  --build-arg SALTS_SDK_IMAGE=salts-sdk:bookworm \
+  -t saltsnet-sdk:bookworm .
 ```
 
-3. In the downstream `mqtt` project, build against the installed TurboNet SDK:
+3. In the downstream `mqtt` project, build against the installed SaltsNet SDK:
 
 ```bash
 docker build \
   -f Dockerfile \
-  --build-arg TURBONET_SDK_IMAGE=turbonet-sdk:bookworm \
+  --build-arg SALTSNET_SDK_IMAGE=saltsnet-sdk:bookworm \
   -t mqtt-build .
 ```
 
 4. Run the final `mqtt-runtime` image, which contains the built `mqtt` binary
-   and required TurboNet shared libraries, but no compiler, CMake, or `vcpkg`.
+   and required SaltsNet shared libraries, but no compiler, CMake, or `vcpkg`.

@@ -7,6 +7,7 @@
 #define SNMP_TYPES_H
 
 #include "platform.h"
+#include <cmeta/meta.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -15,38 +16,38 @@
  * SNMP Version
  * ============================================================================ */
 
-typedef enum {
-    SNMP_VERSION_1  = 0,    /* RFC 1157 */
-    SNMP_VERSION_2C = 1,    /* RFC 1901 - Community-based */
-    SNMP_VERSION_3  = 3,    /* RFC 3411 - USM Security */
-} snmp_version_t;
+Enum(snmp_version_t,
+    (SNMP_VERSION_1, 0, "v1"),
+    (SNMP_VERSION_2C, 1, "v2c"),
+    (SNMP_VERSION_3, 3, "v3")
+);
 
 /* ============================================================================
  * SNMPv3 Security (RFC 3414 - USM)
  * ============================================================================ */
 
 /* Security levels */
-typedef enum {
-    SNMP_SEC_LEVEL_NOAUTH_NOPRIV = 0,  /* No authentication, no privacy */
-    SNMP_SEC_LEVEL_AUTH_NOPRIV   = 1,  /* Authentication, no privacy */
-    SNMP_SEC_LEVEL_AUTH_PRIV     = 3,  /* Authentication and privacy */
-} snmp_security_level_t;
+Enum(snmp_security_level_t,
+    (SNMP_SEC_LEVEL_NOAUTH_NOPRIV, 0, "no_auth_no_priv"),
+    (SNMP_SEC_LEVEL_AUTH_NOPRIV, 1, "auth_no_priv"),
+    (SNMP_SEC_LEVEL_AUTH_PRIV, 3, "auth_priv")
+);
 
 /* Authentication protocols */
-typedef enum {
-    SNMP_AUTH_NONE   = 0,
-    SNMP_AUTH_MD5    = 1,   /* HMAC-MD5-96 (RFC 3414) */
-    SNMP_AUTH_SHA1   = 2,   /* HMAC-SHA-96 (RFC 3414) */
-    SNMP_AUTH_SHA256 = 3,   /* HMAC-SHA-256 (RFC 7860) */
-} snmp_auth_protocol_t;
+Enum(snmp_auth_protocol_t,
+    (SNMP_AUTH_NONE, 0, "none"),
+    (SNMP_AUTH_MD5, 1, "md5"),
+    (SNMP_AUTH_SHA1, 2, "sha1"),
+    (SNMP_AUTH_SHA256, 3, "sha256")
+);
 
 /* Privacy (encryption) protocols */
-typedef enum {
-    SNMP_PRIV_NONE   = 0,
-    SNMP_PRIV_DES    = 1,   /* DES-CBC (RFC 3414) */
-    SNMP_PRIV_AES128 = 2,   /* AES-128-CFB (RFC 3826) */
-    SNMP_PRIV_AES256 = 3,   /* AES-256-CFB */
-} snmp_priv_protocol_t;
+Enum(snmp_priv_protocol_t,
+    (SNMP_PRIV_NONE, 0, "none"),
+    (SNMP_PRIV_DES, 1, "des"),
+    (SNMP_PRIV_AES128, 2, "aes128"),
+    (SNMP_PRIV_AES256, 3, "aes256")
+);
 
 /* USM Security Parameters */
 typedef struct {

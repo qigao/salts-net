@@ -46,17 +46,17 @@ typedef struct {
 extern ParseState g_parse_state;
 
 // AST Functions
-TURBONET_ASN1_C_API AstNode *new_node(ast_node_type_t type, const char *value, AstNode *left, AstNode *right);
-TURBONET_ASN1_C_API void free_tree(AstNode *node);
-TURBONET_ASN1_C_API void print_tree(AstNode *node, int indent);
+SALTSNET_ASN1_C_API AstNode *new_node(ast_node_type_t type, const char *value, AstNode *left, AstNode *right);
+SALTSNET_ASN1_C_API void free_tree(AstNode *node);
+SALTSNET_ASN1_C_API void print_tree(AstNode *node, int indent);
 
 // AST Traversal
-TURBONET_ASN1_C_API void ast_traverse_preorder(AstNode *node, void (*callback)(AstNode *node, void *data), void *data);
-TURBONET_ASN1_C_API void ast_traverse_postorder(AstNode *node, void (*callback)(AstNode *node, void *data), void *data);
+SALTSNET_ASN1_C_API void ast_traverse_preorder(AstNode *node, void (*callback)(AstNode *node, void *data), void *data);
+SALTSNET_ASN1_C_API void ast_traverse_postorder(AstNode *node, void (*callback)(AstNode *node, void *data), void *data);
 
 // AST Query Functions
-TURBONET_ASN1_C_API AstNode *ast_find_node_by_type(AstNode *root, ast_node_type_t type);
-TURBONET_ASN1_C_API AstNode *ast_find_node_by_value(AstNode *root, const char *value);
+SALTSNET_ASN1_C_API AstNode *ast_find_node_by_type(AstNode *root, ast_node_type_t type);
+SALTSNET_ASN1_C_API AstNode *ast_find_node_by_value(AstNode *root, const char *value);
 
 #ifdef __cplusplus
 }

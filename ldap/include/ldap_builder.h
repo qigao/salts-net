@@ -21,7 +21,7 @@ extern "C" {
 #define LDAP_BUILD_ERROR_FILTER  -4
 
 // BindRequest (Simple Authentication)
-TURBONET_LDAP_C_API int ldap_build_bind_request(
+SALTSNET_LDAP_C_API int ldap_build_bind_request(
     int message_id,
     int version,              // Usually 3
     const char *dn,           // Distinguished Name (can be empty for anonymous)
@@ -31,14 +31,14 @@ TURBONET_LDAP_C_API int ldap_build_bind_request(
 );
 
 // UnbindRequest
-TURBONET_LDAP_C_API int ldap_build_unbind_request(
+SALTSNET_LDAP_C_API int ldap_build_unbind_request(
     int message_id,
     uint8_t *out,
     size_t *out_len
 );
 
 // SearchRequest
-TURBONET_LDAP_C_API int ldap_build_search_request(
+SALTSNET_LDAP_C_API int ldap_build_search_request(
     int message_id,
     const char *base_dn,
     int scope,                // LDAP_SCOPE_BASE, LDAP_SCOPE_ONELEVEL, LDAP_SCOPE_SUBTREE
@@ -53,7 +53,7 @@ TURBONET_LDAP_C_API int ldap_build_search_request(
 );
 
 // AddRequest
-TURBONET_LDAP_C_API int ldap_build_add_request(
+SALTSNET_LDAP_C_API int ldap_build_add_request(
     int message_id,
     const char *dn,
     const ldap_attribute_t *attrs,
@@ -63,7 +63,7 @@ TURBONET_LDAP_C_API int ldap_build_add_request(
 );
 
 // DeleteRequest
-TURBONET_LDAP_C_API int ldap_build_delete_request(
+SALTSNET_LDAP_C_API int ldap_build_delete_request(
     int message_id,
     const char *dn,
     uint8_t *out,
@@ -71,7 +71,7 @@ TURBONET_LDAP_C_API int ldap_build_delete_request(
 );
 
 // ModifyRequest
-TURBONET_LDAP_C_API int ldap_build_modify_request(
+SALTSNET_LDAP_C_API int ldap_build_modify_request(
     int message_id,
     const char *dn,
     const ldap_modification_t *mods,
@@ -81,7 +81,7 @@ TURBONET_LDAP_C_API int ldap_build_modify_request(
 );
 
 // ModifyDNRequest (Rename)
-TURBONET_LDAP_C_API int ldap_build_modifydn_request(
+SALTSNET_LDAP_C_API int ldap_build_modifydn_request(
     int message_id,
     const char *dn,
     const char *new_rdn,
@@ -92,7 +92,7 @@ TURBONET_LDAP_C_API int ldap_build_modifydn_request(
 );
 
 // CompareRequest
-TURBONET_LDAP_C_API int ldap_build_compare_request(
+SALTSNET_LDAP_C_API int ldap_build_compare_request(
     int message_id,
     const char *dn,
     const char *attribute,
@@ -103,7 +103,7 @@ TURBONET_LDAP_C_API int ldap_build_compare_request(
 );
 
 // AbandonRequest
-TURBONET_LDAP_C_API int ldap_build_abandon_request(
+SALTSNET_LDAP_C_API int ldap_build_abandon_request(
     int message_id,
     int abandon_id,
     uint8_t *out,

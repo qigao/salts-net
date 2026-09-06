@@ -1,14 +1,14 @@
 #include "mime_rfc2822.h"
 #include "mime_encoded_word.h"
-#include "turbo_simd_scan.h"
-#include "turbo_str.h"
+#include "salts_simd_scan.h"
+#include "salts_str.h"
 #include <string.h>
 #include <ctype.h>
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
 static void skip_whitespace(const char **ptr, const char *end) {
-  *ptr = turbo_scan_skip_sp_tab_cr_lf(*ptr, end);
+  *ptr = salts_scan_skip_sp_tab_cr_lf(*ptr, end);
 }
 
 static void skip_comment(const char **ptr, const char *end) {
@@ -30,7 +30,7 @@ int mime_is_valid_email(const char *email, size_t len) {
   if (!email || len == 0) return 0;
 
   // Find @
-  const char *at = turbo_scan_char(email, email + len, '@');
+  const char *at = salts_scan_char(email, email + len, '@');
   if (!at || at == email || at == email + len - 1) return 0;
 
   // Check local part (before @)
@@ -45,7 +45,7 @@ int mime_is_valid_email(const char *email, size_t len) {
   size_t domain_len = len - (domain - email);
 
   // Must have at least one dot in domain
-  if (!turbo_scan_char(domain, domain + domain_len, '.')) return 0;
+  if (!salts_scan_char(domain, domain + domain_len, '.')) return 0;
 
   for (size_t i = 0; i < domain_len; i++) {
     if (!isalnum(domain[i]) && domain[i] != '.' && domain[i] != '-') {
@@ -67,9 +67,9 @@ char *mime_extract_email(mem_pool_t *pool, const char *address_str, size_t len) 
   skip_whitespace(&ptr, end);
 
   // Look for <email>
-  const char *angle_start = turbo_scan_char(ptr, end, '<');
+  const char *angle_start = salts_scan_char(ptr, end, '<');
   if (angle_start) {
-    const char *angle_end = turbo_scan_char(angle_start + 1, end, '>');
+    const char *angle_end = salts_scan_char(angle_start + 1, end, '>');
     if (angle_end) {
       const char *email_start = angle_start + 1;
       size_t email_len = angle_end - email_start;
@@ -106,7 +106,7 @@ char *mime_extract_email(mem_pool_t *pool, const char *address_str, size_t len) 
 
   // Find end (before comment or whitespace)
   {
-    const char *hit = turbo_scan_to_any3(ptr, end, '(', ' ', '\t');
+    const char *hit = salts_scan_to_any3(ptr, end, '(', ' ', '\t');
     if (hit < end) email_end = hit;
   }
 
@@ -131,7 +131,7 @@ char *mime_extract_display_name(mem_pool_t *pool, const char *address_str, size_
   skip_whitespace(&ptr, end);
 
   // Look for <email> - display name is before it
-  const char *angle_start = turbo_scan_char(ptr, end, '<');
+  const char *angle_start = salts_scan_char(ptr, end, '<');
   if (!angle_start) return NULL; // No display name
 
   const char *name_start = ptr;
@@ -185,7 +185,7 @@ mime_address_t *mime_parse_address(mem_pool_t *pool, const char *address_str, si
   addr->display_name = mime_extract_display_name(pool, address_str, len);
 
   // Split email into local@domain
-  const char *at = turbo_scan_char(addr->email, addr->email + strlen(addr->email), '@');
+  const char *at = salts_scan_char(addr->email, addr->email + strlen(addr->email), '@');
   if (at) {
     size_t local_len = at - addr->email;
     addr->local_part = mem_alloc(pool, local_len + 1);

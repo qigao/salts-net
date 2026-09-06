@@ -37,7 +37,7 @@ add_library(
   xxtea/xxtea.h
   ${LIBECC_ED448_SOURCES})
 
-add_library(TurboNet::Crypto ALIAS turbo_crypto)
+add_library(SaltsNet::Crypto ALIAS turbo_crypto)
 
 target_include_directories(
   turbo_crypto
@@ -54,7 +54,7 @@ set_source_files_properties(
   PROPERTIES COMPILE_DEFINITIONS
              "WITH_STDLIB;WITH_LIBECC_CONFIG_OVERRIDE;WITH_CURVE_WEI448;WITH_HASH_SHAKE256;WITH_SIG_EDDSA448;WORDSIZE=64")
 
-target_link_libraries(turbo_crypto PRIVATE Rocida::Core)
+target_link_libraries(turbo_crypto PRIVATE Salts::Core)
 
 set_target_properties(
   turbo_crypto
@@ -64,7 +64,7 @@ set_target_properties(
 
 install(
   TARGETS turbo_crypto
-  EXPORT TurboNetTargets
+  EXPORT SaltsNetTargets
   ARCHIVE DESTINATION lib)
 
 install(FILES turbo_crypto.h DESTINATION include)

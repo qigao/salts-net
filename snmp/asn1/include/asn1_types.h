@@ -99,43 +99,43 @@ typedef struct {
 } BinaryParseState;
 
 // API functions
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_value(int type, uint8_t tag_class,
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_value(int type, uint8_t tag_class,
                                           uint8_t constructed, uint32_t tag_number);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_boolean(int value);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_integer(int64_t value);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_octet_string(const uint8_t *data, size_t len);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_oid(const uint32_t *components, size_t count);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_sequence(void);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_set(void);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_null(void);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_bit_string(const uint8_t *data, size_t len, int unused_bits);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_oid_from_string(const char *oid_str);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_printable_string(const char *str);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_utf8_string(const char *str);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_ia5_string(const char *str);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_utc_time(const char *time_str);
-TURBONET_ASN1_C_API asn1_value_t *asn1_create_generalized_time(const char *time_str);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_boolean(int value);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_integer(int64_t value);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_octet_string(const uint8_t *data, size_t len);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_oid(const uint32_t *components, size_t count);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_sequence(void);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_set(void);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_null(void);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_bit_string(const uint8_t *data, size_t len, int unused_bits);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_oid_from_string(const char *oid_str);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_printable_string(const char *str);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_utf8_string(const char *str);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_ia5_string(const char *str);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_utc_time(const char *time_str);
+SALTSNET_ASN1_C_API asn1_value_t *asn1_create_generalized_time(const char *time_str);
 
-TURBONET_ASN1_C_API int asn1_sequence_add_child(asn1_value_t *seq, asn1_value_t *child);
-TURBONET_ASN1_C_API int asn1_set_add_child(asn1_value_t *set, asn1_value_t *child);
+SALTSNET_ASN1_C_API int asn1_sequence_add_child(asn1_value_t *seq, asn1_value_t *child);
+SALTSNET_ASN1_C_API int asn1_set_add_child(asn1_value_t *set, asn1_value_t *child);
 
-TURBONET_ASN1_C_API void asn1_free(asn1_value_t *value);
+SALTSNET_ASN1_C_API void asn1_free(asn1_value_t *value);
 
 // Binary parsing
-TURBONET_ASN1_C_API int scan_binary_asn1(const uint8_t *data, size_t len, asn1_value_t **result);
+SALTSNET_ASN1_C_API int scan_binary_asn1(const uint8_t *data, size_t len, asn1_value_t **result);
 
 // DER encoding/decoding (compatibility layer)
-TURBONET_ASN1_C_API int asn1_der_encode(const asn1_value_t *value, uint8_t *buffer, size_t *buffer_len);
-TURBONET_ASN1_C_API int asn1_der_decode(const uint8_t *data, size_t len, asn1_value_t **result);
+SALTSNET_ASN1_C_API int asn1_der_encode(const asn1_value_t *value, uint8_t *buffer, size_t *buffer_len);
+SALTSNET_ASN1_C_API int asn1_der_decode(const uint8_t *data, size_t len, asn1_value_t **result);
 
 // BER encoding/decoding (full BER support including indefinite length and constructed primitives)
-TURBONET_ASN1_C_API int asn1_ber_encode(const asn1_value_t *value, uint8_t *buffer, size_t *buffer_len, int use_indefinite);
-TURBONET_ASN1_C_API int asn1_ber_decode(const uint8_t *data, size_t len, asn1_value_t **result);
+SALTSNET_ASN1_C_API int asn1_ber_encode(const asn1_value_t *value, uint8_t *buffer, size_t *buffer_len, int use_indefinite);
+SALTSNET_ASN1_C_API int asn1_ber_decode(const uint8_t *data, size_t len, asn1_value_t **result);
 
 // Utility functions
-TURBONET_ASN1_C_API void asn1_print_value(const asn1_value_t *value, int indent);
-TURBONET_ASN1_C_API int asn1_compare_oid(const asn1_oid_t *oid1, const asn1_oid_t *oid2);
-TURBONET_ASN1_C_API char *asn1_oid_to_string(const asn1_oid_t *oid);
+SALTSNET_ASN1_C_API void asn1_print_value(const asn1_value_t *value, int indent);
+SALTSNET_ASN1_C_API int asn1_compare_oid(const asn1_oid_t *oid1, const asn1_oid_t *oid2);
+SALTSNET_ASN1_C_API char *asn1_oid_to_string(const asn1_oid_t *oid);
 
 #ifdef __cplusplus
 }

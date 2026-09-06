@@ -16,6 +16,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Forward declaration */
 typedef struct snmp_client_s snmp_client_t;
 
@@ -68,12 +72,12 @@ typedef struct {
  *   };
  *   snmp_client_t *client = snmp_client_create(&config);
  */
-TURBONET_SNMP_C_API snmp_client_t *snmp_client_create(const snmp_client_config_t *config);
+SALTSNET_SNMP_C_API snmp_client_t *snmp_client_create(const snmp_client_config_t *config);
 
 /**
  * Destroy SNMP client
  */
-TURBONET_SNMP_C_API void snmp_client_destroy(snmp_client_t *client);
+SALTSNET_SNMP_C_API void snmp_client_destroy(snmp_client_t *client);
 
 /**
  * Send SNMP GetRequest and wait for response
@@ -97,7 +101,7 @@ TURBONET_SNMP_C_API void snmp_client_destroy(snmp_client_t *client);
  *              response.pdu.varbinds[0].value.bytes.data);
  *   }
  */
-TURBONET_SNMP_C_API int snmp_client_get(
+SALTSNET_SNMP_C_API int snmp_client_get(
     snmp_client_t *client,
     const snmp_oid_t *oids,
     size_t oid_count,
@@ -113,7 +117,7 @@ TURBONET_SNMP_C_API int snmp_client_get(
  * @param response Output response message
  * @return SNMP_CLIENT_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int snmp_client_get_next(
+SALTSNET_SNMP_C_API int snmp_client_get_next(
     snmp_client_t *client,
     const snmp_oid_t *oids,
     size_t oid_count,
@@ -129,7 +133,7 @@ TURBONET_SNMP_C_API int snmp_client_get_next(
  * @param response Output response message
  * @return SNMP_CLIENT_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int snmp_client_set(
+SALTSNET_SNMP_C_API int snmp_client_set(
     snmp_client_t *client,
     const snmp_varbind_t *varbinds,
     size_t varbind_count,
@@ -162,7 +166,7 @@ typedef void (*snmp_walk_cb)(
     void *user_data
 );
 
-TURBONET_SNMP_C_API int snmp_client_walk(
+SALTSNET_SNMP_C_API int snmp_client_walk(
     snmp_client_t *client,
     const snmp_oid_t *root_oid,
     snmp_walk_cb callback,
@@ -172,16 +176,20 @@ TURBONET_SNMP_C_API int snmp_client_walk(
 /**
  * Get last error details
  */
-TURBONET_SNMP_C_API const char *snmp_client_get_error(snmp_client_t *client);
+SALTSNET_SNMP_C_API const char *snmp_client_get_error(snmp_client_t *client);
 
 /**
  * Set timeout (in milliseconds)
  */
-TURBONET_SNMP_C_API void snmp_client_set_timeout(snmp_client_t *client, uint32_t timeout_ms);
+SALTSNET_SNMP_C_API void snmp_client_set_timeout(snmp_client_t *client, uint32_t timeout_ms);
 
 /**
  * Set retry count
  */
-TURBONET_SNMP_C_API void snmp_client_set_retries(snmp_client_t *client, uint32_t retries);
+SALTSNET_SNMP_C_API void snmp_client_set_retries(snmp_client_t *client, uint32_t retries);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SNMP_CLIENT_H */

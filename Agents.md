@@ -14,7 +14,9 @@
 本文件保留核心约束与原则。详细技术规范已迁移为全局skills，按需激活：
 
 - **`turboutils`** - TurboUtils 完整 API 参考（内存管理、字符串、文件、日志、并发、无锁数据结构）
-- **`coronet`** - CoroNet 协程网络开发指南（coroutine、TCP/TLS/UDP/KCP/Pipe/WebSocket、DNS/mDNS、连接池、后端与关闭路径）
+- **`cnet`** - Salts CNet 网络开发指南（TCP/TLS/UDP/KCP/Pipe/WebSocket、DNS、连接句柄、背压与关闭路径）
+- **`cflow`** - Salts CFlow 流式执行指南（typed operators、Graph、runtime demand、reactive flow 与执行所有权）
+- **`cmeta`** - Salts CMeta 元数据指南（Enum/Struct、typed callables、contracts、effects 与跨翻译单元语义）
 - **`cmake-presets`** - CMake Presets 构建测试指南（configure/build/test preset、target 构建、build tree 恢复）
 - **`c-design-patterns`** - C 语言设计模式实现指南（12 种模式、SOLID 原则、反模式警告）
 - **`performance-optimization`** - 性能优化专项指南（热路径识别、SIMD、缓存优化、性能测试）
@@ -22,7 +24,7 @@
 - **`plugin-system`** - 插件系统开发规范（架构设计、隔离机制、热重载、安全）
 - **`tinytest`** - TinyTest 测试框架指南（C/C++ 测试结构、断言、fixture、JUnit/TAP、benchmark）
 
-激活方式：在任务中涉及对应主题时使用相应全局 skill；需要显式指定时使用 `$turboutils`、`$coronet`、`$cmake-presets`、`$c-design-patterns`、`$performance-optimization`、`$logging-guide`、`$plugin-system` 或 `$tinytest`。
+激活方式：在任务中涉及对应主题时使用相应全局 skill；需要显式指定时使用 `$turboutils`、`$cnet`、`$cflow`、`$cmeta`、`$cmake-presets`、`$c-design-patterns`、`$performance-optimization`、`$logging-guide`、`$plugin-system` 或 `$tinytest`。
 
 ---
 

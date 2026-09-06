@@ -4,31 +4,21 @@ LSQUIC Examples
 
 LSQUIC comes with several examples of how the library is used.
 
-TurboNet CoroNet echo client
-----------------------------
+SaltsNet CNet handshake client
+------------------------------
 
-The TurboNet embedded build provides ``lsquic_echo_client_example``.  It uses
-``TurboNet::LSQUIC`` for the engine integration and CoroNet UDP for all packet
-input, output, timers, and event-loop processing.  It does not use libevent or
-native UDP socket calls.
+The embedded SaltsNet build provides ``salts_lsquic_handshake_example``. It
+uses ``SaltsNet::LSQUIC`` and bounded CNet UDP for packet input, output and
+caller-driven advisory-tick processing; it does not use libevent or raw UDP in
+the adapter.
 
-Run it against an LSQUIC echo server using a numeric IPv4 or IPv6 address:
+Run it against a server using a numeric IPv4 or IPv6 address and the ALPN
+advertised by that server:
 
-    ./bin/lsquic_echo_client_example 127.0.0.1 12345 localhost "hello"
+    ./bin/salts_lsquic_handshake_example 127.0.0.1 443 localhost h3
 
-The server must advertise the ``echo`` ALPN used by LSQUIC's echo server.
-
-To verify the CoroNet UDP transport against public HTTP/3 endpoints without
-sending HTTP requests, build the explicit Windows smoke-test target:
-
-    cmake --build --preset win-release-user --target test_lsquic_public_http3
-
-The PowerShell test resolves current IPv4 addresses and requires a successful
-handshake with each of ``tv.puui.qpic.cn``, ``pbaccess.video.qq.com``,
-``www.zhihu.com``, and ``www.xiaohongshu.com``.  It is intentionally not
-registered with CTest because it requires DNS and public UDP connectivity.
-Handshake-only mode enables LSQUIC's HTTP behavior, negotiates an HTTP/3 ALPN,
-and exits successfully only after LSQUIC reports a completed QUIC handshake.
+The process exits successfully only after LSQUIC reports a completed QUIC
+handshake. DNS resolution is deliberately outside this transport example.
 
 The client and server programs described below are built on a common
 framework and share many options.

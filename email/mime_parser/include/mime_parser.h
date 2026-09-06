@@ -24,7 +24,7 @@
 #include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 
 #ifdef __cplusplus
 extern "C" {

@@ -1,37 +1,22 @@
 #include "email/email_pop3.h"
-#include "CoroNet.h"
+#include "email_cnet_transport.h"
+#include <ctype.h>
 #include <fmt.h>
-#include "turbo_thread.h"
+#include <salts/error_codes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
+
+enum { POP3_MAX_MULTILINE_BYTES = 64 * 1024 * 1024 };
 
 struct pop3_client_s {
-  coro_context_t *ctx;
   pop3_config_t config;
-  coro_socket_t *socket;
-  turbo_mutex_t socket_mutex;
+  email_cnet_transport_t transport;
   char error_msg[512];
   char read_buffer[8192];
   char line_buffer[8192];
   size_t read_buffer_len;
 };
-
-static void pop3_socket_publish(pop3_client_t *client, coro_socket_t *socket) {
-  turbo_mutex_lock(&client->socket_mutex);
-  client->socket = socket;
-  turbo_mutex_unlock(&client->socket_mutex);
-}
-
-static coro_socket_t *pop3_socket_take(pop3_client_t *client) {
-  coro_socket_t *socket;
-  turbo_mutex_lock(&client->socket_mutex);
-  socket = client->socket;
-  client->socket = NULL;
-  turbo_mutex_unlock(&client->socket_mutex);
-  return socket;
-}
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -43,7 +28,7 @@ static void pop3_reset_read_state(pop3_client_t *client) {
 }
 
 static int pop3_read_line(pop3_client_t *client, char **line) {
-  if (!client || !client->socket) return -1;
+  if (!client || !email_cnet_transport_is_connected(&client->transport)) return -1;
 
   while (1) {
     size_t i;
@@ -59,8 +44,7 @@ static int pop3_read_line(pop3_client_t *client, char **line) {
         client->line_buffer[line_len] = '\0';
 
         client->read_buffer_len -= line_len;
-        memmove(client->read_buffer, client->read_buffer + line_len,
-                client->read_buffer_len);
+        memmove(client->read_buffer, client->read_buffer + line_len, client->read_buffer_len);
         client->read_buffer[client->read_buffer_len] = '\0';
 
         if (line) {
@@ -71,30 +55,20 @@ static int pop3_read_line(pop3_client_t *client, char **line) {
     }
 
     {
-      char *data = NULL;
       size_t len = 0;
-      int result = coro_socket_recv(client->socket, &data, &len);
       size_t free_space;
+      int result;
 
-      if (result != 0 || !data || len == 0) {
-        if (data) {
-          coro_socket_free_recv(data);
-        }
+      free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
+      result = email_cnet_transport_receive(
+          &client->transport, client->read_buffer + client->read_buffer_len, free_space, &len);
+      if (result != SALTS_OK || len == 0) {
         fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to read POP3 response");
         return -1;
       }
 
-      free_space = sizeof(client->read_buffer) - 1 - client->read_buffer_len;
-      if (len > free_space) {
-        coro_socket_free_recv(data);
-        fmt_text(client->error_msg, sizeof(client->error_msg), "POP3 response buffer overflow");
-        return -1;
-      }
-
-      memcpy(client->read_buffer + client->read_buffer_len, data, len);
       client->read_buffer_len += len;
       client->read_buffer[client->read_buffer_len] = '\0';
-      coro_socket_free_recv(data);
     }
   }
 }
@@ -108,8 +82,7 @@ static int pop3_read_response(pop3_client_t *client) {
   }
 
   line_len = strlen(line);
-  while (line_len > 0 &&
-         (line[line_len - 1] == '\r' || line[line_len - 1] == '\n')) {
+  while (line_len > 0 && (line[line_len - 1] == '\r' || line[line_len - 1] == '\n')) {
     line[--line_len] = '\0';
   }
 
@@ -131,13 +104,13 @@ static int pop3_read_response(pop3_client_t *client) {
 }
 
 static int pop3_send_command(pop3_client_t *client, const char *cmd) {
-  if (!client || !client->socket || !cmd) return -1;
+  if (!client || !email_cnet_transport_is_connected(&client->transport) || !cmd) return -1;
 
   char buffer[1024];
   int len = fmt(buffer, sizeof(buffer), "{}\r\n", cmd);
 
-  int rc = coro_socket_send(client->socket, buffer, len);
-  if (rc != 0) {
+  int rc = email_cnet_transport_send(&client->transport, buffer, (size_t)len);
+  if (rc != SALTS_OK) {
     fmt(client->error_msg, sizeof(client->error_msg), "Failed to send POP3 command: {}", cmd);
     return -1;
   }
@@ -146,7 +119,7 @@ static int pop3_send_command(pop3_client_t *client, const char *cmd) {
 }
 
 static char *pop3_read_multiline(pop3_client_t *client, size_t *out_len) {
-  if (!client || !client->socket) return NULL;
+  if (!client || !email_cnet_transport_is_connected(&client->transport)) return NULL;
 
   // Read until we see ".\r\n" on a line by itself
   size_t capacity = 8192;
@@ -166,8 +139,7 @@ static char *pop3_read_multiline(pop3_client_t *client, size_t *out_len) {
     }
 
     line_len = strlen(line);
-    while (line_len > 0 &&
-           (line[line_len - 1] == '\r' || line[line_len - 1] == '\n')) {
+    while (line_len > 0 && (line[line_len - 1] == '\r' || line[line_len - 1] == '\n')) {
       line_len--;
     }
 
@@ -182,9 +154,23 @@ static char *pop3_read_multiline(pop3_client_t *client, size_t *out_len) {
       payload_len--;
     }
 
-    if (total + payload_len + 2 >= capacity) {
-      while (total + payload_len + 2 >= capacity) {
-        capacity *= 2;
+    if (total > POP3_MAX_MULTILINE_BYTES - 3u ||
+        payload_len > POP3_MAX_MULTILINE_BYTES - total - 3u) {
+      fmt_text(client->error_msg, sizeof(client->error_msg), "POP3 multiline response too large");
+      free(result);
+      return NULL;
+    }
+    if (total + payload_len + 3u > capacity) {
+      const size_t needed = total + payload_len + 3u;
+      while (capacity < needed) {
+        capacity =
+            capacity > POP3_MAX_MULTILINE_BYTES / 2u ? POP3_MAX_MULTILINE_BYTES : capacity * 2u;
+        if (capacity < needed && capacity == POP3_MAX_MULTILINE_BYTES) {
+          fmt_text(client->error_msg, sizeof(client->error_msg),
+                   "POP3 multiline response too large");
+          free(result);
+          return NULL;
+        }
       }
       {
         char *new_result = realloc(result, capacity);
@@ -209,24 +195,37 @@ static char *pop3_read_multiline(pop3_client_t *client, size_t *out_len) {
 
 /* ── Client Creation ───────────────────────────────────────────────── */
 
-pop3_client_t *pop3_client_create(coro_context_t *ctx,
-                                   const pop3_config_t *config) {
-  if (!ctx || !config) return NULL;
+pop3_client_t *pop3_client_create(const pop3_config_t *config) {
+  if (!config || !config->host || config->host[0] == '\0' || config->port <= 0 ||
+      config->port > 65535 || config->timeout_ms < 0 || (config->use_tls && config->use_stls)) {
+    return NULL;
+  }
 
   pop3_client_t *client = calloc(1, sizeof(pop3_client_t));
   if (!client) return NULL;
 
-  client->ctx = ctx;
-  turbo_mutex_init(&client->socket_mutex);
   client->config = *config;
 
   if (config->host) client->config.host = strdup(config->host);
   if (config->username) client->config.username = strdup(config->username);
   if (config->password) client->config.password = strdup(config->password);
-
-  if (client->config.timeout_ms == 0) {
-    client->config.timeout_ms = 30000;
+  if (!client->config.host || (config->username && !client->config.username) ||
+      (config->password && !client->config.password)) {
+    free(client->config.host);
+    free(client->config.username);
+    free(client->config.password);
+    free(client);
+    return NULL;
   }
+
+  if (email_cnet_transport_init(&client->transport, client->config.timeout_ms) != SALTS_OK) {
+    free(client->config.host);
+    free(client->config.username);
+    free(client->config.password);
+    free(client);
+    return NULL;
+  }
+  client->config.timeout_ms = (int)client->transport.timeout_ms;
 
   return client;
 }
@@ -234,42 +233,28 @@ pop3_client_t *pop3_client_create(coro_context_t *ctx,
 void pop3_client_free(pop3_client_t *client) {
   if (!client) return;
 
-  {
-    coro_socket_t *socket = pop3_socket_take(client);
-    if (socket) coro_socket_destroy(socket);
-  }
+  if (email_cnet_transport_destroy(&client->transport) != SALTS_OK) return;
 
   free(client->config.host);
   free(client->config.username);
   free(client->config.password);
-  turbo_mutex_destroy(&client->socket_mutex);
   free(client);
 }
 
 /* ── Connection ────────────────────────────────────────────────────── */
 
 int pop3_connect(pop3_client_t *client) {
-  int socket_type;
-
   if (!client) return -1;
 
-  // Create socket
-  socket_type = client->config.use_tls ? CORO_SOCKET_TLS : CORO_SOCKET_TCP_V4;
-  {
-    coro_socket_t *socket = coro_socket_create(client->ctx, (coro_socket_type_t)socket_type);
-    if (socket) pop3_socket_publish(client, socket);
-  }
-  if (!client->socket) {
-    fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to create socket");
-    return -1;
-  }
-
-  if (coro_socket_connect(client->socket, client->config.host,
-                          client->config.port) != 0) {
-    fmt(client->error_msg, sizeof(client->error_msg), "Failed to connect to {}:{}", client->config.host,
-        client->config.port);
-    coro_socket_t *socket = pop3_socket_take(client);
-    if (socket) coro_socket_destroy(socket);
+  pop3_reset_read_state(client);
+  if (email_cnet_transport_connect(&client->transport, client->config.host,
+                                   (uint16_t)client->config.port,
+                                   client->config.use_tls) != SALTS_OK) {
+    fmt(client->error_msg, sizeof(client->error_msg),
+        "Failed to connect to {}:{} at {} (CNet status {})", client->config.host,
+        client->config.port, email_cnet_transport_stage(&client->transport),
+        email_cnet_transport_status(&client->transport));
+    (void)email_cnet_transport_close(&client->transport);
     return -1;
   }
 
@@ -286,8 +271,11 @@ int pop3_connect(pop3_client_t *client) {
       return -1;
     }
 
-    if (coro_socket_upgrade_tls(client->socket, client->config.host) != 0) {
-      fmt_text(client->error_msg, sizeof(client->error_msg), "Failed to upgrade POP3 connection to TLS");
+    if (email_cnet_transport_start_tls(&client->transport, client->config.host) != SALTS_OK) {
+      fmt(client->error_msg, sizeof(client->error_msg),
+          "Failed to upgrade POP3 connection to TLS at {} (CNet status {})",
+          email_cnet_transport_stage(&client->transport),
+          email_cnet_transport_status(&client->transport));
       pop3_disconnect(client);
       return -1;
     }
@@ -316,24 +304,19 @@ int pop3_connect(pop3_client_t *client) {
 }
 
 void pop3_disconnect(pop3_client_t *client) {
-  if (!client || !client->socket) return;
+  if (!client || !email_cnet_transport_is_connected(&client->transport)) {
+    if (client) (void)email_cnet_transport_close(&client->transport);
+    return;
+  }
 
   // Send QUIT
   pop3_send_command(client, "QUIT");
 
-  {
-    coro_socket_t *socket = pop3_socket_take(client);
-    if (socket) coro_socket_destroy(socket);
-  }
+  (void)email_cnet_transport_close(&client->transport);
 }
 
 int pop3_interrupt(pop3_client_t *client, int status) {
-  int rc;
-  if (!client) return TURBO_EINVAL;
-  turbo_mutex_lock(&client->socket_mutex);
-  rc = client->socket ? coro_socket_interrupt_wait(client->socket, status) : TURBO_ENOTCONN;
-  turbo_mutex_unlock(&client->socket_mutex);
-  return rc;
+  return email_cnet_transport_interrupt(client != NULL ? &client->transport : NULL, status);
 }
 
 /* ── Mailbox Operations ────────────────────────────────────────────── */
@@ -435,21 +418,20 @@ char **pop3_uidl(pop3_client_t *client, int *count) {
 
 /* ── Message Operations ────────────────────────────────────────────── */
 
-int pop3_retrieve_raw(pop3_client_t *client, int msg_num,
-                      char **data, size_t *len) {
+int pop3_retrieve_raw(pop3_client_t *client, int msg_num, char **data, size_t *len) {
   char retr_cmd[64];
   char *raw_msg;
   size_t msg_len = 0;
-  if (!client || !data || msg_num <= 0) return TURBO_EINVAL;
+  if (!client || !data || msg_num <= 0) return SALTS_EINVAL;
   *data = NULL;
   if (len) *len = 0;
   fmt(retr_cmd, sizeof(retr_cmd), "RETR {}", msg_num);
-  if (pop3_send_command(client, retr_cmd) != 0) return TURBO_EIO;
+  if (pop3_send_command(client, retr_cmd) != 0) return SALTS_EIO;
   raw_msg = pop3_read_multiline(client, &msg_len);
-  if (!raw_msg) return TURBO_EIO;
+  if (!raw_msg) return SALTS_EIO;
   *data = raw_msg;
   if (len) *len = msg_len;
-  return TURBO_OK;
+  return SALTS_OK;
 }
 
 email_message_t *pop3_retrieve_message(pop3_client_t *client, int msg_num) {
@@ -457,7 +439,7 @@ email_message_t *pop3_retrieve_message(pop3_client_t *client, int msg_num) {
 
   size_t msg_len = 0;
   char *raw_msg = NULL;
-  if (pop3_retrieve_raw(client, msg_num, &raw_msg, &msg_len) != TURBO_OK) return NULL;
+  if (pop3_retrieve_raw(client, msg_num, &raw_msg, &msg_len) != SALTS_OK) return NULL;
 
   // Parse message
   mem_pool_t pool;

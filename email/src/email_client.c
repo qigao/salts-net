@@ -2,15 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-email_client_t *email_client_create_smtp(coro_context_t *ctx,
-                                          const smtp_config_t *config) {
-  if (!ctx || !config) return NULL;
+email_client_t *email_client_create_smtp(const smtp_config_t *config) {
+  if (!config) return NULL;
 
   email_client_t *client = calloc(1, sizeof(email_client_t));
   if (!client) return NULL;
 
-  client->ctx = ctx;
-  client->smtp = smtp_client_create(ctx, config);
+  client->smtp = smtp_client_create(config);
 
   if (!client->smtp) {
     free(client);
@@ -20,15 +18,13 @@ email_client_t *email_client_create_smtp(coro_context_t *ctx,
   return client;
 }
 
-email_client_t *email_client_create_imap(coro_context_t *ctx,
-                                          const imap_config_t *config) {
-  if (!ctx || !config) return NULL;
+email_client_t *email_client_create_imap(const imap_config_t *config) {
+  if (!config) return NULL;
 
   email_client_t *client = calloc(1, sizeof(email_client_t));
   if (!client) return NULL;
 
-  client->ctx = ctx;
-  client->imap = imap_client_create(ctx, config);
+  client->imap = imap_client_create(config);
 
   if (!client->imap) {
     free(client);
@@ -38,15 +34,13 @@ email_client_t *email_client_create_imap(coro_context_t *ctx,
   return client;
 }
 
-email_client_t *email_client_create_pop3(coro_context_t *ctx,
-                                          const pop3_config_t *config) {
-  if (!ctx || !config) return NULL;
+email_client_t *email_client_create_pop3(const pop3_config_t *config) {
+  if (!config) return NULL;
 
   email_client_t *client = calloc(1, sizeof(email_client_t));
   if (!client) return NULL;
 
-  client->ctx = ctx;
-  client->pop3 = pop3_client_create(ctx, config);
+  client->pop3 = pop3_client_create(config);
 
   if (!client->pop3) {
     free(client);
@@ -56,17 +50,15 @@ email_client_t *email_client_create_pop3(coro_context_t *ctx,
   return client;
 }
 
-email_client_t *email_client_create_full(coro_context_t *ctx,
-                                          const smtp_config_t *smtp_config,
-                                          const imap_config_t *imap_config) {
-  if (!ctx || !smtp_config || !imap_config) return NULL;
+email_client_t *email_client_create_full(const smtp_config_t *smtp_config,
+                                         const imap_config_t *imap_config) {
+  if (!smtp_config || !imap_config) return NULL;
 
   email_client_t *client = calloc(1, sizeof(email_client_t));
   if (!client) return NULL;
 
-  client->ctx = ctx;
-  client->smtp = smtp_client_create(ctx, smtp_config);
-  client->imap = imap_client_create(ctx, imap_config);
+  client->smtp = smtp_client_create(smtp_config);
+  client->imap = imap_client_create(imap_config);
 
   if (!client->smtp || !client->imap) {
     email_client_free(client);
@@ -86,12 +78,8 @@ void email_client_free(email_client_t *client) {
   free(client);
 }
 
-int email_send_simple(email_client_t *client,
-                      const char *from_name,
-                      const char *from_email,
-                      const char *to_name,
-                      const char *to_email,
-                      const char *subject,
+int email_send_simple(email_client_t *client, const char *from_name, const char *from_email,
+                      const char *to_name, const char *to_email, const char *subject,
                       const char *body) {
   if (!client || !client->smtp) return -1;
 
@@ -117,14 +105,9 @@ int email_send_simple(email_client_t *client,
   return result;
 }
 
-int email_send_html(email_client_t *client,
-                    const char *from_name,
-                    const char *from_email,
-                    const char *to_name,
-                    const char *to_email,
-                    const char *subject,
-                    const char *text_body,
-                    const char *html_body) {
+int email_send_html(email_client_t *client, const char *from_name, const char *from_email,
+                    const char *to_name, const char *to_email, const char *subject,
+                    const char *text_body, const char *html_body) {
   if (!client || !client->smtp) return -1;
 
   mem_pool_t pool;

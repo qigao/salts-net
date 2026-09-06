@@ -2,7 +2,7 @@
  * test_stun.c - Unit tests for STUN protocol implementation
  */
 
-#include "ice/turbo_stun.h"
+#include "ice/salts_stun.h"
 #include "tinytest.h"
 #include <string.h>
 

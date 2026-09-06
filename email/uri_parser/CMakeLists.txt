@@ -11,7 +11,7 @@ cmake_add_source(SOURCE_FILES DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src)
 add_library(${TARGET_NAME} STATIC ${SOURCE_FILES} ${URI_LEXER_GEN})
 
 cmake_config_target(${TARGET_NAME}
-  ALIAS TurboNet::UriParser
+  ALIAS SaltsNet::UriParser
   FOLDER "email/${TARGET_NAME}"
   EXPORT_NAME UriParser)
 
@@ -23,7 +23,7 @@ target_include_directories(
 
 install(
   TARGETS ${TARGET_NAME}
-  EXPORT TurboNetTargets
+  EXPORT SaltsNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)

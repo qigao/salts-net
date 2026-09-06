@@ -14,8 +14,8 @@
 #define EMAIL_MESSAGE_H
 
 #include "platform.h"
-#include "turbo_buffer.h"
-#include "turbo_str.h"
+#include "salts_buffer.h"
+#include "salts_str.h"
 #include "mime_parser.h"
 #include "mime_rfc2822.h"
 #include "mime_smime.h"

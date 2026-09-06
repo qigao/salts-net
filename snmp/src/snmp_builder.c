@@ -4,6 +4,8 @@
  */
 
 #include "snmp_builder.h"
+#include "snmp_builder_internal.h"
+#include "snmp_usm_wire.h"
 #include "snmp_usm.h"
 #include "asn1_types.h"
 #include <fmt.h>
@@ -99,6 +101,133 @@ static int build_get_pdu(
     return SNMP_BUILD_OK;
 }
 
+static int snmp_builder_add_child(asn1_value_t *parent, asn1_value_t *child) {
+    if (!child) return -1;
+    if (asn1_sequence_add_child(parent, child) < 0) {
+        asn1_free(child);
+        return -1;
+    }
+    return 0;
+}
+
+static asn1_value_t *build_varbind_value(const snmp_varbind_t *varbind) {
+    asn1_value_t *value = NULL;
+    if (!varbind) return NULL;
+
+    switch (varbind->value_type) {
+        case SNMP_TYPE_INTEGER:
+            return asn1_create_integer(varbind->value.i32);
+        case SNMP_TYPE_OCTET_STRING:
+            return asn1_create_octet_string(varbind->value.bytes.data,
+                                            varbind->value.bytes.len);
+        case SNMP_TYPE_NULL:
+            return asn1_create_null();
+        case SNMP_TYPE_OID:
+            return asn1_create_oid(varbind->value.oid.components,
+                                   varbind->value.oid.count);
+        case SNMP_TYPE_IPADDRESS:
+        case SNMP_TYPE_OPAQUE:
+            value = asn1_create_octet_string(varbind->value.bytes.data,
+                                             varbind->value.bytes.len);
+            break;
+        case SNMP_TYPE_COUNTER32:
+        case SNMP_TYPE_GAUGE32:
+        case SNMP_TYPE_TIMETICKS:
+            if (varbind->value.i32 < 0) return NULL;
+            value = asn1_create_integer((uint32_t)varbind->value.i32);
+            break;
+        case SNMP_TYPE_COUNTER64:
+            if (varbind->value.i64 < 0) return NULL;
+            value = asn1_create_integer(varbind->value.i64);
+            break;
+        default:
+            return NULL;
+    }
+
+    if (value) {
+        value->tag_class = 1;
+        value->tag_number = (uint32_t)varbind->value_type & 0x1fu;
+        value->tag = (uint8_t)varbind->value_type;
+    }
+    return value;
+}
+
+static int build_set_pdu(int32_t request_id, const snmp_varbind_t *varbinds,
+                         size_t varbind_count, asn1_value_t **out_pdu) {
+    asn1_value_t *pdu = NULL;
+    asn1_value_t *varbind_list = NULL;
+    if (!varbinds || varbind_count == 0u || !out_pdu) {
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+
+    pdu = asn1_create_sequence();
+    if (!pdu) return SNMP_BUILD_ERROR_MEMORY;
+    pdu->tag = SNMP_PDU_SET_REQUEST;
+    pdu->tag_class = 2;
+    pdu->tag_number = SNMP_PDU_SET_REQUEST & 0x1fu;
+
+    if (snmp_builder_add_child(pdu, asn1_create_integer(request_id)) < 0 ||
+        snmp_builder_add_child(pdu, asn1_create_integer(0)) < 0 ||
+        snmp_builder_add_child(pdu, asn1_create_integer(0)) < 0) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+
+    varbind_list = asn1_create_sequence();
+    if (!varbind_list) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    for (size_t i = 0; i < varbind_count; ++i) {
+        asn1_value_t *varbind = NULL;
+        asn1_value_t *oid = NULL;
+        asn1_value_t *value = NULL;
+        if (!varbinds[i].oid.components || varbinds[i].oid.count < 2u) {
+            asn1_free(varbind_list);
+            asn1_free(pdu);
+            return SNMP_BUILD_ERROR_INVALID;
+        }
+        varbind = asn1_create_sequence();
+        oid = asn1_create_oid(varbinds[i].oid.components, varbinds[i].oid.count);
+        value = build_varbind_value(&varbinds[i]);
+        if (!varbind || !oid || !value) {
+            asn1_free(varbind);
+            asn1_free(oid);
+            asn1_free(value);
+            asn1_free(varbind_list);
+            asn1_free(pdu);
+            return value ? SNMP_BUILD_ERROR_MEMORY : SNMP_BUILD_ERROR_INVALID;
+        }
+        if (snmp_builder_add_child(varbind, oid) < 0) {
+            asn1_free(value);
+            asn1_free(varbind);
+            asn1_free(varbind_list);
+            asn1_free(pdu);
+            return SNMP_BUILD_ERROR_MEMORY;
+        }
+        oid = NULL;
+        if (snmp_builder_add_child(varbind, value) < 0) {
+            asn1_free(varbind);
+            asn1_free(varbind_list);
+            asn1_free(pdu);
+            return SNMP_BUILD_ERROR_MEMORY;
+        }
+        value = NULL;
+        if (snmp_builder_add_child(varbind_list, varbind) < 0) {
+            asn1_free(varbind_list);
+            asn1_free(pdu);
+            return SNMP_BUILD_ERROR_MEMORY;
+        }
+        varbind = NULL;
+    }
+    if (snmp_builder_add_child(pdu, varbind_list) < 0) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    *out_pdu = pdu;
+    return SNMP_BUILD_OK;
+}
+
 /* Common message builder */
 static int build_message(
     snmp_version_t version,
@@ -107,6 +236,10 @@ static int build_message(
     uint8_t *out,
     size_t *out_len
 ) {
+    if (version != SNMP_VERSION_1 && version != SNMP_VERSION_2C) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_INVALID;
+    }
     /* Create message SEQUENCE */
     asn1_value_t *msg = asn1_create_sequence();
     if (!msg) {
@@ -203,15 +336,14 @@ int snmp_build_set_request(
     uint8_t *out,
     size_t *out_len
 ) {
-    /* TODO: Implement SetRequest with typed values */
-    (void)version;
-    (void)community;
-    (void)request_id;
-    (void)varbinds;
-    (void)varbind_count;
-    (void)out;
-    (void)out_len;
-    return SNMP_BUILD_ERROR_INVALID;  /* Not implemented yet */
+    asn1_value_t *pdu = NULL;
+    int result;
+    if (!community || !varbinds || varbind_count == 0u || !out || !out_len) {
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+    result = build_set_pdu(request_id, varbinds, varbind_count, &pdu);
+    if (result != SNMP_BUILD_OK) return result;
+    return build_message(version, community, pdu, out, out_len);
 }
 
 int snmp_build_get_bulk_request(
@@ -224,16 +356,18 @@ int snmp_build_get_bulk_request(
     uint8_t *out,
     size_t *out_len
 ) {
-    /* TODO: Implement GetBulkRequest */
-    (void)community;
-    (void)request_id;
-    (void)non_repeaters;
-    (void)max_repetitions;
-    (void)oids;
-    (void)oid_count;
-    (void)out;
-    (void)out_len;
-    return SNMP_BUILD_ERROR_INVALID;  /* Not implemented yet */
+    asn1_value_t *pdu = NULL;
+    int result;
+    if (!community || non_repeaters < 0 || max_repetitions < 0 || !oids ||
+        oid_count == 0u || !out || !out_len) {
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+    result = build_get_pdu(SNMP_PDU_GET_BULK_REQUEST, request_id, oids,
+                           oid_count, &pdu);
+    if (result != SNMP_BUILD_OK) return result;
+    pdu->value.sequence.children[1]->value.integer = non_repeaters;
+    pdu->value.sequence.children[2]->value.integer = max_repetitions;
+    return build_message(SNMP_VERSION_2C, community, pdu, out, out_len);
 }
 
 /* ============================================================================
@@ -334,6 +468,220 @@ void snmp_oid_free(snmp_oid_t *oid) {
  *     msgData ScopedPduData
  * }
  */
+static int snmp_build_v3_pdu(asn1_value_t *pdu, int32_t request_id,
+                             int reportable,
+                             const snmp_usm_params_t *usm_params,
+                             const snmp_v3_user_t *user,
+                             snmp_security_level_t security_level,
+                             uint8_t *out, size_t *out_len) {
+    asn1_value_t *scoped_pdu = NULL;
+    asn1_value_t *msg_data = NULL;
+    asn1_value_t *global_data = NULL;
+    asn1_value_t *msg = NULL;
+    uint8_t scoped_pdu_data[2048];
+    size_t scoped_pdu_len = sizeof(scoped_pdu_data);
+    uint8_t encrypted_pdu[2048];
+    size_t encrypted_len = sizeof(encrypted_pdu);
+    uint8_t priv_params[8] = {0};
+    uint8_t security_params[256];
+    size_t security_params_len = sizeof(security_params);
+    snmp_usm_params_t params_copy;
+    uint8_t msg_flags;
+    int result;
+
+    if (!pdu || !usm_params || !out || !out_len) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+    if (security_level != SNMP_SEC_LEVEL_NOAUTH_NOPRIV &&
+        security_level != SNMP_SEC_LEVEL_AUTH_NOPRIV &&
+        security_level != SNMP_SEC_LEVEL_AUTH_PRIV) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+    if (security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV &&
+        (!user || !user->user_name || !usm_params->user_name ||
+         strcmp(user->user_name, usm_params->user_name) != 0 ||
+         (user->auth_protocol != SNMP_AUTH_MD5 &&
+          user->auth_protocol != SNMP_AUTH_SHA1) ||
+         (user->auth_protocol == SNMP_AUTH_MD5 && user->auth_key_len != 16u) ||
+         (user->auth_protocol == SNMP_AUTH_SHA1 && user->auth_key_len != 20u))) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV &&
+        (user->priv_protocol == SNMP_PRIV_NONE ||
+         (user->priv_protocol == SNMP_PRIV_DES && user->priv_key_len < 16u) ||
+         (user->priv_protocol == SNMP_PRIV_AES128 && user->priv_key_len < 16u) ||
+         (user->priv_protocol == SNMP_PRIV_AES256 && user->priv_key_len < 32u))) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+
+    scoped_pdu = asn1_create_sequence();
+    if (!scoped_pdu) {
+        asn1_free(pdu);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    if (snmp_builder_add_child(
+            scoped_pdu,
+            asn1_create_octet_string(usm_params->authoritative_engine_id,
+                                     usm_params->engine_id_len)) < 0 ||
+        snmp_builder_add_child(scoped_pdu,
+                               asn1_create_octet_string(NULL, 0)) < 0) {
+        asn1_free(pdu);
+        asn1_free(scoped_pdu);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    if (snmp_builder_add_child(scoped_pdu, pdu) < 0) {
+        asn1_free(scoped_pdu);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    pdu = NULL;
+
+    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV) {
+        result = asn1_der_encode(scoped_pdu, scoped_pdu_data, &scoped_pdu_len);
+        if (result != 0) {
+            asn1_free(scoped_pdu);
+            return SNMP_BUILD_ERROR_BUFFER;
+        }
+        result = usm_encrypt(
+            scoped_pdu_data, scoped_pdu_len, user->priv_key, user->priv_key_len,
+            user->priv_protocol, usm_params->engine_boots,
+            usm_params->engine_time, priv_params, encrypted_pdu, &encrypted_len);
+        if (result != USM_OK) {
+            asn1_free(scoped_pdu);
+            return SNMP_BUILD_ERROR_INVALID;
+        }
+        asn1_free(scoped_pdu);
+        scoped_pdu = NULL;
+        msg_data = asn1_create_octet_string(encrypted_pdu, encrypted_len);
+    } else {
+        msg_data = scoped_pdu;
+        scoped_pdu = NULL;
+    }
+    if (!msg_data) return SNMP_BUILD_ERROR_MEMORY;
+
+    params_copy = *usm_params;
+    memcpy(params_copy.priv_params, priv_params, sizeof(priv_params));
+    memset(params_copy.auth_params, 0, sizeof(params_copy.auth_params));
+    result = snmp_usm_encode_security_params_sized(
+        &params_copy,
+        security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV
+            ? sizeof(params_copy.auth_params)
+            : 0u,
+        security_level == SNMP_SEC_LEVEL_AUTH_PRIV
+            ? sizeof(params_copy.priv_params)
+            : 0u,
+        security_params, &security_params_len);
+    if (result != USM_OK) {
+        asn1_free(msg_data);
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+
+    global_data = asn1_create_sequence();
+    msg_flags = reportable ? SNMP_MSG_FLAG_REPORTABLE : 0u;
+    if (security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV) msg_flags |= SNMP_MSG_FLAG_AUTH;
+    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV) msg_flags |= SNMP_MSG_FLAG_PRIV;
+    if (!global_data ||
+        snmp_builder_add_child(global_data, asn1_create_integer(request_id)) < 0 ||
+        snmp_builder_add_child(global_data, asn1_create_integer(65507)) < 0 ||
+        snmp_builder_add_child(
+            global_data, asn1_create_octet_string(&msg_flags, 1u)) < 0 ||
+        snmp_builder_add_child(global_data, asn1_create_integer(3)) < 0) {
+        asn1_free(global_data);
+        asn1_free(msg_data);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+
+    msg = asn1_create_sequence();
+    if (!msg) {
+        asn1_free(global_data);
+        asn1_free(msg_data);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    if (snmp_builder_add_child(msg, asn1_create_integer(3)) < 0) {
+        asn1_free(msg);
+        asn1_free(global_data);
+        asn1_free(msg_data);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    if (snmp_builder_add_child(msg, global_data) < 0) {
+        asn1_free(msg);
+        asn1_free(msg_data);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    global_data = NULL;
+    if (snmp_builder_add_child(
+            msg, asn1_create_octet_string(security_params,
+                                          security_params_len)) < 0) {
+        asn1_free(msg);
+        asn1_free(msg_data);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    if (snmp_builder_add_child(msg, msg_data) < 0) {
+        asn1_free(msg);
+        return SNMP_BUILD_ERROR_MEMORY;
+    }
+    msg_data = NULL;
+
+    result = asn1_der_encode(msg, out, out_len);
+    if (result != 0) {
+        asn1_free(msg);
+        return SNMP_BUILD_ERROR_BUFFER;
+    }
+
+    if (security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV) {
+        uint8_t auth_params[12];
+        result = usm_compute_auth(out, *out_len, user->auth_key, user->auth_key_len,
+                                  user->auth_protocol, auth_params);
+        const uint8_t *auth_field = NULL;
+        size_t auth_field_len = 0u;
+        if (result != USM_OK ||
+            snmp_usm_find_auth_field(out, *out_len, &auth_field, &auth_field_len) != 0 ||
+            auth_field_len != sizeof(auth_params)) {
+            asn1_free(msg);
+            return SNMP_BUILD_ERROR_INVALID;
+        }
+        memcpy(out + (size_t)(auth_field - out), auth_params, sizeof(auth_params));
+    }
+
+    asn1_free(msg);
+    return SNMP_BUILD_OK;
+}
+
+int snmp_build_v3_query(
+    snmp_pdu_type_t pdu_type, int32_t request_id, const snmp_oid_t *oids,
+    size_t oid_count, const snmp_usm_params_t *usm_params,
+    const snmp_v3_user_t *user, snmp_security_level_t security_level,
+    uint8_t *out, size_t *out_len) {
+    asn1_value_t *pdu = NULL;
+    int result;
+    if (!oids || oid_count == 0u ||
+        (pdu_type != SNMP_PDU_GET_REQUEST &&
+         pdu_type != SNMP_PDU_GET_NEXT_REQUEST &&
+         pdu_type != SNMP_PDU_GET_RESPONSE && pdu_type != SNMP_PDU_REPORT)) {
+        return SNMP_BUILD_ERROR_INVALID;
+    }
+    result = build_get_pdu(pdu_type, request_id, oids, oid_count, &pdu);
+    if (result != SNMP_BUILD_OK) return result;
+    return snmp_build_v3_pdu(
+        pdu, request_id,
+        pdu_type == SNMP_PDU_GET_REQUEST || pdu_type == SNMP_PDU_GET_NEXT_REQUEST,
+        usm_params, user, security_level, out, out_len);
+}
+
+int snmp_build_v3_set_request(
+    int32_t request_id, const snmp_varbind_t *varbinds, size_t varbind_count,
+    const snmp_usm_params_t *usm_params, const snmp_v3_user_t *user,
+    snmp_security_level_t security_level, uint8_t *out, size_t *out_len) {
+    asn1_value_t *pdu = NULL;
+    int result = build_set_pdu(request_id, varbinds, varbind_count, &pdu);
+    if (result != SNMP_BUILD_OK) return result;
+    return snmp_build_v3_pdu(pdu, request_id, 1, usm_params, user,
+                             security_level, out, out_len);
+}
+
 int snmp_build_v3_get_request(
     int32_t request_id,
     const snmp_oid_t *oids,
@@ -344,163 +692,22 @@ int snmp_build_v3_get_request(
     uint8_t *out,
     size_t *out_len
 ) {
-    if (!oids || oid_count == 0 || !usm_params || !out || !out_len) {
-        return SNMP_BUILD_ERROR_INVALID;
-    }
+    return snmp_build_v3_query(SNMP_PDU_GET_REQUEST, request_id, oids,
+                               oid_count, usm_params, user, security_level, out,
+                               out_len);
+}
 
-    /* Step 1: Build PDU */
-    asn1_value_t *pdu = NULL;
-    int result = build_get_pdu(SNMP_PDU_GET_REQUEST, request_id, oids, oid_count, &pdu);
-    if (result != SNMP_BUILD_OK) {
-        return result;
-    }
-
-    /* Step 2: Build scopedPDU */
-    asn1_value_t *scoped_pdu = asn1_create_sequence();
-    if (!scoped_pdu) {
-        asn1_free(pdu);
-        return SNMP_BUILD_ERROR_MEMORY;
-    }
-
-    /* contextEngineID (same as authoritative) */
-    asn1_value_t *context_engine_id = asn1_create_octet_string(
-        usm_params->authoritative_engine_id,
-        usm_params->engine_id_len
-    );
-    asn1_sequence_add_child(scoped_pdu, context_engine_id);
-
-    /* contextName (empty string) */
-    asn1_value_t *context_name = asn1_create_octet_string(NULL, 0);
-    asn1_sequence_add_child(scoped_pdu, context_name);
-
-    /* PDU */
-    asn1_sequence_add_child(scoped_pdu, pdu);
-
-    /* Step 3: Encrypt scopedPDU if privacy enabled */
-    uint8_t scoped_pdu_data[2048];
-    size_t scoped_pdu_len = sizeof(scoped_pdu_data);
-    result = asn1_der_encode(scoped_pdu, scoped_pdu_data, &scoped_pdu_len);
-    if (result != 0) {
-        asn1_free(scoped_pdu);
-        return SNMP_BUILD_ERROR_INVALID;
-    }
-
-    uint8_t encrypted_pdu[2048];
-    size_t encrypted_len = sizeof(encrypted_pdu);
-    uint8_t priv_params[8] = {0};
-
-    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV && user) {
-        /* Encrypt */
-        result = usm_encrypt(
-            scoped_pdu_data,
-            scoped_pdu_len,
-            user->priv_key,
-            user->priv_key_len,
-            user->priv_protocol,
-            usm_params->engine_boots,
-            usm_params->engine_time,
-            priv_params,
-            encrypted_pdu,
-            &encrypted_len
-        );
-
-        if (result != USM_OK) {
-            asn1_free(scoped_pdu);
-            return SNMP_BUILD_ERROR_INVALID;
-        }
-    }
-
-    asn1_free(scoped_pdu);  /* Don't need this anymore */
-
-    /* Step 4: Encode USM security parameters (with placeholder auth_params) */
-    snmp_usm_params_t usm_params_copy = *usm_params;
-    memcpy(usm_params_copy.priv_params, priv_params, 8);
-    memset(usm_params_copy.auth_params, 0, 12);  /* Placeholder, will compute HMAC later */
-
-    uint8_t security_params[256];
-    size_t security_params_len = sizeof(security_params);
-    result = usm_encode_security_params(&usm_params_copy, security_params, &security_params_len);
-    if (result != USM_OK) {
-        return SNMP_BUILD_ERROR_INVALID;
-    }
-
-    /* Step 5: Build msgGlobalData */
-    asn1_value_t *msg_global_data = asn1_create_sequence();
-    asn1_sequence_add_child(msg_global_data, asn1_create_integer(request_id));  /* msgID */
-    asn1_sequence_add_child(msg_global_data, asn1_create_integer(65507));       /* msgMaxSize */
-
-    /* msgFlags */
-    uint8_t msg_flags = 0x04;  /* reportable */
-    if (security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV) msg_flags |= 0x01;  /* auth */
-    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV) msg_flags |= 0x02;    /* priv */
-    asn1_value_t *flags = asn1_create_octet_string(&msg_flags, 1);
-    asn1_sequence_add_child(msg_global_data, flags);
-
-    asn1_sequence_add_child(msg_global_data, asn1_create_integer(3));  /* msgSecurityModel = USM */
-
-    /* Step 6: Build msgData (plaintext or encrypted) */
-    asn1_value_t *msg_data = NULL;
-    if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV) {
-        /* Encrypted - wrap in OCTET STRING */
-        msg_data = asn1_create_octet_string(encrypted_pdu, encrypted_len);
-    } else {
-        /* Plaintext - use scopedPDU as SEQUENCE */
-        msg_data = asn1_create_sequence();
-        if (!msg_data) {
-            asn1_free(scoped_pdu);
-            return SNMP_BUILD_ERROR_MEMORY;
-        }
-
-        asn1_sequence_add_child(msg_data, asn1_create_octet_string(
-            usm_params->authoritative_engine_id, usm_params->engine_id_len));
-        asn1_sequence_add_child(msg_data, asn1_create_octet_string(NULL, 0));  /* contextName */
-
-        /* Re-build PDU */
-        asn1_value_t *pdu2 = NULL;
-        result = build_get_pdu(SNMP_PDU_GET_REQUEST, request_id, oids, oid_count, &pdu2);
-        if (result != SNMP_BUILD_OK) {
-            asn1_free(msg_data);
-            asn1_free(scoped_pdu);
-            return result;
-        }
-        asn1_sequence_add_child(msg_data, pdu2);
-    }
-
-    /* Step 7: Build complete SNMPv3Message */
-    asn1_value_t *msg = asn1_create_sequence();
-    asn1_sequence_add_child(msg, asn1_create_integer(3));  /* msgVersion */
-    asn1_sequence_add_child(msg, msg_global_data);
-    asn1_sequence_add_child(msg, asn1_create_octet_string(security_params, security_params_len));
-    asn1_sequence_add_child(msg, msg_data);
-
-    /* Step 8: Encode to output buffer */
-    int encode_result = asn1_der_encode(msg, out, out_len);
-    if (encode_result != 0) {
-        asn1_free(msg);
-        return SNMP_BUILD_ERROR_INVALID;
-    }
-
-    /* Step 9: Compute HMAC if authentication enabled */
-    if (security_level >= SNMP_SEC_LEVEL_AUTH_NOPRIV && user) {
-        uint8_t auth_params[12];
-        result = usm_compute_auth(out, *out_len, user->auth_key, user->auth_key_len,
-                                   user->auth_protocol, auth_params);
-
-        if (result == USM_OK) {
-            /* Find msgAuthenticationParameters field in the encoded message */
-            /* Pattern: 0x04 0x0C followed by 12 zero bytes */
-            uint8_t pattern[14] = {0x04, 0x0C, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-
-            for (size_t i = 0; i + 14 <= *out_len; i++) {
-                if (memcmp(out + i, pattern, 14) == 0) {
-                    /* Found it - patch the auth_params (skip tag+length, update value) */
-                    memcpy(out + i + 2, auth_params, 12);
-                    break;
-                }
-            }
-        }
-    }
-
-    asn1_free(msg);
-    return SNMP_BUILD_OK;
+int snmp_build_v3_get_next_request(
+    int32_t request_id,
+    const snmp_oid_t *oids,
+    size_t oid_count,
+    const snmp_usm_params_t *usm_params,
+    const snmp_v3_user_t *user,
+    snmp_security_level_t security_level,
+    uint8_t *out,
+    size_t *out_len
+) {
+    return snmp_build_v3_query(SNMP_PDU_GET_NEXT_REQUEST, request_id, oids,
+                               oid_count, usm_params, user, security_level, out,
+                               out_len);
 }

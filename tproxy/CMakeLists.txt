@@ -1,43 +1,29 @@
-set(TARGET_NAME TProxy)
+add_library(SaltsTCPProxy SHARED src/salts_tcp_proxy.c)
+cmake_config_api(SaltsTCPProxy SALTSNET_TCP_PROXY_C_API)
+cmake_config_target(
+  SaltsTCPProxy
+  ALIAS SaltsNet::TCPProxy
+  EXPORT_NAME TCPProxy
+  FOLDER tproxy)
 
-# Get all source files
-file(GLOB_RECURSE HEADER_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
-file(GLOB_RECURSE SOURCE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.c)
-
-# Build SHARED library
-add_library(${TARGET_NAME} SHARED ${HEADER_FILES} ${SOURCE_FILES})
-add_library(TurboNet::TProxy ALIAS ${TARGET_NAME})
-cmake_config_api(${TARGET_NAME} TURBONET_TPROXY_C_API)
-
-# Set target properties
-set_target_properties(
-  ${TARGET_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION
-                                                       ${PROJECT_VERSION_MAJOR}
-                                                       FOLDER "TProxy")
-
-# Include directories
 target_include_directories(
-  ${TARGET_NAME}
+  SaltsTCPProxy
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../CoroNet/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../common/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../vendor/memory/include>
-         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../lb/include>
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../vendor/clib/src)
+         $<INSTALL_INTERFACE:include>)
+target_link_libraries(SaltsTCPProxy PUBLIC Salts::CNet Salts::CMeta PRIVATE Salts::Core)
 
-# Link libraries
-target_link_libraries(
-  ${TARGET_NAME}
-  PUBLIC TurboNet::CoroNet TurboParser::Parser TurboNet::LB
-     OpenSSL::SSL OpenSSL::Crypto)
+install(
+  TARGETS SaltsTCPProxy
+  EXPORT SaltsNetTargets
+  LIBRARY DESTINATION lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin)
+cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)
 
- 
-# Build tests
 if(BUILD_TESTS)
   add_subdirectory(tests)
 endif()
 
-# Build examples
 if(BUILD_EXAMPLES)
   add_subdirectory(examples)
 endif()

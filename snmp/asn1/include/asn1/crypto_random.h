@@ -20,6 +20,6 @@
  * @param len Number of bytes to generate
  * @return 0 on success, -1 on error
  */
-TURBONET_ASN1_C_API int crypto_random_bytes(uint8_t *buf, size_t len);
+SALTSNET_ASN1_C_API int crypto_random_bytes(uint8_t *buf, size_t len);
 
 #endif // CRYPTO_RANDOM_H

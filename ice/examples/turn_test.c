@@ -2,8 +2,7 @@
  * turn_test.c - TURN Server Integration Test Example
  */
 
-#include "ice/turbo_turn.h"
-#include "turbo_coro.h"
+#include "ice/salts_turn.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,11 +13,6 @@ enum {
     TURN_TEST_TIMEOUT_MS = 10000,
     TURN_TEST_LIFETIME_SECONDS = 600
 };
-
-typedef struct turn_test_state {
-    coro_context_t *ctx;
-    int result;
-} turn_test_state_t;
 
 static const char *env_or_default(const char *name, const char *default_value) {
     const char *value = getenv(name);
@@ -39,7 +33,7 @@ static int parse_server_port(const char *value, uint16_t *port_out) {
     return 0;
 }
 
-static int recv_and_check(turbo_turn_client_t *client,
+static int recv_and_check(salts_turn_client_t *client,
                           const char *expected, size_t expected_len) {
     char peer_ip[64] = {0};
     uint16_t peer_port = 0;
@@ -56,36 +50,32 @@ static int recv_and_check(turbo_turn_client_t *client,
     if (!payload || payload_len != expected_len ||
         memcmp(payload, expected, expected_len) != 0) {
         fprintf(stderr, "TURN payload mismatch: received %zu bytes\n", payload_len);
-        coro_socket_free_recv(buffer);
+        turn_client_free_recv(buffer);
         return -1;
     }
 
     printf("  Received %zu bytes from %s:%u\n",
            payload_len, peer_ip, (unsigned int)peer_port);
-    coro_socket_free_recv(buffer);
+    turn_client_free_recv(buffer);
     return 0;
 }
 
-static void turn_test_coro(coro_t *co, void *arg) {
-    static const char indication_message[] = "turbonet-turn-indication";
-    static const char channel_message[] = "turbonet-turn-channel-data";
-    turn_test_state_t *state = (turn_test_state_t *)arg;
+static int run_turn_test(void) {
+    static const char indication_message[] = "saltsnet-turn-indication";
+    static const char channel_message[] = "saltsnet-turn-channel-data";
     const char *server_host = getenv("TURN_SERVER_HOST");
     const char *username = getenv("TURN_USERNAME");
     const char *password = getenv("TURN_PASSWORD");
     const char *port_value = env_or_default("TURN_SERVER_PORT", "3478");
     const int run_e2e = strcmp(env_or_default("TURN_E2E", "0"), "1") == 0;
     uint16_t server_port = TURN_TEST_DEFAULT_PORT;
-    turbo_turn_client_t *first = NULL;
-    turbo_turn_client_t *second = NULL;
+    salts_turn_client_t *first = NULL;
+    salts_turn_client_t *second = NULL;
     turn_allocation_t first_alloc;
     turn_allocation_t second_alloc;
     uint16_t first_channel = 0;
     uint16_t second_channel = 0;
-    int rc;
-
-    (void)co;
-    state->result = 1;
+    int rc = -1;
 
     if (!server_host || server_host[0] == '\0' ||
         !username || username[0] == '\0' || !password || password[0] == '\0') {
@@ -109,7 +99,7 @@ static void turn_test_coro(coro_t *co, void *arg) {
 
     printf("Connecting to TURN server %s:%u...\n",
            config.server_host, (unsigned int)config.server_port);
-    first = turn_client_create(state->ctx, &config);
+    first = turn_client_create(&config);
     if (!first) {
         fprintf(stderr, "Failed to create first TURN client\n");
         goto cleanup;
@@ -135,11 +125,11 @@ static void turn_test_coro(coro_t *co, void *arg) {
     printf("TURN refresh succeeded\n");
 
     if (!run_e2e) {
-        state->result = 0;
+        rc = 0;
         goto cleanup;
     }
 
-    second = turn_client_create(state->ctx, &config);
+    second = turn_client_create(&config);
     if (!second) {
         fprintf(stderr, "Failed to create second TURN client\n");
         goto cleanup;
@@ -207,28 +197,15 @@ static void turn_test_coro(coro_t *co, void *arg) {
         goto cleanup;
     }
     printf("TURN ChannelData relay succeeded\n");
-    state->result = 0;
+    rc = 0;
 
 cleanup:
     if (second) turn_client_destroy(second);
     if (first) turn_client_destroy(first);
-    coro_context_stop(state->ctx);
+    return rc == 0 ? 0 : 1;
 }
 
 int main(void) {
-    turn_test_state_t state = {0};
-
-    state.ctx = coro_context_create(NULL);
-    if (!state.ctx) return 1;
-
-    printf("Starting TURN integration test...\n");
-    if (coro_context_spawn(state.ctx, turn_test_coro, &state) != 0) {
-        fprintf(stderr, "Failed to spawn TURN test coroutine\n");
-        coro_context_destroy(state.ctx);
-        return 1;
-    }
-
-    coro_context_run(state.ctx, TURBO_RUN_DEFAULT);
-    coro_context_destroy(state.ctx);
-    return state.result;
+    printf("Starting caller-driven CNet TURN integration test...\n");
+    return run_turn_test();
 }

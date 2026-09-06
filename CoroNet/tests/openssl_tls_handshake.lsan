@@ -1,8 +1,0 @@
-# OpenSSL/NSSL handshake/provider allocations that remain reported under
-# LSan in TLS/WSS smoke tests even after stream teardown completes.
-# Keep this file narrow: only suppress third-party handshake internals that
-# have been verified not to come from CoroNet-owned object lifetime bugs.
-leak:tls_process_new_session_ticket
-leak:tls_process_server_certificate
-leak:tls_process_cert_verify
-leak:keymgmt_from_algorithm

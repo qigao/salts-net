@@ -4,11 +4,11 @@
  */
 
 #include "email/email_client.h"
-#include "email/email_message.h"
 #include "email/email_imap.h"
-#include "CoroNet.h"
+#include "email/email_message.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const char *env_or_default(const char *name, const char *fallback) {
   const char *value = getenv(name);
@@ -26,9 +26,7 @@ static int env_flag_or_default(const char *name, int fallback) {
   return strcmp(value, "0") != 0;
 }
 
-// IMAP operations must run inside a coroutine
-static void imap_test_coro(coro_t *co, void *arg) {
-  coro_context_t *ctx = (coro_context_t *)arg;
+static int run_example(void) {
 
   // Configure IMAP for local smtp4dev testing
   imap_config_t imap_config = {0};
@@ -41,10 +39,10 @@ static void imap_test_coro(coro_t *co, void *arg) {
   imap_config.timeout_ms = 30000;
 
   // Create IMAP client
-  imap_client_t *imap = imap_client_create(ctx, &imap_config);
+  imap_client_t *imap = imap_client_create(&imap_config);
   if (!imap) {
     fprintf(stderr, "Failed to create IMAP client\n");
-    return;
+    return 1;
   }
 
   // Connect
@@ -52,7 +50,7 @@ static void imap_test_coro(coro_t *co, void *arg) {
   if (imap_connect(imap) != 0) {
     fprintf(stderr, "IMAP connect failed: %s\n", imap_get_error(imap));
     imap_client_free(imap);
-    return;
+    return 1;
   }
 
   printf("Connected successfully!\n");
@@ -116,8 +114,7 @@ static void imap_test_coro(coro_t *co, void *arg) {
         printf("\nMessage content:\n");
         printf("From: %s\n", msg->from ? msg->from->email : "(unknown)");
         printf("Subject: %s\n", msg->subject ? msg->subject : "(no subject)");
-        printf("Body preview: %.200s...\n",
-               msg->text_body ? msg->text_body : "(no text body)");
+        printf("Body preview: %.200s...\n", msg->text_body ? msg->text_body : "(no text body)");
 
         email_message_free(msg);
       } else {
@@ -133,28 +130,7 @@ static void imap_test_coro(coro_t *co, void *arg) {
   // Cleanup
   imap_disconnect(imap);
   imap_client_free(imap);
-}
-
-int main(void) {
-  // Create coroutine context
-  coro_context_t *ctx = coro_context_create(NULL);
-  if (!ctx) {
-    fprintf(stderr, "Failed to create coroutine context\n");
-    return 1;
-  }
-
-  // Spawn coroutine
-  if (coro_context_spawn(ctx, imap_test_coro, ctx) != 0) {
-    fprintf(stderr, "Failed to spawn coroutine\n");
-    coro_context_destroy(ctx);
-    return 1;
-  }
-
-  // Run event loop
-  coro_context_run(ctx, TURBO_RUN_DEFAULT);
-
-  // Cleanup
-  coro_context_destroy(ctx);
-
   return 0;
 }
+
+int main(void) { return run_example(); }

@@ -14,6 +14,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Error codes */
 #define SNMP_PARSE_OK                0
 #define SNMP_PARSE_ERROR_INVALID    -1   /* Invalid input */
@@ -22,6 +26,7 @@
 #define SNMP_PARSE_ERROR_VERSION    -4   /* Unsupported SNMP version */
 #define SNMP_PARSE_ERROR_PDU_TYPE   -5   /* Unknown PDU type */
 #define SNMP_PARSE_ERROR_VALUE_TYPE -6   /* Unknown value type */
+#define SNMP_PARSE_ERROR_AUTH       -7   /* SNMPv3 authentication failed */
 
 /**
  * Parse SNMP message from wire format (BER-encoded)
@@ -41,7 +46,7 @@
  *   }
  *   pool_destroy(pool);
  */
-TURBONET_SNMP_C_API int snmp_parse(
+SALTSNET_SNMP_C_API int snmp_parse(
     const uint8_t *data,
     size_t len,
     snmp_message_t *msg,
@@ -51,7 +56,7 @@ TURBONET_SNMP_C_API int snmp_parse(
 /**
  * Free SNMP message (when not using memory pool)
  */
-TURBONET_SNMP_C_API void snmp_message_free(snmp_message_t *msg);
+SALTSNET_SNMP_C_API void snmp_message_free(snmp_message_t *msg);
 
 /**
  * Parse and verify SNMPv3 message with USM security
@@ -66,12 +71,16 @@ TURBONET_SNMP_C_API void snmp_message_free(snmp_message_t *msg);
  * @param pool Memory pool for zero-allocation parsing (optional)
  * @return Number of bytes consumed on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int snmp_parse_v3(
+SALTSNET_SNMP_C_API int snmp_parse_v3(
     const uint8_t *data,
     size_t len,
     snmp_message_t *msg,
     const snmp_v3_user_t *user,
     MemoryPool *pool
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SNMP_PARSER_H */

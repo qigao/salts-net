@@ -5,7 +5,7 @@
 
 #include "mime_content_disposition.h"
 #include "tinytest.h"
-#include "turbo_buffer.h"
+#include "salts_buffer.h"
 #include <string.h>
 
 spec("mime_content_disposition") {

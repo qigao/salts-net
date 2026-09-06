@@ -3,8 +3,8 @@
 #include "email/email_pop3.h"
 #include "email/email_smtp.h"
 #include "tinytest.h"
-#include "CoroNet.h"
 #include <fmt.h>
+#include <salts/thread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -29,7 +29,6 @@ typedef struct {
 
 typedef struct {
   smtp4dev_test_config_t cfg;
-  coro_context_t *ctx;
   int completed;
   int success;
   char error[512];
@@ -64,8 +63,7 @@ static void fail_result(smtp4dev_result_t *result, const char *message) {
   copy_string(result->error, sizeof(result->error), message);
 }
 
-static int message_matches(email_message_t *msg, const char *subject,
-                           const char *body) {
+static int message_matches(email_message_t *msg, const char *subject, const char *body) {
   if (!msg || !msg->subject || !msg->text_body) {
     return 0;
   }
@@ -75,9 +73,7 @@ static int message_matches(email_message_t *msg, const char *subject,
   return strstr(msg->text_body, body) != NULL;
 }
 
-static int send_unique_message(coro_context_t *ctx,
-                               const smtp4dev_test_config_t *cfg,
-                               smtp4dev_result_t *result) {
+static int send_unique_message(const smtp4dev_test_config_t *cfg, smtp4dev_result_t *result) {
   smtp_config_t smtp_cfg = {0};
   smtp_client_t *smtp = NULL;
   mem_pool_t pool;
@@ -91,7 +87,7 @@ static int send_unique_message(coro_context_t *ctx,
   smtp_cfg.auth_method = SMTP_AUTH_NONE;
   smtp_cfg.timeout_ms = 30000;
 
-  smtp = smtp_client_create(ctx, &smtp_cfg);
+  smtp = smtp_client_create(&smtp_cfg);
   if (!smtp) {
     fail_result(result, "smtp_client_create failed");
     return -1;
@@ -110,8 +106,8 @@ static int send_unique_message(coro_context_t *ctx,
     goto cleanup;
   }
 
-  email_message_set_from(msg, "TurboNet Integration", cfg->smtp_from);
-  email_message_add_to(msg, "TurboNet Recipient", cfg->smtp_to);
+  email_message_set_from(msg, "SaltsNet Integration", cfg->smtp_from);
+  email_message_add_to(msg, "SaltsNet Recipient", cfg->smtp_to);
   email_message_set_subject(msg, cfg->subject);
   email_message_set_text_body(msg, cfg->body);
   email_message_set_html_body(msg, "<html><body><p>smtp4dev integration</p></body></html>");
@@ -135,9 +131,7 @@ cleanup:
   return rc;
 }
 
-static int wait_for_pop3_message(coro_context_t *ctx,
-                                 const smtp4dev_test_config_t *cfg,
-                                 smtp4dev_result_t *result) {
+static int wait_for_pop3_message(const smtp4dev_test_config_t *cfg, smtp4dev_result_t *result) {
   pop3_config_t pop3_cfg = {0};
   pop3_client_t *pop3 = NULL;
   int attempt;
@@ -150,7 +144,7 @@ static int wait_for_pop3_message(coro_context_t *ctx,
   pop3_cfg.password = (char *)cfg->pop3_pass;
   pop3_cfg.timeout_ms = 30000;
 
-  pop3 = pop3_client_create(ctx, &pop3_cfg);
+  pop3 = pop3_client_create(&pop3_cfg);
   if (!pop3) {
     fail_result(result, "pop3_client_create failed");
     return -1;
@@ -186,7 +180,7 @@ static int wait_for_pop3_message(coro_context_t *ctx,
       }
     }
 
-    coro_sleep(ctx, 200);
+    salts_sleep_ms(200u);
   }
 
   fail_result(result, "POP3 did not return the sent message");
@@ -195,14 +189,10 @@ static int wait_for_pop3_message(coro_context_t *ctx,
   return -1;
 }
 
-static int wait_for_imap_message(coro_context_t *ctx,
-                                 const smtp4dev_test_config_t *cfg,
-                                 smtp4dev_result_t *result) {
+static int wait_for_imap_message(const smtp4dev_test_config_t *cfg, smtp4dev_result_t *result) {
   imap_config_t imap_cfg = {0};
   imap_client_t *imap = NULL;
   int attempt;
-
-  (void)ctx;
 
   imap_cfg.host = (char *)cfg->imap_host;
   imap_cfg.port = cfg->imap_port;
@@ -212,7 +202,7 @@ static int wait_for_imap_message(coro_context_t *ctx,
   imap_cfg.password = (char *)cfg->imap_pass;
   imap_cfg.timeout_ms = 30000;
 
-  imap = imap_client_create(ctx, &imap_cfg);
+  imap = imap_client_create(&imap_cfg);
   if (!imap) {
     fail_result(result, "imap_client_create failed");
     return -1;
@@ -262,7 +252,7 @@ static int wait_for_imap_message(coro_context_t *ctx,
     }
 
     free(results);
-    coro_sleep(ctx, 200);
+    salts_sleep_ms(200u);
   }
 
   fail_result(result, "IMAP did not return the sent message");
@@ -271,23 +261,20 @@ static int wait_for_imap_message(coro_context_t *ctx,
   return -1;
 }
 
-static void smtp4dev_roundtrip_coro(coro_t *co, void *arg) {
+static void smtp4dev_roundtrip(void *arg) {
   smtp4dev_result_t *result = (smtp4dev_result_t *)arg;
-  coro_context_t *ctx = result->ctx;
 
-  (void)co;
-
-  if (send_unique_message(ctx, &result->cfg, result) != 0) {
+  if (send_unique_message(&result->cfg, result) != 0) {
     result->completed = 1;
     return;
   }
 
-  if (wait_for_pop3_message(ctx, &result->cfg, result) != 0) {
+  if (wait_for_pop3_message(&result->cfg, result) != 0) {
     result->completed = 1;
     return;
   }
 
-  if (wait_for_imap_message(ctx, &result->cfg, result) != 0) {
+  if (wait_for_imap_message(&result->cfg, result) != 0) {
     result->completed = 1;
     return;
   }
@@ -300,31 +287,24 @@ static void init_test_config(smtp4dev_test_config_t *cfg) {
   time_t now = time(NULL);
 
   memset(cfg, 0, sizeof(*cfg));
-  copy_string(cfg->smtp_host, sizeof(cfg->smtp_host),
-              env_or_default("SMTP_HOST", "127.0.0.1"));
+  copy_string(cfg->smtp_host, sizeof(cfg->smtp_host), env_or_default("SMTP_HOST", "127.0.0.1"));
   cfg->smtp_port = atoi(env_or_default("SMTP_PORT", "25"));
   copy_string(cfg->smtp_from, sizeof(cfg->smtp_from),
               env_or_default("SMTP_FROM", "sender@smtp4dev.local"));
   copy_string(cfg->smtp_to, sizeof(cfg->smtp_to),
               env_or_default("SMTP_TO", "recipient@smtp4dev.local"));
 
-  copy_string(cfg->pop3_host, sizeof(cfg->pop3_host),
-              env_or_default("POP3_HOST", "127.0.0.1"));
+  copy_string(cfg->pop3_host, sizeof(cfg->pop3_host), env_or_default("POP3_HOST", "127.0.0.1"));
   cfg->pop3_port = atoi(env_or_default("POP3_PORT", "110"));
-  copy_string(cfg->pop3_user, sizeof(cfg->pop3_user),
-              env_or_default("POP3_USERNAME", "turbo"));
-  copy_string(cfg->pop3_pass, sizeof(cfg->pop3_pass),
-              env_or_default("POP3_PASSWORD", "turbo"));
+  copy_string(cfg->pop3_user, sizeof(cfg->pop3_user), env_or_default("POP3_USERNAME", "turbo"));
+  copy_string(cfg->pop3_pass, sizeof(cfg->pop3_pass), env_or_default("POP3_PASSWORD", "turbo"));
 
-  copy_string(cfg->imap_host, sizeof(cfg->imap_host),
-              env_or_default("IMAP_HOST", "127.0.0.1"));
+  copy_string(cfg->imap_host, sizeof(cfg->imap_host), env_or_default("IMAP_HOST", "127.0.0.1"));
   cfg->imap_port = atoi(env_or_default("IMAP_PORT", "143"));
-  copy_string(cfg->imap_user, sizeof(cfg->imap_user),
-              env_or_default("IMAP_USERNAME", "turbo"));
-  copy_string(cfg->imap_pass, sizeof(cfg->imap_pass),
-              env_or_default("IMAP_PASSWORD", "turbo"));
+  copy_string(cfg->imap_user, sizeof(cfg->imap_user), env_or_default("IMAP_USERNAME", "turbo"));
+  copy_string(cfg->imap_pass, sizeof(cfg->imap_pass), env_or_default("IMAP_PASSWORD", "turbo"));
 
-  fmt(cfg->subject, sizeof(cfg->subject), "TurboNet smtp4dev integration {}", (long long)now);
+  fmt(cfg->subject, sizeof(cfg->subject), "SaltsNet smtp4dev integration {}", (long long)now);
   fmt(cfg->body, sizeof(cfg->body), "smtp4dev integration body {}", (long long)now);
 }
 
@@ -332,12 +312,8 @@ spec("email_integration") {
   describe("smtp4dev roundtrip") {
     it("should send and retrieve a message through smtp pop3 and imap") {
       smtp4dev_result_t result;
-      coro_context_t *ctx;
-      int rc;
-
       if (!integration_enabled()) {
-        fprintf(stderr,
-                "Skipping smtp4dev integration: set SMTP4DEV_INTEGRATION=1 to enable.\n");
+        fprintf(stderr, "Skipping smtp4dev integration: set SMTP4DEV_INTEGRATION=1 to enable.\n");
         check(1);
         return;
       }
@@ -345,15 +321,7 @@ spec("email_integration") {
       memset(&result, 0, sizeof(result));
       init_test_config(&result.cfg);
 
-      ctx = coro_context_create(NULL);
-      check_not_null(ctx);
-      result.ctx = ctx;
-
-      rc = coro_context_spawn(ctx, smtp4dev_roundtrip_coro, &result);
-      check_equal(rc, 0);
-
-      coro_context_run(ctx, TURBO_RUN_DEFAULT);
-      coro_context_destroy(ctx);
+      smtp4dev_roundtrip(&result);
 
       check(result.completed);
       check(result.success, "%s", result.error[0] ? result.error : "integration failed");

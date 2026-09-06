@@ -19,6 +19,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Error codes */
 #define USM_OK                  0
 #define USM_ERROR_INVALID      -1
@@ -43,7 +47,7 @@
  *   size_t key_len;
  *   usm_password_to_key("mypassword", SNMP_AUTH_SHA1, key, &key_len);
  */
-TURBONET_SNMP_C_API int usm_password_to_key(
+SALTSNET_SNMP_C_API int usm_password_to_key(
     const char *password,
     snmp_auth_protocol_t auth_protocol,
     uint8_t *key,
@@ -64,7 +68,7 @@ TURBONET_SNMP_C_API int usm_password_to_key(
  * @param localized_key_len Output key length
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_localize_key(
+SALTSNET_SNMP_C_API int usm_localize_key(
     const uint8_t *key,
     size_t key_len,
     const uint8_t *engine_id,
@@ -85,7 +89,7 @@ TURBONET_SNMP_C_API int usm_localize_key(
  * @param auth_params Output authentication parameters (12 bytes)
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_compute_auth(
+SALTSNET_SNMP_C_API int usm_compute_auth(
     const uint8_t *message,
     size_t message_len,
     const uint8_t *key,
@@ -105,7 +109,7 @@ TURBONET_SNMP_C_API int usm_compute_auth(
  * @param auth_params Received authentication parameters (12 bytes)
  * @return USM_OK if valid, USM_ERROR_AUTH_FAILED if invalid
  */
-TURBONET_SNMP_C_API int usm_verify_auth(
+SALTSNET_SNMP_C_API int usm_verify_auth(
     const uint8_t *message,
     size_t message_len,
     const uint8_t *key,
@@ -129,7 +133,7 @@ TURBONET_SNMP_C_API int usm_verify_auth(
  * @param ciphertext_len [in] Buffer size, [out] Ciphertext length
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_encrypt(
+SALTSNET_SNMP_C_API int usm_encrypt(
     const uint8_t *plaintext,
     size_t plaintext_len,
     const uint8_t *key,
@@ -157,7 +161,7 @@ TURBONET_SNMP_C_API int usm_encrypt(
  * @param plaintext_len [in] Buffer size, [out] Plaintext length
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_decrypt(
+SALTSNET_SNMP_C_API int usm_decrypt(
     const uint8_t *ciphertext,
     size_t ciphertext_len,
     const uint8_t *key,
@@ -183,7 +187,7 @@ TURBONET_SNMP_C_API int usm_decrypt(
  * @param user Output user structure
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_create_user(
+SALTSNET_SNMP_C_API int usm_create_user(
     const char *user_name,
     const char *auth_password,
     snmp_auth_protocol_t auth_protocol,
@@ -211,7 +215,7 @@ typedef struct {
  * @param state Engine time state to initialize
  * @param boots Initial boots count (0 for new engine, loaded from persistence)
  */
-TURBONET_SNMP_C_API void usm_engine_time_init(snmp_engine_time_t *state, uint32_t boots);
+SALTSNET_SNMP_C_API void usm_engine_time_init(snmp_engine_time_t *state, uint32_t boots);
 
 /**
  * Get current engine boots and time
@@ -220,7 +224,7 @@ TURBONET_SNMP_C_API void usm_engine_time_init(snmp_engine_time_t *state, uint32_
  * @param boots Output engine boots
  * @param time Output engine time
  */
-TURBONET_SNMP_C_API void usm_engine_time_get(
+SALTSNET_SNMP_C_API void usm_engine_time_get(
     snmp_engine_time_t *state,
     uint32_t *boots,
     uint32_t *time
@@ -235,7 +239,7 @@ TURBONET_SNMP_C_API void usm_engine_time_get(
  * @param boots Remote engine boots
  * @param time Remote engine time
  */
-TURBONET_SNMP_C_API void usm_engine_time_update(
+SALTSNET_SNMP_C_API void usm_engine_time_update(
     snmp_engine_time_t *state,
     uint32_t boots,
     uint32_t time
@@ -251,7 +255,7 @@ TURBONET_SNMP_C_API void usm_engine_time_update(
  * @param msg_time Received message time
  * @return USM_OK if time is valid, USM_ERROR_AUTH_FAILED if not
  */
-TURBONET_SNMP_C_API int usm_verify_time_window(
+SALTSNET_SNMP_C_API int usm_verify_time_window(
     const snmp_engine_time_t *local_state,
     uint32_t msg_boots,
     uint32_t msg_time
@@ -267,7 +271,7 @@ TURBONET_SNMP_C_API int usm_verify_time_window(
  * @param out_len [in] Buffer size, [out] Encoded length
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_encode_security_params(
+SALTSNET_SNMP_C_API int usm_encode_security_params(
     const snmp_usm_params_t *params,
     uint8_t *out,
     size_t *out_len
@@ -284,11 +288,15 @@ TURBONET_SNMP_C_API int usm_encode_security_params(
  * @param pool Memory pool for allocations (optional)
  * @return USM_OK on success, negative error code on failure
  */
-TURBONET_SNMP_C_API int usm_decode_security_params(
+SALTSNET_SNMP_C_API int usm_decode_security_params(
     const uint8_t *data,
     size_t len,
     snmp_usm_params_t *params,
     void *pool
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* SNMP_USM_H */

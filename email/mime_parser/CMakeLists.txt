@@ -10,7 +10,7 @@ add_library(${TARGET_NAME} STATIC ${SOURCE_FILES})
 cmake_config_target(
   ${TARGET_NAME}
   ALIAS
-  TurboNet::MimeParser
+  SaltsNet::MimeParser
   FOLDER
   "email/${TARGET_NAME}"
   EXPORT_NAME
@@ -18,8 +18,8 @@ cmake_config_target(
 
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC Rocida::Core OpenSSL::SSL OpenSSL::Crypto
-  PRIVATE uri_parser TurboNet::Asn1Parser TurboNet::Crypto)
+  PUBLIC Salts::Core OpenSSL::SSL OpenSSL::Crypto
+  PRIVATE uri_parser SaltsNet::Asn1Parser SaltsNet::Crypto)
 
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -27,7 +27,7 @@ target_include_directories(
 
 install(
   TARGETS ${TARGET_NAME}
-  EXPORT TurboNetTargets
+  EXPORT SaltsNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
@@ -51,6 +51,6 @@ cmake_add_test(
   test/test_mime_mhtml.c
   LIBS
   ${TARGET_NAME}
-  Rocida::TinyTest
+  Salts::TinyTest
   FOLDER
   "email/${TARGET_NAME}/test")

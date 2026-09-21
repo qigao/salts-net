@@ -23,9 +23,8 @@ The default model stays caller-driven: the owner that creates a networking compo
 
 ```text
 Salts
-  ├── salts-utils        general utilities, parsers, QueryVM, crypto, FS/process
-  ├── salts-net          protocol/network extensions
-  └── DataBind           schema/compiler/binding sibling boundary
+  ├── salts-utils        DataBind, utilities, parsers, QueryVM, crypto, FS/process
+  └── salts-net          protocol/network extensions
 
 salts-net
   └── feeds higher-level transports and adapters used by CHTTP,

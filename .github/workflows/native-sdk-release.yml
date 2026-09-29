@@ -187,7 +187,8 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$env:SALTS_SDK_VERSION]" /></ItemGroup></Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          "SALTS_ROOT=$packages\salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64" >> $env:GITHUB_ENV
+          $saltsRoot = (Join-Path $packages "salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64").Replace('\\','/')
+          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
       - name: Restore vcpkg dependencies
         shell: pwsh
         run: |

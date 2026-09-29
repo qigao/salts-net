@@ -2,10 +2,30 @@
 
 #include <cnet/cnet.h>
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int salts_lb_cnet_send_bytes(cnet_client *client,
+                                    cnet_connection connection,
+                                    const void *data,
+                                    size_t size,
+                                    int close_after) {
+  mem_buffer_t *buffer;
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  buffer = mem_get_buffer(mem_global(), size);
+  if (!buffer) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  status = close_after
+               ? cnet_send_buffer_and_close(client, connection, buffer)
+               : cnet_send_buffer(client, connection, buffer);
+  mem_buffer_release(buffer);
+  return status;
+}
 
 enum {
   SALTS_LB_DEFAULT_CONNECTION_CAPACITY = 64,
@@ -176,7 +196,8 @@ static int salts_lb_dispatch(salts_lb_slot_t *frontend, salts_lb_slot_t *worker,
   int status;
   frontend->peer_index = worker->index;
   worker->peer_index = frontend->index;
-  status = cnet_send(&lb->client, worker->connection, frontend->buffer, message_size);
+  status = salts_lb_cnet_send_bytes(
+      &lb->client, worker->connection, frontend->buffer, message_size, 0);
   if (status != SALTS_OK) {
     salts_lb_unpair(frontend);
     salts_lb_unpair(worker);
@@ -275,13 +296,15 @@ process_next:
       return;
     }
     if (lb->config.mode == SALTS_LB_MODE_SESSION) {
-      status = cnet_send_and_close(&lb->client, frontend->connection, filter.reject_data,
-                                   filter.reject_size);
+      status = salts_lb_cnet_send_bytes(
+          &lb->client, frontend->connection, filter.reject_data,
+          filter.reject_size, 1);
       if (status != SALTS_OK) salts_lb_close_slot(frontend);
       else frontend->phase = SALTS_LB_PHASE_CLOSING;
     } else {
-      status = cnet_send(&lb->client, frontend->connection, filter.reject_data,
-                         filter.reject_size);
+      status = salts_lb_cnet_send_bytes(
+          &lb->client, frontend->connection, filter.reject_data,
+          filter.reject_size, 0);
       if (status != SALTS_OK) salts_lb_close_slot(frontend);
       else {
         frontend->phase = SALTS_LB_PHASE_FRONT_SENDING_REJECT;

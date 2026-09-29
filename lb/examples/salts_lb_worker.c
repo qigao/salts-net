@@ -1,5 +1,6 @@
 #include <cnet/cnet.h>
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 
 #include <signal.h>
 #include <stdint.h>
@@ -20,6 +21,22 @@ typedef struct worker_state {
   int failed;
   volatile sig_atomic_t running;
 } worker_state_t;
+
+static int worker_cnet_send_bytes(cnet_client *client,
+                                  cnet_connection connection,
+                                  const void *data,
+                                  size_t size) {
+  mem_buffer_t *buffer;
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  buffer = mem_get_buffer(mem_global(), size);
+  if (!buffer) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  status = cnet_send_buffer(client, connection, buffer);
+  mem_buffer_release(buffer);
+  return status;
+}
 
 static worker_state_t *g_worker;
 
@@ -51,8 +68,9 @@ static void worker_on_state(void *user, cnet_connection connection,
       } else {
         memcpy(worker->output, worker->group, group_size);
         worker->output[group_size] = '\n';
-        if (cnet_send(&worker->client, worker->connection, worker->output,
-                      group_size + 1u) != SALTS_OK) worker->failed = 1;
+        if (worker_cnet_send_bytes(
+                &worker->client, worker->connection, worker->output,
+                group_size + 1u) != SALTS_OK) worker->failed = 1;
       }
     } else if (cnet_receive(&worker->client, worker->connection, 1u) != SALTS_OK) {
       worker->failed = 1;
@@ -79,7 +97,8 @@ static void worker_on_receive(void *user, cnet_connection connection,
   if (prefix_size) memcpy(worker->output, worker->prefix, prefix_size);
   memcpy(worker->output + prefix_size, view->data, view->size);
   if (worker->tlv && view->size > 0u) worker->output[prefix_size] |= 0x80u;
-  if (cnet_send(&worker->client, worker->connection, worker->output, output_size) != SALTS_OK) {
+  if (worker_cnet_send_bytes(
+          &worker->client, worker->connection, worker->output, output_size) != SALTS_OK) {
     worker->failed = 1;
     worker->running = 0;
   }

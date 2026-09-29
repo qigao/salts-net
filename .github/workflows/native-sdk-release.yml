@@ -427,11 +427,25 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: Configure GitHub Packages source
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/saltsnet-pack.config"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          echo "SALTSNET_PACK_NUGET_CONFIG=$config" >> "$GITHUB_ENV"
       - name: Create NuGet package
         shell: bash
         run: |
           set -euo pipefail
-          dotnet pack packaging/nuget/SaltsNet.Native.csproj --configuration Release --output dist \
+          dotnet restore packaging/nuget/SaltsNet.Native.csproj \
+            --configfile "$SALTSNET_PACK_NUGET_CONFIG"
+          dotnet pack packaging/nuget/SaltsNet.Native.csproj --configuration Release --output dist --no-restore \
             -p:PackageVersion=${{ needs.metadata.outputs.version }} \
             -p:PackageRoot="$GITHUB_WORKSPACE/package" \
             -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}

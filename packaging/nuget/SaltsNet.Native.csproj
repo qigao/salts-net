@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>true</IsPackable>
+    <IncludeBuildOutput>false</IncludeBuildOutput>
+    <PackageId>SaltsNet.Native</PackageId>
+    <Authors>qigao</Authors>
+    <Description>SaltsNet native C SDK for Linux x64, Windows x64, macOS host architecture, and Android arm64-v8a Release builds.</Description>
+    <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/qigao/salts-net</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/qigao/salts-net</PackageProjectUrl>
+    <NoWarn>$(NoWarn);NU5128</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Salts.Native" Version="[1.8.3]" />
+    <None Include="../../README.md" Link="README.md" Pack="true" PackagePath="\" />
+    <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
+  </ItemGroup>
+</Project>

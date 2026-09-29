@@ -1,0 +1,510 @@
+name: SaltsNet native SDK package
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "CMakeLists.txt"
+      - "cmake/**"
+      - "ice/**"
+      - "snmp/**"
+      - "ldap/**"
+      - "email/**"
+      - "lb/**"
+      - "tproxy/**"
+      - "lsquic/**"
+      - "vcpkg.json"
+      - "packaging/nuget/**"
+      - ".github/workflows/native-sdk-release.yml"
+  push:
+    branches: [master]
+    tags:
+      - "v*"
+    paths:
+      - "vcpkg.json"
+      - "packaging/nuget/**"
+      - ".github/workflows/native-sdk-release.yml"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: saltsnet-native-sdk-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+env:
+  SALTS_SDK_VERSION: "1.8.3"
+
+jobs:
+  metadata:
+    if: >-
+      github.event_name == 'pull_request' || github.ref_type == 'tag' ||
+      (github.ref_name == 'master' && github.event.head_commit.message == 'release: bootstrap SaltsNet 1.0.0')
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      source_version: ${{ steps.meta.outputs.source_version }}
+      source_commit: ${{ steps.meta.outputs.source_commit }}
+      tag: ${{ steps.meta.outputs.tag }}
+      publish: ${{ steps.meta.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
+          manifest_version="$(python3 -c 'import json; print(json.load(open("vcpkg.json", encoding="utf-8"))["version-semver"])')"
+          test "$source_version" = "$manifest_version"
+          tag="v$source_version"
+          source_commit="$(git rev-parse HEAD)"
+          publish=false
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            test "$GITHUB_REF_NAME" = "$tag"
+            version="$source_version"
+            publish=true
+          elif [[ "$GITHUB_REF_NAME" == "master" && "${{ github.event.head_commit.message }}" == "release: bootstrap SaltsNet 1.0.0" ]]; then
+            version="$source_version"
+            publish=true
+          else
+            version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "source_version=$source_version" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux x64 SDK
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm perl
+      - name: Restore Salts SDK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/saltsnet-linux.config"
+          project="$RUNNER_TEMP/saltsnet-linux.csproj"
+          packages="$RUNNER_TEMP/saltsnet-linux-packages"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+      - name: Restore vcpkg dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet x64-linux --only-binarycaching
+      - name: Build, test and install
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$GITHUB_WORKSPACE/stage/sdk/linux-x64"
+          cmake -S . -B build/sdk -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DPERL_EXECUTABLE="$(command -v perl)" \
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
+          export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/x64-linux/lib:${LD_LIBRARY_PATH:-}"
+          cmake --build build/sdk --parallel 2
+          ctest --test-dir build/sdk --no-tests=error --output-on-failure
+          cmake --install build/sdk --strip
+          test -f "$prefix/lib/cmake/SaltsNet/SaltsNetConfig.cmake"
+          cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=${{ needs.metadata.outputs.source_commit }}
+          salts=$SALTS_SDK_VERSION
+          rid=linux-x64
+          build_type=Release
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-sdk-linux-x64
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  windows:
+    name: Windows x64 SDK
+    needs: metadata
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare MSVC and build tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install ninja nasm strawberryperl -y --no-progress
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ([string]::IsNullOrWhiteSpace($vsInstall)) { throw "MSVC x64 toolchain not found" }
+          $perl = "C:\Strawberry\perl\bin\perl.exe"
+          if (-not (Test-Path -LiteralPath $perl -PathType Leaf)) { throw "Perl not found: $perl" }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+          "PERL_EXECUTABLE=$perl" >> $env:GITHUB_ENV
+      - name: Restore Salts SDK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $config = Join-Path $env:RUNNER_TEMP "saltsnet-windows.config"
+          $project = Join-Path $env:RUNNER_TEMP "saltsnet-windows.csproj"
+          $packages = Join-Path $env:RUNNER_TEMP "saltsnet-windows-packages"
+          '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
+          @"
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$env:SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          "@ | Set-Content -LiteralPath $project
+          dotnet restore $project --configfile $config --packages $packages
+          $saltsRoot = Join-Path $packages "salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64"
+          "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+      - name: Restore vcpkg dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = Join-Path $env:GITHUB_WORKSPACE "vcpkg_installed"
+          if (Test-Path $root) { Remove-Item $root -Recurse -Force }
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "--x-manifest-root=." "--x-install-root=$root" "--triplet=x64-windows" --only-binarycaching
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg restore failed" }
+      - name: Build, test and install
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "PATH=%SALTS_ROOT%\bin;%GITHUB_WORKSPACE%\vcpkg_installed\x64-windows\bin;%PATH%"
+          cmake -S . -B build\sdk -G Ninja ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DCMAKE_TOOLCHAIN_FILE="%QIGAO_VCPKG_TOOLCHAIN_FILE%" ^
+            -DVCPKG_TARGET_TRIPLET=x64-windows ^
+            -DVCPKG_MANIFEST_MODE=OFF ^
+            -DVCPKG_INSTALLED_DIR="%GITHUB_WORKSPACE%\vcpkg_installed" ^
+            -DCMAKE_INSTALL_PREFIX="%GITHUB_WORKSPACE%\stage\sdk\windows-x64" ^
+            -DPERL_EXECUTABLE="%PERL_EXECUTABLE%" ^
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
+          if errorlevel 1 exit /b 1
+          cmake --build build\sdk --parallel 2
+          if errorlevel 1 exit /b 1
+          ctest --test-dir build\sdk --no-tests=error --output-on-failure
+          if errorlevel 1 exit /b 1
+          cmake --install build\sdk --config Release
+          if errorlevel 1 exit /b 1
+      - name: Record Windows SDK provenance
+        shell: pwsh
+        run: |
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage\sdk\windows-x64"
+          $config = Join-Path $prefix "lib\cmake\SaltsNet\SaltsNetConfig.cmake"
+          if (-not (Test-Path -LiteralPath $config -PathType Leaf)) { throw "missing $config" }
+          @(
+            "version=${{ needs.metadata.outputs.version }}"
+            "commit=${{ needs.metadata.outputs.source_commit }}"
+            "salts=$env:SALTS_SDK_VERSION"
+            "rid=windows-x64"
+            "build_type=Release"
+          ) | Set-Content -LiteralPath (Join-Path $prefix "saltsnet-sdk-manifest.txt")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-sdk-windows-x64
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  macos:
+    name: macOS SDK
+    needs: metadata
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja nasm
+          case "$RUNNER_ARCH" in
+            X64) rid=macos-x64; triplet=x64-osx ;;
+            ARM64) rid=macos-arm64; triplet=arm64-osx ;;
+            *) exit 1 ;;
+          esac
+          echo "SALTSNET_RID=$rid" >> "$GITHUB_ENV"
+          echo "SALTSNET_TRIPLET=$triplet" >> "$GITHUB_ENV"
+      - name: Restore Salts SDK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/saltsnet-macos.config"
+          project="$RUNNER_TEMP/saltsnet-macos.csproj"
+          packages="$RUNNER_TEMP/saltsnet-macos-packages"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/$SALTSNET_RID" >> "$GITHUB_ENV"
+      - name: Restore vcpkg dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet "$SALTSNET_TRIPLET" --only-binarycaching
+      - name: Build, test and install
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$GITHUB_WORKSPACE/stage/sdk/$SALTSNET_RID"
+          cmake -S . -B build/sdk -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET="$SALTSNET_TRIPLET" \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DPERL_EXECUTABLE="$(command -v perl)" \
+            -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF
+          export DYLD_LIBRARY_PATH="$SALTS_ROOT/lib:$GITHUB_WORKSPACE/vcpkg_installed/$SALTSNET_TRIPLET/lib:${DYLD_LIBRARY_PATH:-}"
+          cmake --build build/sdk --parallel 2
+          ctest --test-dir build/sdk --no-tests=error --output-on-failure
+          cmake --install build/sdk --strip
+          test -f "$prefix/lib/cmake/SaltsNet/SaltsNetConfig.cmake"
+          cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=${{ needs.metadata.outputs.source_commit }}
+          salts=$SALTS_SDK_VERSION
+          rid=$SALTSNET_RID
+          build_type=Release
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-sdk-macos
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  android:
+    name: Android arm64-v8a SDK
+    needs: metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Prepare build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm perl
+          cc tools/lemon/lemon.c -O2 -o "$RUNNER_TEMP/lemon"
+          chmod +x "$RUNNER_TEMP/lemon"
+          echo "LEMON_EXECUTABLE=$RUNNER_TEMP/lemon" >> "$GITHUB_ENV"
+      - name: Restore Salts Android SDK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/saltsnet-android.config"
+          project="$RUNNER_TEMP/saltsnet-android.csproj"
+          packages="$RUNNER_TEMP/saltsnet-android-packages"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
+      - name: Restore vcpkg dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf vcpkg_installed
+          "$VCPKG_ROOT/vcpkg" install --x-manifest-root=. --x-install-root="$GITHUB_WORKSPACE/vcpkg_installed" --triplet arm64-android --only-binarycaching
+      - name: Build and install
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$GITHUB_WORKSPACE/stage/sdk/android-arm64-v8a"
+          cmake -S . -B build/sdk -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DVCPKG_TARGET_TRIPLET=arm64-android \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$GITHUB_WORKSPACE/vcpkg_installed" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_STL=c++_shared \
+            -DLEMON_EXECUTABLE="$LEMON_EXECUTABLE" \
+            -DPERL_EXECUTABLE="$(command -v perl)" \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_TESTS=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build build/sdk --parallel 2
+          cmake --install build/sdk
+          test -f "$prefix/lib/cmake/SaltsNet/SaltsNetConfig.cmake"
+          cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=${{ needs.metadata.outputs.source_commit }}
+          salts=$SALTS_SDK_VERSION
+          rid=android-arm64-v8a
+          android_api=26
+          build_type=Release
+          qualification=compile-link
+          EOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-sdk-android-arm64-v8a
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
+  pack:
+    name: Pack SaltsNet.Native
+    needs: [metadata, linux, windows, macos, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: saltsnet-sdk-*
+          path: package/sdk
+          merge-multiple: true
+      - name: Verify package payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f package/sdk/linux-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/windows-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/android-arm64-v8a/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          mac_config="$(find package/sdk -path '*macos-*/lib/cmake/SaltsNet/SaltsNetConfig.cmake' -print -quit)"
+          test -n "$mac_config"
+          test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 4
+          du -sh package/sdk
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Configure GitHub Packages source
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/saltsnet-pack.config"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          echo "SALTSNET_PACK_NUGET_CONFIG=$config" >> "$GITHUB_ENV"
+      - name: Create NuGet package
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet restore packaging/nuget/SaltsNet.Native.csproj \
+            --configfile "$SALTSNET_PACK_NUGET_CONFIG"
+          dotnet pack packaging/nuget/SaltsNet.Native.csproj --configuration Release --output dist --no-restore \
+            -p:PackageVersion=${{ needs.metadata.outputs.version }} \
+            -p:PackageRoot="$GITHUB_WORKSPACE/package" \
+            -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}
+          test -f "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-native-nuget
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    name: Publish package and GitHub Release
+    needs: [metadata, pack]
+    if: needs.metadata.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: saltsnet-native-nuget
+          path: dist
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+      - name: Create bootstrap tag when needed
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
+            test "$existing" = "$GITHUB_SHA"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
+          fi
+      - name: Publish to GitHub Packages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text
+          dotnet nuget push "dist/SaltsNet.Native.${{ needs.metadata.outputs.source_version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          VERSION: ${{ needs.metadata.outputs.source_version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg="dist/SaltsNet.Native.$VERSION.nupkg"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --verify-tag --title "SaltsNet $VERSION" --generate-notes
+          fi

@@ -36,7 +36,9 @@ concurrency:
 jobs:
   metadata:
     if: >-
-      github.event_name == 'pull_request' || github.ref_type == 'tag'
+      github.event_name == 'pull_request' || github.ref_type == 'tag' ||
+      (github.ref_name == 'master' &&
+       startsWith(github.event.head_commit.message, 'release: publish SaltsNet '))
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -59,6 +61,10 @@ jobs:
           publish=false
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
+            version="$source_version"
+            publish=true
+          elif [[ "$GITHUB_REF_NAME" == "master" &&
+                  "${{ startsWith(github.event.head_commit.message, 'release: publish SaltsNet ') }}" == "true" ]]; then
             version="$source_version"
             publish=true
           else
@@ -491,6 +497,20 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: Create release tag when publishing from master
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
+            test "$existing" = "$GITHUB_SHA"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs"               -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
+          fi
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

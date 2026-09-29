@@ -9,12 +9,32 @@
 #include <cnet/cnet.h>
 #include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* Client error codes (match ldap_client.h) */
+static int ldap_cnet_send_bytes(cnet_client *client,
+                                cnet_connection connection,
+                                const void *data,
+                                size_t size,
+                                int close_after) {
+  mem_buffer_t *buffer;
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  buffer = mem_get_buffer(mem_global(), size);
+  if (!buffer) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  status = close_after
+               ? cnet_send_buffer_and_close(client, connection, buffer)
+               : cnet_send_buffer(client, connection, buffer);
+  mem_buffer_release(buffer);
+  return status;
+}
+
 #define LDAP_CLIENT_OK 0
 #define LDAP_CLIENT_ERROR_MEMORY -1
 #define LDAP_CLIENT_ERROR_INVALID -2
@@ -428,7 +448,8 @@ static int ldap_client_send_and_wait(ldap_client_t *client, const uint8_t *data,
   }
 
   client->send_pending = 1;
-  status = cnet_send(&client->net, client->connection, data, len);
+  status = ldap_cnet_send_bytes(
+      &client->net, client->connection, data, len, 0);
   if (status != SALTS_OK) {
     client->send_pending = 0;
     ldap_client_set_transport_error(client, "send admission", status);
@@ -759,7 +780,8 @@ static int ldap_client_unbind_impl(ldap_client_t *client) {
   client->terminal_failed = 0;
   client->transport_status = SALTS_OK;
   client->send_pending = 1;
-  status = cnet_send_and_close(&client->net, client->connection, buf, len);
+  status = ldap_cnet_send_bytes(
+      &client->net, client->connection, buf, len, 1);
   if (status != SALTS_OK) {
     client->send_pending = 0;
     ldap_client_set_transport_error(client, "unbind admission", status);

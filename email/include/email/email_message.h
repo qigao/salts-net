@@ -15,7 +15,7 @@
 
 #include "platform.h"
 #include "salts_buffer.h"
-#include "salts_str.h"
+#include "tstr.h"
 #include "mime_parser.h"
 #include "mime_rfc2822.h"
 #include "mime_smime.h"

@@ -18,8 +18,6 @@ on:
       - ".github/workflows/native-sdk-release.yml"
   push:
     branches: [master]
-    tags:
-      - "v*"
     paths:
       - "vcpkg.json"
       - "packaging/nuget/**"
@@ -36,7 +34,7 @@ concurrency:
 jobs:
   metadata:
     if: >-
-      github.event_name == 'pull_request' || github.ref_type == 'tag' ||
+      github.event_name == 'pull_request' ||
       (github.ref_name == 'master' &&
        startsWith(github.event.head_commit.message, 'release: publish SaltsNet '))
     runs-on: ubuntu-24.04
@@ -59,12 +57,8 @@ jobs:
           tag="v$source_version"
           source_commit="$(git rev-parse HEAD)"
           publish=false
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-            test "$GITHUB_REF_NAME" = "$tag"
-            version="$source_version"
-            publish=true
-          elif [[ "$GITHUB_REF_NAME" == "master" &&
-                  "${{ startsWith(github.event.head_commit.message, 'release: publish SaltsNet ') }}" == "true" ]]; then
+          if [[ "$GITHUB_REF_NAME" == "master" &&
+                "${{ startsWith(github.event.head_commit.message, 'release: publish SaltsNet ') }}" == "true" ]]; then
             version="$source_version"
             publish=true
           else
@@ -498,7 +492,6 @@ jobs:
         with:
           dotnet-version: "8.0.x"
       - name: Create release tag when publishing from master
-        if: github.ref_type != 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.metadata.outputs.tag }}

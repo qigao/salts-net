@@ -2,11 +2,31 @@
 
 #include <base64_utils.h>
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static int salts_proxy_cnet_send_bytes(cnet_client *client,
+                                       cnet_connection connection,
+                                       const void *data,
+                                       size_t size,
+                                       int close_after) {
+  mem_buffer_t *buffer;
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  buffer = mem_get_buffer(mem_global(), size);
+  if (!buffer) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  status = close_after
+               ? cnet_send_buffer_and_close(client, connection, buffer)
+               : cnet_send_buffer(client, connection, buffer);
+  mem_buffer_release(buffer);
+  return status;
+}
 
 enum {
   SALTS_PROXY_DEFAULT_SESSION_CAPACITY = 64,
@@ -312,7 +332,8 @@ static void salts_proxy_start_pump(salts_proxy_session_t *session);
 
 static int salts_proxy_send_control(salts_proxy_session_t *session, const void *data, size_t size,
                                     salts_proxy_send_action_t action) {
-  int status = cnet_send(&session->proxy->client, session->downstream.connection, data, size);
+  int status = salts_proxy_cnet_send_bytes(
+      &session->proxy->client, session->downstream.connection, data, size, 0);
   if (status == SALTS_OK) {
     session->downstream.send_action = action;
   } else {
@@ -328,7 +349,8 @@ static void salts_proxy_send_final(salts_proxy_session_t *session, const void *d
     return;
   }
   session->phase = SALTS_PROXY_PHASE_CLOSING;
-  status = cnet_send_and_close(&session->proxy->client, session->downstream.connection, data, size);
+  status = salts_proxy_cnet_send_bytes(
+      &session->proxy->client, session->downstream.connection, data, size, 1);
   if (status != SALTS_OK) salts_proxy_close_side(&session->downstream);
   salts_proxy_close_side(&session->upstream);
 }
@@ -361,7 +383,8 @@ static void salts_proxy_forward(salts_proxy_side_t *source, const cnet_receive_v
     salts_proxy_close_session(session);
     return;
   }
-  status = cnet_send(&session->proxy->client, destination->connection, view->data, view->size);
+  status = salts_proxy_cnet_send_bytes(
+      &session->proxy->client, destination->connection, view->data, view->size, 0);
   if (status != SALTS_OK) {
     salts_proxy_close_session(session);
     return;

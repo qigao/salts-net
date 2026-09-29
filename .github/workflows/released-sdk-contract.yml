@@ -26,10 +26,6 @@ concurrency:
   group: saltsnet-released-sdk-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
-env:
-  SALTS_SDK_VERSION: "1.8.3"
-  SALTS_UTILS_SDK_VERSION: "4.1.3"
-
 jobs:
   linux-x64:
     runs-on: ubuntu-24.04
@@ -67,8 +63,7 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk">
             <PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup>
             <ItemGroup>
-              <PackageReference Include="Salts.Native" Version="[${SALTS_SDK_VERSION}]" />
-              <PackageReference Include="SaltsUtils.Native" Version="[${SALTS_UTILS_SDK_VERSION}]" />
+              <PackageReference Include="Salts.Native" Version="*" />
             </ItemGroup>
           </Project>
           EOF
@@ -77,12 +72,19 @@ jobs:
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          salts_root="$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64"
-          salts_utils_root="$packages/saltsutils.native/$SALTS_UTILS_SDK_VERSION/sdk/linux-x64"
+          resolve_sdk_root() {
+            local package_root="$packages/$1"
+            local matches=()
+            mapfile -t matches < <(find "$package_root" -mindepth 1 -maxdepth 1 -type d -print)
+            if [ "${#matches[@]}" -ne 1 ]; then
+              printf 'expected exactly one restored version for %s, found %s\n'                 "$1" "${#matches[@]}" >&2
+              return 1
+            fi
+            printf '%s/sdk/linux-x64\n' "${matches[0]}"
+          }
+          salts_root="$(resolve_sdk_root salts.native)"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfigVersion.cmake"
-          test -f "$salts_utils_root/lib/cmake/SaltsUtils/SaltsUtilsConfigVersion.cmake"
           echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
-          echo "SALTS_UTILS_ROOT=$salts_utils_root" >> "$GITHUB_ENV"
 
       - name: Restore vcpkg dependencies from shared cache
         shell: bash

@@ -9,7 +9,7 @@ endif()
 # SaltsNet Project - Network tools built on Salts
 project(
   SaltsNet
-  VERSION 1.0.0
+  VERSION 1.0.1
   LANGUAGES C CXX)
 
 # Project configuration - output directories
@@ -58,7 +58,7 @@ if(NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
 endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
 find_package(
-  Salts 1.8.3 EXACT CONFIG REQUIRED
+  Salts CONFIG REQUIRED
   PATHS "${SALTSNET_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)

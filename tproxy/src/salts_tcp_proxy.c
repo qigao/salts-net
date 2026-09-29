@@ -402,8 +402,9 @@ static void salts_proxy_start_pump(salts_proxy_session_t *session) {
     return;
   }
   if (session->handshake_size != 0u) {
-    status = cnet_send(&session->proxy->client, session->upstream.connection, session->handshake,
-                       session->handshake_size);
+    status = salts_proxy_cnet_send_bytes(
+        &session->proxy->client, session->upstream.connection,
+        session->handshake, session->handshake_size, 0);
     if (status != SALTS_OK) {
       salts_proxy_close_session(session);
       return;

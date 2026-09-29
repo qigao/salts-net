@@ -2,10 +2,27 @@
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+
+static int email_cnet_send_bytes(cnet_client *client,
+                                 cnet_connection connection,
+                                 const void *data,
+                                 size_t size) {
+  mem_buffer_t *buffer;
+  int status;
+  if (!client || !data || size == 0u) return SALTS_EINVAL;
+  buffer = mem_get_buffer(mem_global(), size);
+  if (!buffer) return SALTS_ENOMEM;
+  memcpy(mem_buffer_data(buffer), data, size);
+  mem_set_used(buffer, size);
+  status = cnet_send_buffer(client, connection, buffer);
+  mem_buffer_release(buffer);
+  return status;
+}
 
 static native_io_backend_kind email_cnet_backend(void) {
 #if defined(_WIN32)
@@ -290,7 +307,8 @@ int email_cnet_transport_send(email_cnet_transport_t *transport, const void *dat
     const uint64_t deadline = salts_monotonic_ms() + transport->timeout_ms;
     int status;
     transport->send_pending = 1;
-    status = cnet_send(&transport->client, transport->connection, cursor, chunk);
+    status = email_cnet_send_bytes(
+        &transport->client, transport->connection, cursor, chunk);
     if (status != SALTS_OK) {
       transport->send_pending = 0;
       email_cnet_set_error(transport, status, "send admission");

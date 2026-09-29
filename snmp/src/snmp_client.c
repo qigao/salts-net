@@ -9,6 +9,7 @@
 #include "memory_pool.h"
 #include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts_buffer.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -65,6 +66,22 @@ struct snmp_client_s {
     size_t recv_size;
     MemoryPool *response_pool;
 };
+
+static int snmp_cnet_send_bytes(cnet_client *client,
+                                cnet_connection connection,
+                                const void *data,
+                                size_t size) {
+    mem_buffer_t *buffer;
+    int status;
+    if (!client || !data || size == 0u) return SALTS_EINVAL;
+    buffer = mem_get_buffer(mem_global(), size);
+    if (!buffer) return SALTS_ENOMEM;
+    memcpy(mem_buffer_data(buffer), data, size);
+    mem_set_used(buffer, size);
+    status = cnet_send_buffer(client, connection, buffer);
+    mem_buffer_release(buffer);
+    return status;
+}
 
 static native_io_backend_kind snmp_client_backend(void) {
 #if defined(_WIN32)
@@ -380,7 +397,8 @@ static int send_request_and_wait(
         }
 
         client->send_pending = 1;
-        status = cnet_send(&client->net, client->connection, request, request_len);
+        status = snmp_cnet_send_bytes(
+            &client->net, client->connection, request, request_len);
         if (status != SALTS_OK) {
             client->send_pending = 0;
             snmp_client_set_transport_error(client, "send admission", status);

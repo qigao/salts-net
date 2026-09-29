@@ -60,7 +60,8 @@ file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
 find_package(
   Salts 1.8.3 EXACT CONFIG REQUIRED
   PATHS "${SALTSNET_SALTS_ROOT_PATH}"
-  NO_DEFAULT_PATH)
+  NO_DEFAULT_PATH
+  NO_CMAKE_FIND_ROOT_PATH)
 # Additional components
 add_subdirectory(tools)
 include(FindTools)

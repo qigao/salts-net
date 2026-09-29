@@ -382,7 +382,8 @@ static void salts_lb_forward_session(salts_lb_slot_t *source, const cnet_receive
     salts_lb_close_slot(source);
     return;
   }
-  status = cnet_send(&source->lb->client, destination->connection, view->data, view->size);
+  status = salts_lb_cnet_send_bytes(
+      &source->lb->client, destination->connection, view->data, view->size, 0);
   if (status != SALTS_OK) {
     salts_lb_close_pair(source);
     salts_lb_close_slot(source);
@@ -475,8 +476,9 @@ static void salts_lb_on_receive(void *user, cnet_connection connection,
         salts_lb_close_slot(slot);
         return;
       }
-      status = cnet_send(&lb->client, frontend->connection, slot->buffer,
-                         (size_t)response_size);
+      status = salts_lb_cnet_send_bytes(
+          &lb->client, frontend->connection, slot->buffer,
+          (size_t)response_size, 0);
       if (status != SALTS_OK) {
         salts_lb_close_slot(frontend);
         salts_lb_close_slot(slot);

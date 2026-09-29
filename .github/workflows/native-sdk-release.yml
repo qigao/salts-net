@@ -436,7 +436,7 @@ jobs:
           test -n "$mac_config"
           test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 4
           mapfile -t salts_versions < <(
-            sed -n 's/^salts=//p' package/sdk/*/saltsnet-sdk-manifest.txt | sort -u
+            sed -n 's/^salts=//p' package/sdk/*/saltsnet-sdk-manifest.txt | tr -d '\r' | sort -u
           )
           test "${#salts_versions[@]}" -eq 1
           echo "SALTS_PACKAGE_VERSION=${salts_versions[0]}" >> "$GITHUB_ENV"

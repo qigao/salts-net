@@ -38,7 +38,9 @@ env:
 
 jobs:
   metadata:
-    if: github.event_name == 'pull_request' || github.ref_type == 'tag' || (github.ref_name == 'master' && github.event.head_commit.message == 'release: bootstrap SaltsNet 1.0.0')
+    if: >-
+      github.event_name == 'pull_request' || github.ref_type == 'tag' ||
+      (github.ref_name == 'master' && github.event.head_commit.message == 'release: bootstrap SaltsNet 1.0.0')
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}

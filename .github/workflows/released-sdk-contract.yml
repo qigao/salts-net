@@ -41,6 +41,8 @@ jobs:
         with:
           mode: read
 
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"

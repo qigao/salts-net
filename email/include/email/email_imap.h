@@ -17,7 +17,7 @@
 
 #include "platform.h"
 #include "email_message.h"
-#include "salts_str.h"
+#include "tstr.h"
 #include <stddef.h>
 
 #ifdef __cplusplus

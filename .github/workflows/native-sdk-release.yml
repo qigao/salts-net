@@ -33,14 +33,10 @@ concurrency:
   group: saltsnet-native-sdk-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: false
 
-env:
-  SALTS_SDK_VERSION: "1.8.3"
-
 jobs:
   metadata:
     if: >-
-      github.event_name == 'pull_request' || github.ref_type == 'tag' ||
-      (github.ref_name == 'master' && startsWith(github.event.head_commit.message, 'release: bootstrap SaltsNet 1.0.0'))
+      github.event_name == 'pull_request' || github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -63,9 +59,6 @@ jobs:
           publish=false
           if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
-            version="$source_version"
-            publish=true
-          elif [[ "$GITHUB_REF_NAME" == "master" && "${{ startsWith(github.event.head_commit.message, 'release: bootstrap SaltsNet 1.0.0') }}" == "true" ]]; then
             version="$source_version"
             publish=true
           else
@@ -104,10 +97,15 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
           cat > "$project" <<EOF
-          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="*" /></ItemGroup></Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/linux-x64" >> "$GITHUB_ENV"
+          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#salts_versions[@]}" -eq 1
+          salts_dir="${salts_versions[0]}"
+          salts_version="$(basename "$salts_dir")"
+          echo "SALTS_ROOT=$salts_dir/sdk/linux-x64" >> "$GITHUB_ENV"
+          echo "SALTS_PACKAGE_VERSION=$salts_version" >> "$GITHUB_ENV"
       - name: Restore vcpkg dependencies
         shell: bash
         run: |
@@ -136,7 +134,7 @@ jobs:
           cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=${{ needs.metadata.outputs.source_commit }}
-          salts=$SALTS_SDK_VERSION
+          salts=$SALTS_PACKAGE_VERSION
           rid=linux-x64
           build_type=Release
           EOF
@@ -184,11 +182,15 @@ jobs:
           '<configuration><packageSources><clear /></packageSources></configuration>' | Set-Content -LiteralPath $config
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password $env:GITHUB_TOKEN --store-password-in-clear-text --configfile $config
           @"
-          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$env:SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="*" /></ItemGroup></Project>
           "@ | Set-Content -LiteralPath $project
           dotnet restore $project --configfile $config --packages $packages
-          $saltsRoot = Join-Path $packages "salts.native\$env:SALTS_SDK_VERSION\sdk\windows-x64"
+          $versions = @(Get-ChildItem -LiteralPath (Join-Path $packages "salts.native") -Directory)
+          if ($versions.Count -ne 1) { throw "expected exactly one restored Salts version, found $($versions.Count)" }
+          $saltsVersion = $versions[0].Name
+          $saltsRoot = Join-Path $versions[0].FullName "sdk\windows-x64"
           "SALTS_ROOT=$saltsRoot" >> $env:GITHUB_ENV
+          "SALTS_PACKAGE_VERSION=$saltsVersion" >> $env:GITHUB_ENV
       - name: Restore vcpkg dependencies
         shell: pwsh
         run: |
@@ -228,7 +230,7 @@ jobs:
           @(
             "version=${{ needs.metadata.outputs.version }}"
             "commit=${{ needs.metadata.outputs.source_commit }}"
-            "salts=$env:SALTS_SDK_VERSION"
+            "salts=$env:SALTS_PACKAGE_VERSION"
             "rid=windows-x64"
             "build_type=Release"
           ) | Set-Content -LiteralPath (Join-Path $prefix "saltsnet-sdk-manifest.txt")
@@ -276,10 +278,15 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
           cat > "$project" <<EOF
-          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="*" /></ItemGroup></Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/$SALTSNET_RID" >> "$GITHUB_ENV"
+          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#salts_versions[@]}" -eq 1
+          salts_dir="${salts_versions[0]}"
+          salts_version="$(basename "$salts_dir")"
+          echo "SALTS_ROOT=$salts_dir/sdk/$SALTSNET_RID" >> "$GITHUB_ENV"
+          echo "SALTS_PACKAGE_VERSION=$salts_version" >> "$GITHUB_ENV"
       - name: Restore vcpkg dependencies
         shell: bash
         run: |
@@ -308,7 +315,7 @@ jobs:
           cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=${{ needs.metadata.outputs.source_commit }}
-          salts=$SALTS_SDK_VERSION
+          salts=$SALTS_PACKAGE_VERSION
           rid=$SALTSNET_RID
           build_type=Release
           EOF
@@ -353,10 +360,15 @@ jobs:
           printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text --configfile "$config"
           cat > "$project" <<EOF
-          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="[$SALTS_SDK_VERSION]" /></ItemGroup></Project>
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="*" /></ItemGroup></Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages"
-          echo "SALTS_ROOT=$packages/salts.native/$SALTS_SDK_VERSION/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
+          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
+          test "${#salts_versions[@]}" -eq 1
+          salts_dir="${salts_versions[0]}"
+          salts_version="$(basename "$salts_dir")"
+          echo "SALTS_ROOT=$salts_dir/sdk/android-arm64-v8a" >> "$GITHUB_ENV"
+          echo "SALTS_PACKAGE_VERSION=$salts_version" >> "$GITHUB_ENV"
       - name: Restore vcpkg dependencies
         shell: bash
         run: |
@@ -389,7 +401,7 @@ jobs:
           cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
           version=${{ needs.metadata.outputs.version }}
           commit=${{ needs.metadata.outputs.source_commit }}
-          salts=$SALTS_SDK_VERSION
+          salts=$SALTS_PACKAGE_VERSION
           rid=android-arm64-v8a
           android_api=26
           build_type=Release
@@ -423,6 +435,11 @@ jobs:
           mac_config="$(find package/sdk -path '*macos-*/lib/cmake/SaltsNet/SaltsNetConfig.cmake' -print -quit)"
           test -n "$mac_config"
           test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 4
+          mapfile -t salts_versions < <(
+            sed -n 's/^salts=//p' package/sdk/*/saltsnet-sdk-manifest.txt | sort -u
+          )
+          test "${#salts_versions[@]}" -eq 1
+          echo "SALTS_PACKAGE_VERSION=${salts_versions[0]}" >> "$GITHUB_ENV"
           du -sh package/sdk
       - uses: actions/setup-dotnet@v4
         with:
@@ -444,9 +461,11 @@ jobs:
         run: |
           set -euo pipefail
           dotnet restore packaging/nuget/SaltsNet.Native.csproj \
-            --configfile "$SALTSNET_PACK_NUGET_CONFIG"
+            --configfile "$SALTSNET_PACK_NUGET_CONFIG" \
+            -p:SaltsPackageVersion="$SALTS_PACKAGE_VERSION"
           dotnet pack packaging/nuget/SaltsNet.Native.csproj --configuration Release --output dist --no-restore \
             -p:PackageVersion=${{ needs.metadata.outputs.version }} \
+            -p:SaltsPackageVersion="$SALTS_PACKAGE_VERSION" \
             -p:PackageRoot="$GITHUB_WORKSPACE/package" \
             -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}
           test -f "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg"
@@ -472,20 +491,6 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-      - name: Create bootstrap tag when needed
-        if: github.ref_type != 'tag'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.metadata.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" >/dev/null 2>&1; then
-            existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha)"
-            test "$existing" = "$GITHUB_SHA"
-          else
-            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$GITHUB_SHA"
-          fi
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

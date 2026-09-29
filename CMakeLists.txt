@@ -56,9 +56,10 @@ endif()
 if(NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   message(FATAL_ERROR "SALTS_ROOT is not a directory: $ENV{SALTS_ROOT}")
 endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
 find_package(
   Salts 1.8.3 EXACT CONFIG REQUIRED
-  PATHS "$ENV{SALTS_ROOT}"
+  PATHS "${SALTSNET_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH)
 # Additional components
 add_subdirectory(tools)

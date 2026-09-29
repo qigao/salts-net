@@ -63,9 +63,9 @@ Use CFlow only when the application genuinely needs graph composition, demand pr
 
 ## Build and test
 
-Install the released **Salts 1.8.3** SDK that matches the selected build profile and set `SALTS_ROOT`.
+Install the latest stable released **Salts** SDK that matches the selected build profile and set `SALTS_ROOT`.
 
-The current sibling ecosystem baseline is **SaltsUtils 4.1.3**, which is aligned to Salts 1.8.3. SaltsNet intentionally does **not** depend on SaltsUtils; keeping `SaltsNet -> Salts` one-way avoids an unnecessary utility-layer dependency.
+SaltsNet intentionally does **not** depend on SaltsUtils; keeping `SaltsNet -> Salts` one-way avoids an unnecessary utility-layer dependency.
 
 Windows Release example:
 

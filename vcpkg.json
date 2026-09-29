@@ -1,27 +1,9 @@
 {
   "name": "saltsnet",
-  "version-semver": "0.1.0",
+  "version-semver": "1.0.0",
   "builtin-baseline": "b1b19307e2d2ec1eefbdb7ea069de7d4bcd31f01",
   "dependencies": [
     "boringssl",
-    "zlib",
-    {
-      "name": "c-ares",
-      "version>=": "1.34.5"
-    },
-    {
-      "name": "kcp",
-      "version>=": "1.7"
-    },
-    "llhttp",
-    {
-      "name": "pkgconf",
-      "host": true
-    },
-    "simde",
-    {
-      "name": "xxhash",
-      "version>=": "0.8.3"
-    }
+    "zlib"
   ]
 }

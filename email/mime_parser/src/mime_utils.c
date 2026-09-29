@@ -1,7 +1,7 @@
 #include "mime_utils.h"
 #include "base64_utils.h"
 #include "salts_simd_scan.h"
-#include "salts_str.h"
+#include "tstr.h"
 #include "salts_buffer.h"
 #include <string.h>
 #include <stdlib.h>

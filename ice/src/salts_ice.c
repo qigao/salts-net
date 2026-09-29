@@ -20,7 +20,7 @@
 #include <salts/clock.h>
 #include <salts/thread.h>
 
-#include "salts_str.h"
+#include "tstr.h"
 #include "tlog.h"
 #include <fmt.h>
 #include <ctype.h>

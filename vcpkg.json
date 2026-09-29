@@ -13,10 +13,6 @@
       "name": "kcp",
       "version>=": "1.7"
     },
-    {
-      "name": "liburing",
-      "platform": "linux & !android"
-    },
     "llhttp",
     {
       "name": "pkgconf",

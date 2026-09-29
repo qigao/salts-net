@@ -15,7 +15,7 @@ if(NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   message(FATAL_ERROR "SALTS_ROOT is not a directory: $ENV{SALTS_ROOT}")
 endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" _saltsnet_salts_root)
-find_dependency(Salts CONFIG REQUIRED
+find_dependency(Salts 1.8.3 EXACT CONFIG REQUIRED
                 PATHS "${_saltsnet_salts_root}"
                 NO_DEFAULT_PATH)
 unset(_saltsnet_salts_root)

@@ -1,6 +1,6 @@
 #include "mime_content_disposition.h"
 #include "salts_simd_scan.h"
-#include "salts_str.h"
+#include "tstr.h"
 #include <string.h>
 
 /* ── Type name mapping ─────────────────────────────────────────────── */

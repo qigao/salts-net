@@ -4,7 +4,7 @@
 #include "mime_utils.h"
 #include "salts_buffer.h"
 #include "salts_simd_scan.h"
-#include "salts_str.h"
+#include "tstr.h"
 #include "uri_parser.h"
 #include <stdio.h>
 #include <stdlib.h>

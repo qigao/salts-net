@@ -57,7 +57,7 @@ if(NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   message(FATAL_ERROR "SALTS_ROOT is not a directory: $ENV{SALTS_ROOT}")
 endif()
 find_package(
-  Salts CONFIG REQUIRED
+  Salts 1.8.3 EXACT CONFIG REQUIRED
   PATHS "$ENV{SALTS_ROOT}"
   NO_DEFAULT_PATH)
 # Additional components

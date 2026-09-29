@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libssl-dev \
     libtool \
-    liburing-dev \
     linux-libc-dev \
     ninja-build \
     openssl \

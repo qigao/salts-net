@@ -461,11 +461,9 @@ jobs:
         run: |
           set -euo pipefail
           dotnet restore packaging/nuget/SaltsNet.Native.csproj \
-            --configfile "$SALTSNET_PACK_NUGET_CONFIG" \
-            -p:SaltsPackageVersion="$SALTS_PACKAGE_VERSION"
+            --configfile "$SALTSNET_PACK_NUGET_CONFIG"
           dotnet pack packaging/nuget/SaltsNet.Native.csproj --configuration Release --output dist --no-restore \
             -p:PackageVersion=${{ needs.metadata.outputs.version }} \
-            -p:SaltsPackageVersion="$SALTS_PACKAGE_VERSION" \
             -p:PackageRoot="$GITHUB_WORKSPACE/package" \
             -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}
           test -f "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg"

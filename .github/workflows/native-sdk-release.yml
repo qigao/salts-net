@@ -467,6 +467,11 @@ jobs:
             -p:PackageRoot="$GITHUB_WORKSPACE/package" \
             -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}
           test -f "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg"
+          unzip -p "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg" "SaltsNet.Native.nuspec" > "$RUNNER_TEMP/saltsnet.nuspec"
+          if grep -F 'id="Salts.Native"' "$RUNNER_TEMP/saltsnet.nuspec"; then
+            echo "SaltsNet.Native must not embed GitHub package dependency metadata" >&2
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: saltsnet-native-nuget

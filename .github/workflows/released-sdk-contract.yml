@@ -71,7 +71,7 @@ jobs:
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
             --name github --username qigao --password "$GITHUB_TOKEN" \
             --store-password-in-clear-text --configfile "$config"
-          dotnet restore "$project" --configfile "$config" --packages "$packages"
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache --force-evaluate
           resolve_sdk_root() {
             local package_root="$packages/$1"
             local matches=()

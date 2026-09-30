@@ -139,3 +139,6 @@ There is no silent fallback to the old naming or runtime model. Residual legacy 
 ---
 
 **Salts provides the network/runtime semantics. SaltsNet turns them into reusable protocol tools.**
+
+
+GitHub Packages policy: consumers must restore `Salts.Native` explicitly as latest; `SaltsNet.Native` does not embed versioned dependency metadata.

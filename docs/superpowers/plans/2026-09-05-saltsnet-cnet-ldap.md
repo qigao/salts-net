@@ -135,6 +135,6 @@ Record exact configure/build/test outcomes. Re-run the repository-wide CoroNet c
 - `clang-format --dry-run --Werror` passed for the modified LDAP implementation and loopback test;
   `git diff --check` also passed.
 - Remaining production CoroNet blockers are the SMTP/IMAP/POP3 client family, ICE/STUN/TURN,
-  load-balancer/bidirectional-pump, transparent proxy, and optional LSQUIC adapter. Their CMake
+  load-balancer/bidirectional-pump, and transparent proxy. Their CMake
   targets still require `SaltsNet::CoroNet`, so the root `add_subdirectory(CoroNet)` cannot yet be
   removed safely.

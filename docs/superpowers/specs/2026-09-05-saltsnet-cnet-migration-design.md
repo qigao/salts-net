@@ -49,7 +49,7 @@ result; long-lived services expose explicit poll/stop/destroy operations instead
    Extend CNet first for same-connection STARTTLS; never reconnect and pretend it is an upgrade.
 4. **ICE/STUN/TURN** — use CNet datagram/packet owners and explicit polling. CFlow owns the
    connectivity-check and consent state machine; CNet remains the only socket owner.
-5. **LB/TProxy/LSQUIC adapter** — use CNet listeners, generation-checked connections, bounded
+5. **LB/TProxy adapters** — use CNet listeners, generation-checked connections, bounded
    bidirectional forwarding, and explicit shutdown. WebSocket framing uses `<cnet/websocket.h>`.
 6. **Removal gate** — delete `CoroNet/`, coroutine-only adapters/tests/examples, and every CoroNet or
    `coro_*` reference after replacement tests pass. Package installation must contain no CoroNet

@@ -48,17 +48,6 @@ target_link_libraries(
           SaltsNet::LB
           SaltsNet::TCPProxy)
 
-if(SALTSNET_EXPECT_LSQUIC)
-  foreach(saltsnet_lsquic_target IN ITEMS SaltsNet::LSQUIC SaltsNet::LSQUICCore)
-    if(NOT TARGET ${saltsnet_lsquic_target})
-      message(FATAL_ERROR
-              "Enabled LSQUIC export is missing target: ${saltsnet_lsquic_target}")
-    endif()
-  endforeach()
-  target_compile_definitions(saltsnet_package_consumer_test
-                             PRIVATE SALTSNET_PACKAGE_HAS_LSQUIC=1)
-  target_link_libraries(saltsnet_package_consumer_test
-                        PRIVATE SaltsNet::LSQUIC SaltsNet::LSQUICCore)
-elseif(TARGET SaltsNet::LSQUIC OR TARGET SaltsNet::LSQUICCore)
-  message(FATAL_ERROR "Disabled LSQUIC unexpectedly exported a package target")
+if(TARGET SaltsNet::LSQUIC OR TARGET SaltsNet::LSQUICCore)
+  message(FATAL_ERROR "Removed LSQUIC target unexpectedly exported by SaltsNet")
 endif()

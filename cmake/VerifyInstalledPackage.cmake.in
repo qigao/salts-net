@@ -25,7 +25,7 @@ set(saltsnet_legacy_paths)
 foreach(saltsnet_staged_path IN LISTS saltsnet_staged_paths)
   get_filename_component(saltsnet_staged_name "${saltsnet_staged_path}" NAME)
   string(TOLOWER "${saltsnet_staged_name}" saltsnet_staged_name_lower)
-  if(saltsnet_staged_name_lower MATCHES "coronet|turbonet")
+  if(saltsnet_staged_name_lower MATCHES "coronet|turbonet|lsquic")
     list(APPEND saltsnet_legacy_paths "${saltsnet_staged_path}")
   endif()
 endforeach()
@@ -45,7 +45,8 @@ if(NOT saltsnet_package_cmake_files)
 endif()
 foreach(saltsnet_package_cmake_file IN LISTS saltsnet_package_cmake_files)
   file(READ "${saltsnet_package_cmake_file}" saltsnet_package_cmake_content)
-  foreach(saltsnet_legacy_token IN ITEMS "TurboNet::" "CoroNet" "turbo_coro")
+  foreach(saltsnet_legacy_token IN ITEMS "TurboNet::" "CoroNet" "turbo_coro"
+                                      "SaltsNet::LSQUIC" "SaltsNet::LSQUICCore")
     string(FIND "${saltsnet_package_cmake_content}" "${saltsnet_legacy_token}"
            saltsnet_legacy_offset)
     if(NOT saltsnet_legacy_offset EQUAL -1)
@@ -60,8 +61,7 @@ set(saltsnet_configure_command
     -S "@CMAKE_SOURCE_DIR@/test/package_consumer"
     -B "${saltsnet_consumer_build_dir}"
     -G "@CMAKE_GENERATOR@"
-    "-DSALTSNET_PACKAGE_ROOT=${saltsnet_stage_dir}"
-    "-DSALTSNET_EXPECT_LSQUIC=@SALTSNET_ENABLE_LSQUIC@")
+    "-DSALTSNET_PACKAGE_ROOT=${saltsnet_stage_dir}")
 if(NOT "@CMAKE_BUILD_TYPE@" STREQUAL "")
   list(APPEND saltsnet_configure_command
        "-DCMAKE_BUILD_TYPE=@CMAKE_BUILD_TYPE@")

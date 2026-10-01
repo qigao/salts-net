@@ -4,10 +4,6 @@ include(CMakeFindDependencyMacro)
 
 find_dependency(Threads)
 find_dependency(OpenSSL REQUIRED)
-if(@SALTSNET_ENABLE_LSQUIC@)
-  find_dependency(ZLIB REQUIRED)
-endif()
-
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "Required dependency root is not defined: SALTS_ROOT")
 endif()

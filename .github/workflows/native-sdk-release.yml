@@ -12,7 +12,6 @@ on:
       - "email/**"
       - "lb/**"
       - "tproxy/**"
-      - "lsquic/**"
       - "vcpkg.json"
       - "packaging/nuget/**"
       - ".github/workflows/native-sdk-release.yml"

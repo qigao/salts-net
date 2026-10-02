@@ -297,11 +297,13 @@ static int certificate_identifier(X509 *cert,
                                   uint8_t identifier[MIME_SMIME_SHA256_SIZE]) {
   uint8_t *der = NULL;
   int der_len = i2d_X509(cert, &der);
+  unsigned int digest_len = 0U;
   int result;
   if (der_len <= 0 || !der) return -1;
-  result = EVP_Digest(der, (size_t)der_len, identifier, NULL, EVP_sha256(), NULL);
+  result = EVP_Digest(der, (size_t)der_len, identifier, &digest_len,
+                      EVP_sha256(), NULL);
   OPENSSL_free(der);
-  return result == 1 ? 0 : -1;
+  return result == 1 && digest_len == MIME_SMIME_SHA256_SIZE ? 0 : -1;
 }
 
 static asn1_value_t *build_enveloped_data(

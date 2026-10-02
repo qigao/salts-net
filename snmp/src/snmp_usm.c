@@ -468,6 +468,19 @@ int usm_create_user(
     if (!user_name || !user) {
         return USM_ERROR_INVALID;
     }
+    if (auth_protocol != SNMP_AUTH_NONE &&
+        auth_protocol != SNMP_AUTH_MD5 &&
+        auth_protocol != SNMP_AUTH_SHA1) {
+        return USM_ERROR_UNSUPPORTED;
+    }
+    if (priv_protocol != SNMP_PRIV_NONE &&
+        priv_protocol != SNMP_PRIV_DES &&
+        priv_protocol != SNMP_PRIV_AES128) {
+        return USM_ERROR_UNSUPPORTED;
+    }
+    if (priv_protocol != SNMP_PRIV_NONE && auth_protocol == SNMP_AUTH_NONE) {
+        return USM_ERROR_INVALID;
+    }
 
     memset(user, 0, sizeof(*user));
     user->user_name = strdup(user_name);

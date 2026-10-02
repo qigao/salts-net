@@ -37,8 +37,7 @@ set_target_properties(saltsnet_package_consumer_test
                       PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 target_link_libraries(
   saltsnet_package_consumer_test
-  PRIVATE SaltsNet::Crypto
-          SaltsNet::Asn1Parser
+  PRIVATE SaltsNet::Asn1Parser
           SaltsNet::SNMP
           SaltsNet::ICE
           SaltsNet::LDAP
@@ -47,6 +46,10 @@ target_link_libraries(
           SaltsNet::Email
           SaltsNet::LB
           SaltsNet::TCPProxy)
+
+if(TARGET SaltsNet::Crypto)
+  message(FATAL_ERROR "Removed Crypto target unexpectedly exported by SaltsNet")
+endif()
 
 if(TARGET SaltsNet::LSQUIC OR TARGET SaltsNet::LSQUICCore)
   message(FATAL_ERROR "Removed LSQUIC target unexpectedly exported by SaltsNet")

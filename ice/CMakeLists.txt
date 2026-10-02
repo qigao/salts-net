@@ -41,7 +41,7 @@ cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ice)
 # Tests
 # ============================================================================
 
-if(BUILD_TESTS)
+if(BUILD_TESTING)
   add_executable(test_stun_cnet tests/test_stun_cnet.c src/ice_cnet_datagram.c src/salts_stun.c)
   target_include_directories(test_stun_cnet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                                                     ${CMAKE_CURRENT_SOURCE_DIR}/src)

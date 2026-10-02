@@ -129,6 +129,6 @@ install(
 # Tests
 # =============================================================================
 
-if(ENABLE_TESTS)
+if(BUILD_TESTING)
   add_subdirectory(test)
 endif()

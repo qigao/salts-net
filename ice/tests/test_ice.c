@@ -4,6 +4,7 @@
 
 #include "ice/salts_ice.h"
 #include "ice/salts_stun.h"
+#include "salts_ice_internal.h"
 #include <salts/clock.h>
 #include <salts/thread.h>
 #include "tinytest.h"
@@ -15,49 +16,6 @@
 #endif
 #include <stdatomic.h>
 #include <string.h>
-
-#define TEST_ICE_CONSENT_TRANSACTION_CAPACITY 10
-
-typedef struct {
-    ice_config_t config;
-    void *progress_owner_reserved;
-    ice_state_t state;
-    ice_gathering_state_t gathering_state;
-    ice_role_t role;
-    uint64_t tie_breaker;
-    char local_ufrag[32];
-    char local_pwd[64];
-    char remote_ufrag[32];
-    char remote_pwd[64];
-    ice_candidate_t local_candidates[ICE_MAX_CANDIDATES];
-    int local_candidate_count;
-    ice_candidate_t remote_candidates[ICE_MAX_CANDIDATES];
-    int remote_candidate_count;
-    ice_candidate_pair_t pairs[ICE_MAX_CANDIDATE_PAIRS];
-    int pair_count;
-    ice_candidate_pair_t *selected_pair;
-    int current_check_pair;
-    stun_transaction_id_t current_txn_id;
-    int checks_in_progress;
-    int valid_pairs_count;
-    uint64_t check_start_time;
-    int pending_stun_requests;
-    int pending_turn_requests;
-    void *turn_clients[ICE_MAX_TURN_SERVERS];
-    int foundation_counter;
-    ice_callbacks_t callbacks;
-    int remote_credentials_set;
-    int remote_candidates_complete;
-    int nomination_started;
-    int selected_pair_io_running;
-    int current_check_nominating;
-    int current_check_select_on_success;
-    stun_transaction_id_t consent_txn_ids[TEST_ICE_CONSENT_TRANSACTION_CAPACITY];
-    uint64_t consent_txn_sent_ms[TEST_ICE_CONSENT_TRANSACTION_CAPACITY];
-    size_t consent_txn_next;
-    uint64_t last_consent_response_ms;
-    uint64_t next_consent_check_ms;
-} test_ice_agent_view_t;
 
 typedef struct {
     salts_ice_agent_t *agent;
@@ -146,7 +104,9 @@ static void on_lifecycle_state_change(salts_ice_agent_t *agent, ice_state_t old_
     }
 }
 
-static void init_local_host_candidate(ice_candidate_t *candidate, const char *ip, uint16_t port,
+static void init_local_host_candidate(ice_candidate_t *candidate,
+                                      ice_candidate_runtime_t *runtime,
+                                      const char *ip, uint16_t port,
                                       int component_id, int local_preference) {
     memset(candidate, 0, sizeof(*candidate));
     candidate->type = ICE_CANDIDATE_TYPE_HOST;
@@ -156,8 +116,8 @@ static void init_local_host_candidate(ice_candidate_t *candidate, const char *ip
     candidate->port = port;
     candidate->priority =
         ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, local_preference, component_id);
-    candidate->is_local = 1;
-    candidate->socket = (void *)1;
+    memset(runtime, 0, sizeof(*runtime));
+    runtime->socket = (void *)1;
     strncpy(candidate->ip, ip, sizeof(candidate->ip) - 1);
     strncpy(candidate->foundation, "test", sizeof(candidate->foundation) - 1);
 }
@@ -167,7 +127,9 @@ static void init_remote_candidate_from_sdp(ice_candidate_t *candidate, const cha
     check_equal(ice_candidate_parse(sdp, candidate), 0);
 }
 
-static void init_local_srflx_candidate(ice_candidate_t *candidate, const char *ip, uint16_t port,
+static void init_local_srflx_candidate(ice_candidate_t *candidate,
+                                       ice_candidate_runtime_t *runtime,
+                                       const char *ip, uint16_t port,
                                        const char *related_ip, uint16_t related_port,
                                        int component_id, int local_preference) {
     memset(candidate, 0, sizeof(*candidate));
@@ -178,8 +140,8 @@ static void init_local_srflx_candidate(ice_candidate_t *candidate, const char *i
     candidate->port = port;
     candidate->priority =
         ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX, local_preference, component_id);
-    candidate->is_local = 1;
-    candidate->socket = (void *)1;
+    memset(runtime, 0, sizeof(*runtime));
+    runtime->socket = (void *)1;
     strncpy(candidate->ip, ip, sizeof(candidate->ip) - 1);
     strncpy(candidate->related_ip, related_ip, sizeof(candidate->related_ip) - 1);
     candidate->related_port = related_port;
@@ -310,7 +272,7 @@ static void ice_role_task(void *arg) {
 }
 
 static int ice_test_wait_for_owner(salts_ice_agent_t *agent, uint64_t timeout_ms) {
-    test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+    salts_ice_agent_t *view = agent;
     test_ice_progress_owner_view_t *progress;
     uint64_t deadline = salts_monotonic_ms() + timeout_ms;
 
@@ -440,7 +402,7 @@ spec("ice") {
             "candidate:1 1 UDP 2130706431 192.0.2.10 40000 typ host";
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
         ice_restart_options_t options = ice_restart_options_default();
         char old_ufrag[32];
         char old_pwd[64];
@@ -477,7 +439,7 @@ spec("ice") {
     it("should reject incompatible restart options and active checks") {
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
         ice_restart_options_t options = ice_restart_options_default();
 
         check_not_null(agent);
@@ -727,10 +689,10 @@ spec("ice") {
             "candidate:1 1 UDP 2130706431 192.168.1.20 40000 typ host";
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
         check_not_null(agent);
 
-        init_local_host_candidate(&view->local_candidates[0], "192.168.1.10", 30000, 1, 65535);
+        init_local_host_candidate(&view->local_candidates[0], &view->local_candidate_runtime[0], "192.168.1.10", 30000, 1, 65535);
         view->local_candidate_count = 1;
         init_remote_candidate_from_sdp(&view->remote_candidates[0], duplicate_candidate);
         view->remote_candidate_count = 1;
@@ -749,7 +711,7 @@ spec("ice") {
         check_equal((const void *)view->pairs[0].remote,
                     (const void *)&view->remote_candidates[0]);
 
-        view->local_candidates[0].socket = NULL;
+        view->local_candidate_runtime[0].socket = NULL;
         ice_agent_destroy(agent);
     }
 
@@ -760,12 +722,12 @@ spec("ice") {
             "candidate:2 1 UDP 2130706431 10.0.0.20 41000 typ host";
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
         ice_candidate_t *selected_remote_before;
         ice_candidate_t *selected_local_before;
         check_not_null(agent);
 
-        init_local_host_candidate(&view->local_candidates[0], "192.168.1.10", 30000, 1, 1000);
+        init_local_host_candidate(&view->local_candidates[0], &view->local_candidate_runtime[0], "192.168.1.10", 30000, 1, 1000);
         view->local_candidate_count = 1;
         init_remote_candidate_from_sdp(&view->remote_candidates[0], existing_candidate);
         view->remote_candidate_count = 1;
@@ -798,7 +760,7 @@ spec("ice") {
         check_equal((const void *)view->pairs[0].remote,
                     (const void *)&view->remote_candidates[1]);
 
-        view->local_candidates[0].socket = NULL;
+        view->local_candidate_runtime[0].socket = NULL;
         ice_agent_destroy(agent);
     }
 
@@ -807,12 +769,12 @@ spec("ice") {
             "candidate:9 1 UDP 1694498815 161.97.65.129 53578 typ srflx raddr 172.17.0.1 rport 41066";
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
 
         check_not_null(agent);
 
-        init_local_host_candidate(&view->local_candidates[0], "172.17.0.1", 41066, 1, 65535);
-        init_local_srflx_candidate(&view->local_candidates[1], "161.97.65.129", 40482,
+        init_local_host_candidate(&view->local_candidates[0], &view->local_candidate_runtime[0], "172.17.0.1", 41066, 1, 65535);
+        init_local_srflx_candidate(&view->local_candidates[1], &view->local_candidate_runtime[1], "161.97.65.129", 40482,
                                    "172.17.0.1", 41066, 1, 65534);
         view->local_candidate_count = 2;
         view->state = ICE_STATE_CONNECTING;
@@ -833,8 +795,8 @@ spec("ice") {
         check_equal(view->pairs[0].local->ip, "172.17.0.1");
         check_equal(view->pairs[0].remote->ip, "161.97.65.129");
 
-        view->local_candidates[0].socket = NULL;
-        view->local_candidates[1].socket = NULL;
+        view->local_candidate_runtime[0].socket = NULL;
+        view->local_candidate_runtime[1].socket = NULL;
         ice_agent_destroy(agent);
     }
 
@@ -843,12 +805,12 @@ spec("ice") {
             "candidate:9 1 UDP 1694498815 161.97.65.129 53578 typ srflx raddr 172.17.0.1 rport 41066";
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
 
         check_not_null(agent);
 
-        init_local_host_candidate(&view->local_candidates[0], "172.17.0.1", 41066, 1, 65535);
-        init_local_srflx_candidate(&view->local_candidates[1], "161.97.65.129", 40482,
+        init_local_host_candidate(&view->local_candidates[0], &view->local_candidate_runtime[0], "172.17.0.1", 41066, 1, 65535);
+        init_local_srflx_candidate(&view->local_candidates[1], &view->local_candidate_runtime[1], "161.97.65.129", 40482,
                                    "172.17.0.1", 41066, 1, 65534);
         view->local_candidate_count = 2;
         init_remote_candidate_from_sdp(&view->remote_candidates[0], remote_public_candidate);
@@ -874,8 +836,8 @@ spec("ice") {
         check(found_existing);
         check(found_new);
 
-        view->local_candidates[0].socket = NULL;
-        view->local_candidates[1].socket = NULL;
+        view->local_candidate_runtime[0].socket = NULL;
+        view->local_candidate_runtime[1].socket = NULL;
         ice_agent_destroy(agent);
     }
 
@@ -911,7 +873,7 @@ spec("ice") {
             "candidate:1 1 UDP 2130706431 192.0.2.10 40000 typ host";
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
         ice_callbacks_t callbacks;
         ice_lifecycle_observer_t observer;
         unsigned char payload = 1;
@@ -980,7 +942,7 @@ spec("ice") {
     it("should complete a cross-thread close on the polling owner") {
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent;
-        test_ice_agent_view_t *view;
+        salts_ice_agent_t *view;
         ice_callbacks_t callbacks;
         ice_lifecycle_observer_t observer;
         ice_poll_task_state_t poll_task;
@@ -993,7 +955,7 @@ spec("ice") {
         agent = ice_agent_create(&config);
         check_not_null(agent);
         check_equal(ice_agent_gather_candidates(agent), 0);
-        view = (test_ice_agent_view_t *)agent;
+        view = agent;
         check(view->local_candidate_count > 0);
 
         memset(&observer, 0, sizeof(observer));
@@ -1032,7 +994,7 @@ spec("ice") {
     it("should defer a cross-thread close until restart returns to its owner") {
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *agent = ice_agent_create(&config);
-        test_ice_agent_view_t *view = (test_ice_agent_view_t *)agent;
+        salts_ice_agent_t *view = agent;
         ice_callbacks_t callbacks;
         ice_restart_close_observer_t observer;
         ice_restart_task_state_t restart_task;
@@ -1199,8 +1161,8 @@ spec("ice") {
         ice_candidate_t left_remote;
         ice_candidate_t right_local;
         ice_candidate_t right_remote;
-        test_ice_agent_view_t *left_view;
-        test_ice_agent_view_t *right_view;
+        salts_ice_agent_t *left_view;
+        salts_ice_agent_t *right_view;
         ice_restart_options_t restart_options = ice_restart_options_default();
         uint64_t initial_consent_time;
         uint64_t consent_deadline;
@@ -1278,8 +1240,8 @@ spec("ice") {
         check(left_local.port != 0);
         check(right_local.port != 0);
 
-        left_view = (test_ice_agent_view_t *)left;
-        right_view = (test_ice_agent_view_t *)right;
+        left_view = (salts_ice_agent_t *)left;
+        right_view = (salts_ice_agent_t *)right;
         check_equal(left_view->checks_in_progress, 0);
         check_equal(right_view->checks_in_progress, 0);
 

@@ -20,7 +20,7 @@ install(
   RUNTIME DESTINATION bin)
 cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/)
 
-if(BUILD_TESTS)
+if(BUILD_TESTING)
   add_subdirectory(tests)
 endif()
 

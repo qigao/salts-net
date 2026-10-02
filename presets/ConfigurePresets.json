@@ -6,7 +6,6 @@
     "configurePresets": [
         {
             "name": "dev-win-msvc-ninja",
-            "hidden": true,
             "displayName": "Developer (Windows, MSVC, Ninja Multi-Config)",
             "inherits": [
                 "base-developer-windows",
@@ -16,7 +15,6 @@
         },
         {
             "name": "release-win-msvc-ninja",
-            "hidden": true,
             "displayName": "Release (Windows, MSVC, Ninja Multi-Config)",
             "inherits": [
                 "base-release-windows",
@@ -26,7 +24,6 @@
         },
         {
             "name": "dev-linux-ninja",
-            "hidden": true,
             "displayName": "Developer (Linux, Ninja)",
             "inherits": [
                 "base-developer-linux",
@@ -36,7 +33,6 @@
         },
         {
             "name": "release-linux-ninja",
-            "hidden": true,
             "displayName": "Release (Linux, Ninja)",
             "inherits": [
                 "base-release-linux",

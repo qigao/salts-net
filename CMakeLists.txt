@@ -39,9 +39,8 @@ endif()
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")
 
-# Enable testing
+# CTest owns the canonical BUILD_TESTING switch and test registration.
 include(CTest)
-enable_testing()
 
 include(CMakeOptions.cmake)
 include(Sanitizers)
@@ -106,7 +105,7 @@ install(
   NAMESPACE SaltsNet::
   DESTINATION "lib/cmake/SaltsNet")
 
-if(BUILD_TESTS AND NOT CMAKE_CROSSCOMPILING)
+if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
   configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake.in"
     "${CMAKE_BINARY_DIR}/VerifyInstalledPackage.cmake"

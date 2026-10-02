@@ -50,7 +50,7 @@ install(FILES ${HEADERS} DESTINATION include)
 # Tests
 # =============================================================================
 
-if(BUILD_TESTS)
+if(BUILD_TESTING)
   add_subdirectory(test)
 endif()
 
@@ -58,10 +58,12 @@ endif()
 # Examples
 # =============================================================================
 
-add_executable(snmp_get_example examples/snmp_get_example.c)
-target_link_libraries(snmp_get_example PRIVATE SaltsNet::SNMP)
-set_target_properties(snmp_get_example PROPERTIES FOLDER snmp/snmp/examples)
+if(BUILD_EXAMPLES)
+  add_executable(snmp_get_example examples/snmp_get_example.c)
+  target_link_libraries(snmp_get_example PRIVATE SaltsNet::SNMP)
+  set_target_properties(snmp_get_example PROPERTIES FOLDER snmp/snmp/examples)
 
-add_executable(snmp_walk_example examples/snmp_walk_example.c)
-target_link_libraries(snmp_walk_example PRIVATE SaltsNet::SNMP)
-set_target_properties(snmp_walk_example PROPERTIES FOLDER snmp/snmp/examples)
+  add_executable(snmp_walk_example examples/snmp_walk_example.c)
+  target_link_libraries(snmp_walk_example PRIVATE SaltsNet::SNMP)
+  set_target_properties(snmp_walk_example PROPERTIES FOLDER snmp/snmp/examples)
+endif()

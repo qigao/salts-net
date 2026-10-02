@@ -33,6 +33,6 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/
         FILES_MATCHING PATTERN "*.h")
 
 # Tests
-if(ENABLE_TESTS)
+if(BUILD_TESTING)
   add_subdirectory(test)
 endif()

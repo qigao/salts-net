@@ -77,6 +77,7 @@ if(BUILD_TESTS)
   set_target_properties(test_turn PROPERTIES FOLDER ice/tests)
 
   add_executable(test_ice tests/test_ice.c)
+  target_include_directories(test_ice PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(test_ice PRIVATE SaltsNet::ICE Salts::TinyTest)
   if(WIN32)
     target_link_libraries(test_ice PRIVATE ws2_32)

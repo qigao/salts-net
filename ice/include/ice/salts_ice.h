@@ -42,7 +42,6 @@ extern "C" {
 #define ICE_MAX_TURN_SERVERS        4
 
 #define ICE_CANDIDATE_FOUNDATION_LEN  32
-#define ICE_CANDIDATE_ID_LEN          8
 #define ICE_UFRAG_LEN                 4   /* Min 4 chars */
 #define ICE_PWD_LEN                   22  /* Min 22 chars */
 
@@ -167,12 +166,6 @@ struct ice_candidate_s {
     char foundation[ICE_CANDIDATE_FOUNDATION_LEN + 1];
     uint32_t priority;
 
-    /* Internal */
-    void *socket;                   /* Private CNet datagram owner for this candidate */
-    void *turn_client;              /* TURN client if relay (salts_turn_client_t) */
-    int io_active;                  /* Internal single-flight guard for socket servicing */
-    int is_local;                   /* 1 = local, 0 = remote */
-    char id[ICE_CANDIDATE_ID_LEN + 1];
 };
 
 /**

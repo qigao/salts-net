@@ -2,6 +2,7 @@
 #include <ice/salts_stun.h>
 #include <ice/salts_turn.h>
 
+#include <cstddef>
 #include <cstring>
 
 static_assert(ICE_CANDIDATE_TYPE_HOST == 0);
@@ -9,6 +10,8 @@ static_assert(ICE_CANDIDATE_TYPE_RELAY == 3);
 static_assert(ICE_STATE_CLOSED == 7);
 static_assert(STUN_MAGIC_COOKIE == 0x2112A442);
 static_assert(TURN_TRANSPORT_UDP == 17);
+static_assert(offsetof(ice_candidate_t, priority) + sizeof(uint32_t) ==
+              sizeof(ice_candidate_t));
 
 int main() {
     ice_transport_t transport = ICE_TRANSPORT_UDP;

@@ -16,6 +16,7 @@
 #include "ice/salts_stun.h"
 #include "ice/salts_turn.h"
 #include "ice_cnet_datagram.h"
+#include "salts_ice_internal.h"
 #include <platform.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -49,7 +50,6 @@
 #define ICE_CONSENT_MIN_BASE_INTERVAL_MS 5000
 #define ICE_CONSENT_MAX_BASE_INTERVAL_MS 20000
 #define ICE_CONSENT_EXPIRY_MS 30000
-#define ICE_CONSENT_TRANSACTION_CAPACITY 10
 
 static void ice_tracef(const char *fmt, ...) {
   const char *path = getenv("SALTSNET_ICE_TRACE");
@@ -144,12 +144,6 @@ static inline uint16_t read_u16_be(const uint8_t *ptr) {
  * ============================================================================ */
 
 
-typedef struct {
-  ice_candidate_t *local;
-  ice_candidate_t *remote;
-  int received_nomination;
-} ice_triggered_check_t;
-
 typedef int (*ice_wait_wake_fn)(void *target);
 
 typedef struct {
@@ -165,72 +159,6 @@ typedef struct {
   void *wait_target;
   ice_wait_wake_fn wait_wake;
 } ice_progress_owner_t;
-
-struct salts_ice_agent_s {
-  ice_config_t config;
-
-  /* Reserved to keep the private test view stable during the API migration. */
-  void *progress_owner_reserved;
-
-  /* State */
-  ice_state_t state;
-  ice_gathering_state_t gathering_state;
-  ice_role_t role;
-  uint64_t tie_breaker;
-
-  /* Credentials */
-  char local_ufrag[32];
-  char local_pwd[64];
-  char remote_ufrag[32];
-  char remote_pwd[64];
-
-  /* Candidates */
-  ice_candidate_t local_candidates[ICE_MAX_CANDIDATES];
-  int local_candidate_count;
-  ice_candidate_t remote_candidates[ICE_MAX_CANDIDATES];
-  int remote_candidate_count;
-
-  /* Candidate pairs */
-  ice_candidate_pair_t pairs[ICE_MAX_CANDIDATE_PAIRS];
-  int pair_count;
-  ice_candidate_pair_t *selected_pair;
-
-  /* Connectivity check state */
-  int current_check_pair;
-  stun_transaction_id_t current_txn_id;
-  int checks_in_progress;
-  int valid_pairs_count;
-  uint64_t check_start_time;
-
-  /* STUN/TURN gathering state */
-  int pending_stun_requests;
-  int pending_turn_requests;
-  salts_turn_client_t *turn_clients[ICE_MAX_TURN_SERVERS];
-
-  /* Foundation counter */
-  int foundation_counter;
-
-  /* Callbacks */
-  ice_callbacks_t callbacks;
-
-  /* Flags */
-  int remote_credentials_set;
-  int remote_candidates_complete;
-  int nomination_started;
-  int selected_pair_io_running;
-  int current_check_nominating;
-  int current_check_select_on_success;
-  stun_transaction_id_t consent_txn_ids[ICE_CONSENT_TRANSACTION_CAPACITY];
-  uint64_t consent_txn_sent_ms[ICE_CONSENT_TRANSACTION_CAPACITY];
-  size_t consent_txn_next;
-  uint64_t last_consent_response_ms;
-  uint64_t next_consent_check_ms;
-  ice_triggered_check_t triggered_checks[ICE_MAX_CANDIDATE_PAIRS];
-  int triggered_check_head;
-  int triggered_check_count;
-  uint64_t last_keepalive_ms;
-};
-
 
 /* ============================================================================
  * Internal Helpers
@@ -257,18 +185,12 @@ static int generate_random_string(char *buf, size_t len) {
   return 0;
 }
 
-static int generate_candidate_id(char *id) {
-  return generate_random_string(id, ICE_CANDIDATE_ID_LEN + 1);
-}
-
 static int initialize_candidate_identity(salts_ice_agent_t *agent, ice_candidate_t *candidate) {
   if (!agent || !candidate)
     return -1;
 
   snprintf(candidate->foundation, sizeof(candidate->foundation), "%d",
            ++agent->foundation_counter);
-  if (generate_candidate_id(candidate->id) != 0)
-    return -1;
   return 0;
 }
 
@@ -278,6 +200,17 @@ static void ice_agent_quiesce_transports(salts_ice_agent_t *agent);
 static void ice_agent_release(salts_ice_agent_t *agent);
 
 static void ice_agent_finish_close(salts_ice_agent_t *agent);
+
+static ice_candidate_runtime_t *ice_candidate_runtime(
+    salts_ice_agent_t *agent, const ice_candidate_t *candidate) {
+  if (!agent || !candidate) return NULL;
+  for (int i = 0; i < ICE_MAX_CANDIDATES; ++i) {
+    if (candidate == &agent->local_candidates[i]) {
+      return &agent->local_candidate_runtime[i];
+    }
+  }
+  return NULL;
+}
 
 static ice_progress_owner_t *ice_agent_progress(const salts_ice_agent_t *agent) {
   return agent ? (ice_progress_owner_t *)agent->progress_owner_reserved : NULL;
@@ -535,10 +468,10 @@ static ice_candidate_t *service_owner_candidate(salts_ice_agent_t *agent, ice_ca
 enum { ICE_DATAGRAM_SEND_TIMEOUT_MS = 3000 };
 
 static int create_candidate_socket(salts_ice_agent_t *agent, ice_candidate_t *candidate) {
+  ice_candidate_runtime_t *runtime = ice_candidate_runtime(agent, candidate);
   ice_cnet_datagram_t *transport;
   uint16_t port = 0u;
-  (void)agent;
-  if (!candidate || candidate->family != AF_INET || candidate->ip[0] == '\0') return -1;
+  if (!candidate || !runtime || candidate->family != AF_INET || candidate->ip[0] == '\0') return -1;
   transport = (ice_cnet_datagram_t *)calloc(1u, sizeof(*transport));
   if (!transport) return -1;
   if (ice_cnet_datagram_init(transport, candidate->ip, 0u, CNET_DATAGRAM_MAX_PAYLOAD_BYTES) !=
@@ -548,7 +481,7 @@ static int create_candidate_socket(salts_ice_agent_t *agent, ice_candidate_t *ca
     free(transport);
     return -1;
   }
-  candidate->socket = transport;
+  runtime->socket = transport;
   candidate->port = port;
   return 0;
 }
@@ -697,7 +630,6 @@ static int gather_host_candidates_win32(salts_ice_agent_t *agent) {
         inet_ntop(AF_INET, &addr4->sin_addr, cand->ip, sizeof(cand->ip));
         cand->port = 0; /* Will be assigned when socket is created */
         cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
-        cand->is_local = 1;
         if (initialize_candidate_identity(agent, cand) != 0) {
           free(addresses);
           return -2;
@@ -753,7 +685,6 @@ static int gather_host_candidates_unix(salts_ice_agent_t *agent) {
       inet_ntop(AF_INET, &addr4->sin_addr, cand->ip, sizeof(cand->ip));
       cand->port = 0;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST, 65535, 1);
-      cand->is_local = 1;
       if (initialize_candidate_identity(agent, cand) != 0) {
         freeifaddrs(ifaddr);
         return -2;
@@ -813,7 +744,9 @@ static void gather_srflx_candidates(salts_ice_agent_t *agent) {
     int base_count = agent->local_candidate_count;
     for (int j = 0; j < base_count && agent->local_candidate_count < ICE_MAX_CANDIDATES; j++) {
       ice_candidate_t *base = &agent->local_candidates[j];
-      if (base->type != ICE_CANDIDATE_TYPE_HOST || !base->socket || base->family != AF_INET) {
+      ice_candidate_runtime_t *base_runtime = ice_candidate_runtime(agent, base);
+      if (base->type != ICE_CANDIDATE_TYPE_HOST || !base_runtime || !base_runtime->socket ||
+          base->family != AF_INET) {
         continue;
       }
 
@@ -848,7 +781,6 @@ static void gather_srflx_candidates(salts_ice_agent_t *agent) {
       strncpy(cand->ip, mapped.ip_str, sizeof(cand->ip) - 1);
       cand->port = mapped.port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX, 65534, 1);
-      cand->is_local = 1;
       if (initialize_candidate_identity(agent, cand) != 0) {
         destroy_candidate_transport(srflx_socket);
         return;
@@ -857,7 +789,7 @@ static void gather_srflx_candidates(salts_ice_agent_t *agent) {
       strncpy(cand->related_ip, related_ip[0] ? related_ip : base->ip,
               sizeof(cand->related_ip) - 1);
       cand->related_port = related_port ? related_port : base->port;
-      cand->socket = srflx_socket;
+      ice_candidate_runtime(agent, cand)->socket = srflx_socket;
 
       agent->local_candidate_count++;
 
@@ -953,15 +885,13 @@ static void gather_relay_candidates(salts_ice_agent_t *agent) {
       strncpy(cand->ip, alloc.relayed_ip, sizeof(cand->ip) - 1);
       cand->port = alloc.relayed_port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_RELAY, 65533, 1);
-      cand->is_local = 1;
       if (initialize_candidate_identity(agent, cand) != 0) {
         return;
       }
 
       strncpy(cand->related_ip, alloc.mapped_ip, sizeof(cand->related_ip) - 1);
       cand->related_port = alloc.mapped_port;
-      cand->turn_client = turn;
-      cand->socket = NULL;
+      ice_candidate_runtime(agent, cand)->turn_client = turn;
 
       agent->local_candidate_count++;
       TLOG_INFOF("Gathered relay candidate {}:{} via {}", cand->ip, cand->port, host);
@@ -1076,21 +1006,22 @@ static void ice_agent_quiesce_transports(salts_ice_agent_t *agent) {
   }
 
   for (int i = 0; i < agent->local_candidate_count; i++) {
-    ice_candidate_t *cand = &agent->local_candidates[i];
-    cand->turn_client = NULL;
-    if (cand->socket) {
+    ice_candidate_runtime_t *runtime = &agent->local_candidate_runtime[i];
+    runtime->turn_client = NULL;
+    runtime->io_active = 0;
+    if (runtime->socket) {
       int already_destroyed = 0;
       for (int j = 0; j < destroyed_socket_count; j++) {
-        if (destroyed_sockets[j] == cand->socket) {
+        if (destroyed_sockets[j] == runtime->socket) {
           already_destroyed = 1;
           break;
         }
       }
       if (!already_destroyed) {
-        destroy_candidate_transport(cand->socket);
-        destroyed_sockets[destroyed_socket_count++] = cand->socket;
+        destroy_candidate_transport(runtime->socket);
+        destroyed_sockets[destroyed_socket_count++] = runtime->socket;
       }
-      cand->socket = NULL;
+      runtime->socket = NULL;
     }
   }
 }
@@ -1508,20 +1439,21 @@ static int send_connectivity_check_internal(salts_ice_agent_t *agent, ice_candid
             pair->remote->port, STUN_TRANSACTION_ID_LEN, active_txn->id);
 
   /* Send via suitable transport */
+  ice_candidate_runtime_t *local_runtime = ice_candidate_runtime(agent, pair->local);
   int rc = -1;
   if (pair->local->type == ICE_CANDIDATE_TYPE_RELAY) {
-    if (pair->local->turn_client) {
+    if (local_runtime && local_runtime->turn_client) {
       ice_tracef("send_connectivity_check relay_send begin local=%s:%u remote=%s:%u nominate=%d",
                  pair->local->ip, (unsigned int)pair->local->port, pair->remote->ip,
                  (unsigned int)pair->remote->port, nominate);
-      rc = turn_client_send((salts_turn_client_t *)pair->local->turn_client, pair->remote->ip,
+      rc = turn_client_send(local_runtime->turn_client, pair->remote->ip,
                             pair->remote->port, stun_buf, len);
       ice_tracef("send_connectivity_check relay_send rc=%d local=%s:%u remote=%s:%u", rc,
                  pair->local->ip, (unsigned int)pair->local->port, pair->remote->ip,
                  (unsigned int)pair->remote->port);
     }
-  } else if (pair->local->socket) {
-    ice_cnet_datagram_t *client = (ice_cnet_datagram_t *)pair->local->socket;
+  } else if (local_runtime && local_runtime->socket) {
+    ice_cnet_datagram_t *client = (ice_cnet_datagram_t *)local_runtime->socket;
     rc = send_udp_to_remote(client, pair->remote->ip, pair->remote->port, stun_buf, (size_t)len);
   }
 
@@ -1675,12 +1607,14 @@ static void handle_stun_request(salts_ice_agent_t *agent, const uint8_t *data, s
   int resp_len =
       stun_build_ice_response(resp_buf, &txn_id, agent->local_pwd, remote_ip, remote_port);
   if (resp_len > 0) {
+    ice_candidate_runtime_t *local_runtime = ice_candidate_runtime(agent, local_cand);
     int send_rc = -1;
-    if (local_cand->type == ICE_CANDIDATE_TYPE_RELAY && local_cand->turn_client) {
-      send_rc = turn_client_send((salts_turn_client_t *)local_cand->turn_client, remote_ip,
+    if (local_cand->type == ICE_CANDIDATE_TYPE_RELAY && local_runtime &&
+        local_runtime->turn_client) {
+      send_rc = turn_client_send(local_runtime->turn_client, remote_ip,
                                  remote_port, resp_buf, resp_len);
-    } else if (local_cand->socket) {
-      ice_cnet_datagram_t *client = (ice_cnet_datagram_t *)local_cand->socket;
+    } else if (local_runtime && local_runtime->socket) {
+      ice_cnet_datagram_t *client = (ice_cnet_datagram_t *)local_runtime->socket;
       send_rc = send_udp_to_remote(client, remote_ip, remote_port, resp_buf, (size_t)resp_len);
     }
     ice_tracef("handle_stun_request response rc=%d from=%s:%u to=%s:%u", send_rc, local_cand->ip,
@@ -1928,7 +1862,8 @@ static int ice_pair_allowed_for_checklist(salts_ice_agent_t *agent, ice_candidat
     return 0;
   }
 
-  if (!local->socket && !local->turn_client) {
+  ice_candidate_runtime_t *local_runtime = ice_candidate_runtime(agent, local);
+  if (!local_runtime || (!local_runtime->socket && !local_runtime->turn_client)) {
     return 0;
   }
   if (local->ip[0] == '\0' || remote->ip[0] == '\0') {
@@ -2065,44 +2000,23 @@ static void rebuild_candidate_pairs(salts_ice_agent_t *agent) {
   }
 }
 
-static ice_candidate_t *service_owner_candidate(salts_ice_agent_t *agent, ice_candidate_t *candidate) {
-  if (!agent || !candidate) {
-    return candidate;
-  }
-
-  for (int i = 0; i < agent->local_candidate_count; ++i) {
-    ice_candidate_t *local = &agent->local_candidates[i];
-
-    if (candidate->socket && local->socket == candidate->socket) {
-      return local;
-    }
-    if (candidate->turn_client && local->turn_client == candidate->turn_client) {
-      return local;
-    }
-  }
-
-  return candidate;
-}
-
 static void service_udp_candidate_socket(salts_ice_agent_t *agent, ice_candidate_t *local_cand,
                                          uint64_t timeout_ms, int allow_data) {
+  ice_candidate_runtime_t *runtime;
   ice_cnet_datagram_t *client;
-  ice_candidate_t *owner;
   uint64_t recv_timeout_ms;
   int drained = 0;
 
-  if (!agent || !local_cand || !local_cand->socket) {
+  if (!agent || !local_cand) {
     return;
   }
-  owner = service_owner_candidate(agent, local_cand);
-  if (owner && owner->io_active) {
+  runtime = ice_candidate_runtime(agent, local_cand);
+  if (!runtime || !runtime->socket || runtime->io_active) {
     return;
   }
-  if (owner) {
-    owner->io_active = 1;
-  }
+  runtime->io_active = 1;
 
-  client = (ice_cnet_datagram_t *)local_cand->socket;
+  client = (ice_cnet_datagram_t *)runtime->socket;
   recv_timeout_ms = timeout_ms;
 
   for (;;) {
@@ -2160,14 +2074,12 @@ static void service_udp_candidate_socket(salts_ice_agent_t *agent, ice_candidate
     recv_timeout_ms = 1;
   }
 
-  if (owner) {
-    owner->io_active = 0;
-  }
+  runtime->io_active = 0;
 }
 
 static void service_turn_candidate_socket(salts_ice_agent_t *agent, ice_candidate_t *local_cand,
                                           uint64_t timeout_ms, int allow_data) {
-  ice_candidate_t *owner;
+  ice_candidate_runtime_t *runtime;
   salts_turn_client_t *turn;
   char peer_ip[64] = {0};
   uint16_t peer_port = 0;
@@ -2176,18 +2088,16 @@ static void service_turn_candidate_socket(salts_ice_agent_t *agent, ice_candidat
   size_t payload_len = 0;
   int rc;
 
-  if (!agent || !local_cand || !local_cand->turn_client) {
+  if (!agent || !local_cand) {
     return;
   }
-  owner = service_owner_candidate(agent, local_cand);
-  if (owner && owner->io_active) {
+  runtime = ice_candidate_runtime(agent, local_cand);
+  if (!runtime || !runtime->turn_client || runtime->io_active) {
     return;
   }
-  if (owner) {
-    owner->io_active = 1;
-  }
+  runtime->io_active = 1;
 
-  turn = (salts_turn_client_t *)local_cand->turn_client;
+  turn = runtime->turn_client;
   if (ice_agent_wait_begin(agent, turn, ice_wake_turn) != 0) {
     rc = SALTS_ECANCELED;
   } else {
@@ -2202,9 +2112,7 @@ static void service_turn_candidate_socket(salts_ice_agent_t *agent, ice_candidat
     if (buf) {
       turn_client_free_recv(buf);
     }
-    if (owner) {
-      owner->io_active = 0;
-    }
+    runtime->io_active = 0;
     return;
   }
 
@@ -2238,15 +2146,11 @@ static void service_turn_candidate_socket(salts_ice_agent_t *agent, ice_candidat
   if (!allow_data && agent->state != ICE_STATE_CONNECTING) {
     ice_tracef("service_turn_candidate_socket stop_after_state_change state=%d local=%s:%u",
                (int)agent->state, local_cand->ip, (unsigned int)local_cand->port);
-    if (owner) {
-      owner->io_active = 0;
-    }
+    runtime->io_active = 0;
     return;
   }
 
-  if (owner) {
-    owner->io_active = 0;
-  }
+  runtime->io_active = 0;
 }
 
 static int schedule_next_consent_check(salts_ice_agent_t *agent, uint64_t now) {
@@ -2291,12 +2195,13 @@ static int send_consent_check(salts_ice_agent_t *agent, uint64_t now) {
   if (stun_len < 0)
     return -1;
 
-  if (pair->local->type == ICE_CANDIDATE_TYPE_RELAY && pair->local->turn_client) {
-    send_rc = turn_client_send((salts_turn_client_t *)pair->local->turn_client,
-                               pair->remote->ip, pair->remote->port,
-                               stun_buf, (size_t)stun_len);
-  } else if (pair->local->socket) {
-    send_rc = send_udp_to_remote((ice_cnet_datagram_t *)pair->local->socket,
+  ice_candidate_runtime_t *local_runtime = ice_candidate_runtime(agent, pair->local);
+  if (pair->local->type == ICE_CANDIDATE_TYPE_RELAY && local_runtime &&
+      local_runtime->turn_client) {
+    send_rc = turn_client_send(local_runtime->turn_client, pair->remote->ip,
+                               pair->remote->port, stun_buf, (size_t)stun_len);
+  } else if (local_runtime && local_runtime->socket) {
+    send_rc = send_udp_to_remote((ice_cnet_datagram_t *)local_runtime->socket,
                                  pair->remote->ip, pair->remote->port,
                                  stun_buf, (size_t)stun_len);
   }
@@ -2347,8 +2252,9 @@ static void service_connectivity_check_io(salts_ice_agent_t *agent, uint64_t tim
   for (int i = 0; i < agent->local_candidate_count; ++i) {
     ice_candidate_t *local = &agent->local_candidates[i];
 
+    ice_candidate_runtime_t *runtime = ice_candidate_runtime(agent, local);
     if (local->type == ICE_CANDIDATE_TYPE_RELAY) {
-      if (local->turn_client) {
+      if (runtime && runtime->turn_client) {
         service_turn_candidate_socket(agent, local, timeout_ms, 0);
         if (agent->state != ICE_STATE_CONNECTING) {
           return;
@@ -2357,7 +2263,7 @@ static void service_connectivity_check_io(salts_ice_agent_t *agent, uint64_t tim
       continue;
     }
 
-    if (local->socket) {
+    if (runtime && runtime->socket) {
       service_udp_candidate_socket(agent, local, timeout_ms, 0);
       if (agent->state != ICE_STATE_CONNECTING) {
         return;
@@ -2635,21 +2541,21 @@ int ice_agent_send(salts_ice_agent_t *agent, const void *data, size_t len) {
 
   ice_candidate_t *local = agent->selected_pair->local;
   ice_candidate_t *remote = agent->selected_pair->remote;
+  ice_candidate_runtime_t *runtime = ice_candidate_runtime(agent, local);
 
   if (local->type == ICE_CANDIDATE_TYPE_HOST || local->type == ICE_CANDIDATE_TYPE_SRFLX) {
-    if (!local->socket) {
+    if (!runtime || !runtime->socket) {
       ice_agent_owner_leave(agent);
       return -4;
     }
-    ice_cnet_datagram_t *client = (ice_cnet_datagram_t *)local->socket;
+    ice_cnet_datagram_t *client = (ice_cnet_datagram_t *)runtime->socket;
     rc = send_udp_to_remote(client, remote->ip, remote->port, data, len);
   } else if (local->type == ICE_CANDIDATE_TYPE_RELAY) {
-    if (!local->turn_client) {
+    if (!runtime || !runtime->turn_client) {
       ice_agent_owner_leave(agent);
       return -5;
     }
-    rc = turn_client_send((salts_turn_client_t *)local->turn_client, remote->ip, remote->port,
-                          data, len);
+    rc = turn_client_send(runtime->turn_client, remote->ip, remote->port, data, len);
   } else {
     ice_agent_owner_leave(agent);
     return -6;

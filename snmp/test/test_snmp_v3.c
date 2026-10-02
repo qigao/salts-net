@@ -222,6 +222,22 @@ spec("snmp_v3") {
     }
   }
 
+  describe("USM User Capability Validation") {
+    it("rejects removed algorithm ids during user creation") {
+        static const uint8_t engine_id[] = {0x80, 0x00, 0x1f, 0x88};
+        snmp_v3_user_t user = {0};
+
+        check_equal(usm_create_user("user", "authpass", (snmp_auth_protocol_t)3,
+                                    NULL, SNMP_PRIV_NONE, engine_id,
+                                    sizeof(engine_id), &user),
+                    USM_ERROR_UNSUPPORTED);
+        check_equal(usm_create_user("user", "authpass", SNMP_AUTH_SHA1,
+                                    "privpass", (snmp_priv_protocol_t)3,
+                                    engine_id, sizeof(engine_id), &user),
+                    USM_ERROR_UNSUPPORTED);
+    }
+  }
+
   describe("USM Privacy (Encryption)") {
     it("should successfully encrypt and decrypt using DES-CBC") {
         uint8_t key[16] = {

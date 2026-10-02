@@ -6,7 +6,7 @@ SaltsNet extends [Salts](https://github.com/qigao/salts) with reusable networkin
 
 Transport/session primitives come from `Salts::CNet`; protocol type metadata comes from `Salts::CMeta`. SaltsNet does not create a second hidden networking runtime, event loop, or compatibility layer.
 
-**Tags:** C11 · networking · protocols · ICE · STUN · TURN · SNMP · LDAP · SMTP · IMAP · proxy · QUIC
+**Tags:** C11 · networking · protocols · ICE · STUN · TURN · SNMP · LDAP · SMTP · IMAP · proxy
 
 ## Built on Salts
 
@@ -45,7 +45,6 @@ SaltsNet is the **network extension layer**. It is intentionally separate from H
 | `SaltsNet::UriParser` | URI parsing component |
 | `SaltsNet::LB` | CNet connection load balancing |
 | `SaltsNet::TCPProxy` | TCP/TLS proxying |
-| `SaltsNet::LSQUIC` | Optional CNet/LSQUIC adaptation |
 
 The URI parser is a concrete package component, but it is not a top-level ecosystem layer or architectural pillar.
 

@@ -115,7 +115,6 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF \
             -DVCPKG_INSTALLED_DIR="$SALTSNET_VCPKG_INSTALLED" \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
-            -DSALTSNET_ENABLE_LSQUIC=OFF \
             -DBUILD_EXAMPLES=OFF \
             -DBUILD_TESTS=ON
           export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTSNET_VCPKG_INSTALLED/x64-linux/lib:${LD_LIBRARY_PATH:-}"

@@ -67,9 +67,6 @@ add_subdirectory(tools)
 include(FindTools)
 add_subdirectory(vendor)
 
-if(SALTSNET_ENABLE_LSQUIC)
-  add_subdirectory(lsquic)
-endif()
 
 add_subdirectory(ice)
 add_subdirectory(snmp)

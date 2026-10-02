@@ -7,13 +7,6 @@
 #include <salts_tcp_proxy.h>
 #include <uri_parser.h>
 
-#ifndef SALTSNET_PACKAGE_HAS_LSQUIC
-#define SALTSNET_PACKAGE_HAS_LSQUIC 0
-#endif
-
-#if SALTSNET_PACKAGE_HAS_LSQUIC
-#include <salts_lsquic.h>
-#endif
 
 #include <string.h>
 
@@ -31,9 +24,6 @@ int main(void) {
     return 1;
   }
 
-#if SALTSNET_PACKAGE_HAS_LSQUIC
-  if (salts_lsquic_config_default().send_capacity == 0u) return 1;
-#endif
 
   return 0;
 }

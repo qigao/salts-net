@@ -185,6 +185,6 @@ Do not delete `CoroNet/` until those consumers have replacement tests and implem
   stale request id before accepting the matching response.
 - The Release SNMP slice passed `test_snmp`, `test_snmp_cnet`, `test_snmp_v3`,
   `test_asn1_roundtrip`, and `test_context_specific`.
-- Remaining removal blockers are LDAP; SMTP/IMAP/POP3; ICE/STUN/TURN; LB/TProxy; and the optional
-  LSQUIC CoroNet adapter. These retain public or implementation-level coroutine ownership and need
+- Remaining removal blockers are LDAP; SMTP/IMAP/POP3; ICE/STUN/TURN; and LB/TProxy. These retain
+  public or implementation-level coroutine ownership and need
   their own replacement tests before `CoroNet/` can be deleted.

@@ -37,16 +37,14 @@ Enum(snmp_security_level_t,
 Enum(snmp_auth_protocol_t,
     (SNMP_AUTH_NONE, 0, "none"),
     (SNMP_AUTH_MD5, 1, "md5"),
-    (SNMP_AUTH_SHA1, 2, "sha1"),
-    (SNMP_AUTH_SHA256, 3, "sha256")
+    (SNMP_AUTH_SHA1, 2, "sha1")
 );
 
 /* Privacy (encryption) protocols */
 Enum(snmp_priv_protocol_t,
     (SNMP_PRIV_NONE, 0, "none"),
     (SNMP_PRIV_DES, 1, "des"),
-    (SNMP_PRIV_AES128, 2, "aes128"),
-    (SNMP_PRIV_AES256, 3, "aes256")
+    (SNMP_PRIV_AES128, 2, "aes128")
 );
 
 /* USM Security Parameters */
@@ -67,11 +65,11 @@ typedef struct {
     snmp_priv_protocol_t priv_protocol; /* Privacy protocol */
 
     /* Authentication key (localized) */
-    uint8_t auth_key[32];               /* Max 32 bytes for SHA-256 */
+    uint8_t auth_key[32];               /* Capacity; MD5/SHA-1 use 16/20 bytes */
     size_t auth_key_len;
 
     /* Privacy key (localized) */
-    uint8_t priv_key[32];               /* Max 32 bytes for AES-256 */
+    uint8_t priv_key[32];               /* Capacity; DES/AES-128 require 16 bytes */
     size_t priv_key_len;
 } snmp_v3_user_t;
 

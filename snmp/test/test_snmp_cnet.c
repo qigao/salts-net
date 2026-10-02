@@ -667,7 +667,7 @@ spec("SNMP CNet transport") {
     check_equal(exchange.agent_status, 0);
   }
 
-  it("rejects AES-256 before opening the transport") {
+  it("rejects unknown privacy protocol before opening the transport") {
     const snmp_client_config_t config = {
         .host = "127.0.0.1",
         .port = 161u,
@@ -680,7 +680,7 @@ spec("SNMP CNet transport") {
         .auth_password = "authpass",
         .auth_protocol = SNMP_AUTH_SHA1,
         .priv_password = "privpass",
-        .priv_protocol = SNMP_PRIV_AES256,
+        .priv_protocol = (snmp_priv_protocol_t)3,
         .security_level = SNMP_SEC_LEVEL_AUTH_PRIV};
     snmp_client_t *client = snmp_client_create(&config);
     check_null(client);

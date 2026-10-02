@@ -55,8 +55,7 @@
             "name": "release-mode",
             "hidden": true,
             "cacheVariables": {
-                "CMAKE_BUILD_TYPE": "Release",
-                "BUILD_TESTING": false
+                "CMAKE_BUILD_TYPE": "Release"
             },
             "inherits": [
                 "default-options"

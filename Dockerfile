@@ -4,7 +4,6 @@ FROM debian:bookworm
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG CMAKE_VERSION=3.31.0
 ARG VCPKG_REF=master
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bison \
     build-essential \
     ca-certificates \
+    cmake \
     curl \
     flex \
     git \
@@ -29,11 +29,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh" \
-    -o /tmp/cmake-install.sh \
-    && chmod +x /tmp/cmake-install.sh \
-    && /tmp/cmake-install.sh --skip-license --prefix=/usr/local \
-    && rm -f /tmp/cmake-install.sh
 
 RUN git clone https://github.com/microsoft/vcpkg /opt/vcpkg \
     && cd /opt/vcpkg \

@@ -142,7 +142,7 @@ if(WIN32)
     list(APPEND saltsnet_runtime_directories
          "${saltsnet_vcpkg_runtime_root}/debug/bin")
   endif()
-  if(@ENABLE_ASAN@)
+  if(@ENABLE_SANITIZER_ADDRESS@)
     find_file(saltsnet_asan_runtime
               NAMES clang_rt.asan_dynamic-x86_64.dll
               PATHS ENV PATH

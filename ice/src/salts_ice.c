@@ -1304,8 +1304,6 @@ int ice_agent_add_remote_candidate(salts_ice_agent_t *agent, const char *candida
     goto done;
   }
 
-  parsed.is_local = 0;
-
   for (int i = 0; i < agent->remote_candidate_count; i++) {
     if (ice_candidates_equivalent(&agent->remote_candidates[i], &parsed)) {
       ice_tracef("ice_agent_add_remote_candidate duplicate_ignored current_remote=%d candidate=%s",

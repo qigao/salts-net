@@ -5,6 +5,9 @@ on:
     branches: [master]
     paths:
       - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "CMakePresets.json"
+      - "presets/**"
       - "cmake/**"
       - "ice/**"
       - "snmp/**"
@@ -116,7 +119,7 @@ jobs:
             -DVCPKG_INSTALLED_DIR="$SALTSNET_VCPKG_INSTALLED" \
             -DVCPKG_INSTALL_OPTIONS=--only-binarycaching \
             -DBUILD_EXAMPLES=OFF \
-            -DBUILD_TESTS=ON
+            -DBUILD_TESTING=ON
           export LD_LIBRARY_PATH="$SALTS_ROOT/lib:$SALTSNET_VCPKG_INSTALLED/x64-linux/lib:${LD_LIBRARY_PATH:-}"
           cmake --build build/released-sdk --parallel 2
           ctest --test-dir build/released-sdk --no-tests=error --output-on-failure

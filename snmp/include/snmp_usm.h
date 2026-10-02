@@ -5,8 +5,8 @@
  * Implements:
  * - Key derivation (password → key)
  * - Key localization (key + engineID → localized key)
- * - Authentication (HMAC-MD5, HMAC-SHA-1, HMAC-SHA-256)
- * - Privacy (DES-CBC, AES-128-CFB, AES-256-CFB)
+ * - Authentication (HMAC-MD5-96, HMAC-SHA-96)
+ * - Privacy (DES-CBC, AES-128-CFB)
  */
 
 #ifndef SNMP_USM_H
@@ -30,9 +30,6 @@ extern "C" {
 #define USM_ERROR_DECRYPT      -3
 #define USM_ERROR_UNSUPPORTED  -4
 
-/**
- * Password-to-key derivation (RFC 3414 Section 2.6)
- *
 /**
  * Password-to-key derivation (RFC 3414 Section 2.6)
  *

@@ -118,10 +118,6 @@ int usm_password_to_key(
             SHA1(buffer, 1048576, key);
             *key_len = 20;
             break;
-        case SNMP_AUTH_SHA256:
-            SHA256(buffer, 1048576, key);
-            *key_len = 32;
-            break;
         default:
             result = USM_ERROR_UNSUPPORTED;
             break;
@@ -177,10 +173,6 @@ int usm_localize_key(
             SHA1(buffer, offset, localized_key);
             *localized_key_len = 20;
             break;
-        case SNMP_AUTH_SHA256:
-            SHA256(buffer, offset, localized_key);
-            *localized_key_len = 32;
-            break;
         default:
             result = USM_ERROR_UNSUPPORTED;
             break;
@@ -215,8 +207,6 @@ int usm_compute_auth(
         case SNMP_AUTH_SHA1:
             md = EVP_sha1();
             break;
-        case SNMP_AUTH_SHA256:
-            return USM_ERROR_UNSUPPORTED;
         default:
             return USM_ERROR_UNSUPPORTED;
     }
@@ -326,10 +316,10 @@ int usm_encrypt(
 
         free(padded);
 
-    } else if (priv_protocol == SNMP_PRIV_AES128 || priv_protocol == SNMP_PRIV_AES256) {
-        /* AES-CFB encryption (RFC 3826) */
-        int key_bits = (priv_protocol == SNMP_PRIV_AES128) ? 128 : 256;
-        size_t required_key_len = key_bits / 8;
+    } else if (priv_protocol == SNMP_PRIV_AES128) {
+        /* AES-128-CFB encryption (RFC 3826) */
+        const int key_bits = 128;
+        const size_t required_key_len = 16u;
 
         if (key_len < required_key_len || *ciphertext_len < plaintext_len) {
             return USM_ERROR_INVALID;
@@ -430,10 +420,10 @@ int usm_decrypt(
             *plaintext_len = 0;
         }
 
-    } else if (priv_protocol == SNMP_PRIV_AES128 || priv_protocol == SNMP_PRIV_AES256) {
-        /* AES-CFB decryption (RFC 3826) */
-        int key_bits = (priv_protocol == SNMP_PRIV_AES128) ? 128 : 256;
-        size_t required_key_len = key_bits / 8;
+    } else if (priv_protocol == SNMP_PRIV_AES128) {
+        /* AES-128-CFB decryption (RFC 3826) */
+        const int key_bits = 128;
+        const size_t required_key_len = 16u;
 
         if (key_len < required_key_len || *plaintext_len < ciphertext_len) {
             return USM_ERROR_INVALID;
@@ -476,6 +466,19 @@ int usm_create_user(
     snmp_v3_user_t *user
 ) {
     if (!user_name || !user) {
+        return USM_ERROR_INVALID;
+    }
+    if (auth_protocol != SNMP_AUTH_NONE &&
+        auth_protocol != SNMP_AUTH_MD5 &&
+        auth_protocol != SNMP_AUTH_SHA1) {
+        return USM_ERROR_UNSUPPORTED;
+    }
+    if (priv_protocol != SNMP_PRIV_NONE &&
+        priv_protocol != SNMP_PRIV_DES &&
+        priv_protocol != SNMP_PRIV_AES128) {
+        return USM_ERROR_UNSUPPORTED;
+    }
+    if (priv_protocol != SNMP_PRIV_NONE && auth_protocol == SNMP_AUTH_NONE) {
         return USM_ERROR_INVALID;
     }
 

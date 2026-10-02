@@ -89,15 +89,17 @@ spec("snmp_v3") {
 
         check_equal((int)SNMP_VERSION_3, 3);
         check_equal((int)SNMP_SEC_LEVEL_AUTH_PRIV, 3);
-        check_equal((int)SNMP_AUTH_SHA256, 3);
-        check_equal((int)SNMP_PRIV_AES256, 3);
         check_equal(snmp_version_t_meta()->count, (size_t)3);
+        check_equal(snmp_auth_protocol_t_meta()->count, (size_t)3);
+        check_equal(snmp_priv_protocol_t_meta()->count, (size_t)3);
         check_equal(snmp_security_level_t_to_string(SNMP_SEC_LEVEL_AUTH_NOPRIV),
                     "auth_no_priv");
         check_true(snmp_auth_protocol_t_from_string("sha1", &parsed_auth));
         check_equal(parsed_auth, SNMP_AUTH_SHA1);
-        check_true(snmp_priv_protocol_t_from_string("aes256", &parsed_priv));
-        check_equal(parsed_priv, SNMP_PRIV_AES256);
+        check_true(snmp_priv_protocol_t_from_string("aes128", &parsed_priv));
+        check_equal(parsed_priv, SNMP_PRIV_AES128);
+        check(!snmp_auth_protocol_t_from_string("sha256", &parsed_auth));
+        check(!snmp_priv_protocol_t_from_string("aes256", &parsed_priv));
     }
   }
 
@@ -198,6 +200,41 @@ spec("snmp_v3") {
         );
 
         check_equal(result, USM_ERROR_AUTH_FAILED);
+    }
+  }
+
+  describe("Unsupported USM algorithm IDs") {
+    it("rejects removed authentication and privacy algorithm ids") {
+        uint8_t key[32] = {0};
+        size_t key_len = 0u;
+        uint8_t plaintext[1] = {0};
+        uint8_t ciphertext[1] = {0};
+        uint8_t salt[8] = {0};
+        size_t ciphertext_len = sizeof(ciphertext);
+
+        check_equal(usm_password_to_key("password", (snmp_auth_protocol_t)3,
+                                        key, &key_len),
+                    USM_ERROR_UNSUPPORTED);
+        check_equal(usm_encrypt(plaintext, sizeof(plaintext), key, sizeof(key),
+                                (snmp_priv_protocol_t)3, 1u, 1u, salt,
+                                ciphertext, &ciphertext_len),
+                    USM_ERROR_UNSUPPORTED);
+    }
+  }
+
+  describe("USM User Capability Validation") {
+    it("rejects removed algorithm ids during user creation") {
+        static const uint8_t engine_id[] = {0x80, 0x00, 0x1f, 0x88};
+        snmp_v3_user_t user = {0};
+
+        check_equal(usm_create_user("user", "authpass", (snmp_auth_protocol_t)3,
+                                    NULL, SNMP_PRIV_NONE, engine_id,
+                                    sizeof(engine_id), &user),
+                    USM_ERROR_UNSUPPORTED);
+        check_equal(usm_create_user("user", "authpass", SNMP_AUTH_SHA1,
+                                    "privpass", (snmp_priv_protocol_t)3,
+                                    engine_id, sizeof(engine_id), &user),
+                    USM_ERROR_UNSUPPORTED);
     }
   }
 

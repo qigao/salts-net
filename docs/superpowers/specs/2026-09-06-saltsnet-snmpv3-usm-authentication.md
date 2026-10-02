@@ -43,9 +43,10 @@ wire locator is required; it is never accepted without authentication.
   and digest mismatch from ordinary syntax errors.
 - `authPriv` without authentication is rejected.
 - HMAC-MD5-96 and HMAC-SHA-96 retain their twelve-octet wire contract.
-- The existing `SNMP_AUTH_SHA256` value cannot implement RFC 7860 with the
-  current twelve-byte public buffer. Authenticated message construction rejects
-  it until a size-versioned USM credential/message API is introduced.
+- SHA-2 authentication is not exposed by the current public contract because
+  the twelve-byte authentication-parameter storage is specific to the
+  MD5-96/SHA-96 contract. SHA-2 support requires a size-versioned
+  USM credential/message API before it can be advertised.
 
 ## Verification
 

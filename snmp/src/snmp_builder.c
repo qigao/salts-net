@@ -512,8 +512,7 @@ static int snmp_build_v3_pdu(asn1_value_t *pdu, int32_t request_id,
     if (security_level == SNMP_SEC_LEVEL_AUTH_PRIV &&
         (user->priv_protocol == SNMP_PRIV_NONE ||
          (user->priv_protocol == SNMP_PRIV_DES && user->priv_key_len < 16u) ||
-         (user->priv_protocol == SNMP_PRIV_AES128 && user->priv_key_len < 16u) ||
-         (user->priv_protocol == SNMP_PRIV_AES256 && user->priv_key_len < 32u))) {
+         (user->priv_protocol == SNMP_PRIV_AES128 && user->priv_key_len < 16u))) {
         asn1_free(pdu);
         return SNMP_BUILD_ERROR_INVALID;
     }

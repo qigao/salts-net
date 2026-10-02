@@ -10,10 +10,15 @@ RUN vcpkg install --triplet x64-linux
 
 COPY . ./
 
-RUN cmake --preset linux-release-user \
-    -D BUILD_EXAMPLES=OFF \
-    -D BUILD_TESTS=OFF \
-    && cmake --build --preset linux-release-user
+RUN cmake -S . -B build/docker -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+    -DVCPKG_TARGET_TRIPLET=x64-linux \
+    -DVCPKG_MANIFEST_MODE=OFF \
+    -DVCPKG_INSTALLED_DIR=/workspace/vcpkg_installed \
+    -DBUILD_TESTING=OFF \
+    -DBUILD_EXAMPLES=OFF \
+    && cmake --build build/docker
 
 # Optional:
 # RUN ctest --preset linux-release-user

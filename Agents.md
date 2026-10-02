@@ -219,8 +219,8 @@
 
 1. **TurboUtils**（仓库 `utils/` 模块；构建时优先通过 CMake target `TurboUtils::Core` 使用）— 最优先
 2. **项目内模块**（`exprtk/`、`plugins/` 等）
-3. **vendor/ 库**（sds、croar、mir、monocypher、sha2、uuid、miniblas）
-4. **vcpkg 依赖**（xxhash、sqlite3、zstd、openssl、c-ares、aklomp-base64、simde）
+3. **vendor/ 库**（仅允许存在明确 production consumer 的 vendored dependency；当前仓库无通用 vendor 层）
+4. **vcpkg 依赖**（以 `vcpkg.json` 为唯一事实源；当前仅保留实际使用的依赖）
 5. **C 标准库**（libc：`string.h`、`stdlib.h`、`stdio.h`）
 6. **底层系统 API**（仅允许封装在 TurboUtils 平台/协程适配层或项目适配层之后使用）
 

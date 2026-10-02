@@ -65,7 +65,6 @@ find_package(
 # Additional components
 add_subdirectory(tools)
 include(FindTools)
-add_subdirectory(vendor)
 
 
 add_subdirectory(ice)

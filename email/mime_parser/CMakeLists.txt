@@ -19,7 +19,7 @@ cmake_config_target(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC Salts::Core OpenSSL::SSL OpenSSL::Crypto
-  PRIVATE uri_parser SaltsNet::Asn1Parser SaltsNet::Crypto)
+  PRIVATE uri_parser SaltsNet::Asn1Parser)
 
 target_include_directories(
   ${TARGET_NAME} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

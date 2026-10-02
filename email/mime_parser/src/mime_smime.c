@@ -2,10 +2,11 @@
 
 #include "asn1_types.h"
 #include "base64_utils.h"
-#include "turbo_crypto.h"
 #include "salts_simd_scan.h"
 
 #include <openssl/evp.h>
+#include <openssl/mem.h>
+#include <openssl/rand.h>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
@@ -18,6 +19,7 @@
 
 #define MIME_SMIME_AES_KEY_SIZE 32U
 #define MIME_SMIME_AES_IV_SIZE 16U
+#define MIME_SMIME_SHA256_SIZE 32U
 #define MIME_SMIME_BOUNDARY "saltsnet-smime-boundary"
 
 #define OID_CMS_DATA "1.2.840.113549.1.7.1"
@@ -241,7 +243,7 @@ static int rsa_decrypt_key(EVP_PKEY *private_key, const uint8_t *encrypted,
   ok = 0;
 
 cleanup:
-  if (buffer) turbo_crypto_wipe(buffer, required);
+  if (buffer) OPENSSL_cleanse(buffer, required);
   free(buffer);
   EVP_PKEY_CTX_free(rsa);
   return ok;
@@ -292,18 +294,18 @@ static int rsa_sha256_verify(X509 *cert, const uint8_t *data, size_t data_len,
 }
 
 static int certificate_identifier(X509 *cert,
-                                  uint8_t identifier[TURBO_CRYPTO_SHA256_SIZE]) {
+                                  uint8_t identifier[MIME_SMIME_SHA256_SIZE]) {
   uint8_t *der = NULL;
   int der_len = i2d_X509(cert, &der);
   int result;
   if (der_len <= 0 || !der) return -1;
-  result = turbo_crypto_sha256(der, (size_t)der_len, identifier);
+  result = EVP_Digest(der, (size_t)der_len, identifier, NULL, EVP_sha256(), NULL);
   OPENSSL_free(der);
-  return result == TURBO_CRYPTO_OK ? 0 : -1;
+  return result == 1 ? 0 : -1;
 }
 
 static asn1_value_t *build_enveloped_data(
-    const uint8_t identifier[TURBO_CRYPTO_SHA256_SIZE],
+    const uint8_t identifier[MIME_SMIME_SHA256_SIZE],
     const uint8_t *encrypted_key, size_t encrypted_key_len,
     const uint8_t iv[MIME_SMIME_AES_IV_SIZE], const uint8_t *ciphertext,
     size_t ciphertext_len) {
@@ -329,7 +331,7 @@ static asn1_value_t *build_enveloped_data(
       add_sequence_child(recipient, asn1_create_integer(2)) ||
       add_sequence_child(recipient,
                          context_value(0, 0, identifier,
-                                       TURBO_CRYPTO_SHA256_SIZE)) ||
+                                       MIME_SMIME_SHA256_SIZE)) ||
       add_sequence_child(recipient,
                          algorithm_identifier(OID_RSA_ENCRYPTION, NULL, 0)) ||
       add_sequence_child(recipient,
@@ -365,7 +367,7 @@ fail_owned:
 }
 
 static asn1_value_t *build_signed_data(
-    const uint8_t identifier[TURBO_CRYPTO_SHA256_SIZE],
+    const uint8_t identifier[MIME_SMIME_SHA256_SIZE],
     const uint8_t *signature, size_t signature_len) {
   asn1_value_t *content_info = asn1_create_sequence();
   asn1_value_t *explicit_content = context_value(0, 1, NULL, 0);
@@ -390,7 +392,7 @@ static asn1_value_t *build_signed_data(
       add_sequence_child(signer, asn1_create_integer(3)) ||
       add_sequence_child(signer,
                          context_value(0, 0, identifier,
-                                       TURBO_CRYPTO_SHA256_SIZE)) ||
+                                       MIME_SMIME_SHA256_SIZE)) ||
       add_sequence_child(signer,
                          algorithm_identifier(OID_SHA256, NULL, 0)) ||
       add_sequence_child(signer,
@@ -676,7 +678,7 @@ char *mime_smime_encrypt(mime_smime_ctx_t *ctx, const char *message,
                          mime_smime_error_t *error) {
   uint8_t key[MIME_SMIME_AES_KEY_SIZE];
   uint8_t iv[MIME_SMIME_AES_IV_SIZE];
-  uint8_t identifier[TURBO_CRYPTO_SHA256_SIZE];
+  uint8_t identifier[MIME_SMIME_SHA256_SIZE];
   uint8_t *ciphertext = NULL;
   size_t ciphertext_len = 0;
   uint8_t *encrypted_key = NULL;
@@ -689,8 +691,8 @@ char *mime_smime_encrypt(mime_smime_ctx_t *ctx, const char *message,
 
   if (!ctx || !ctx->cert || (!message && message_len != 0) || !output_len)
     goto cleanup;
-  if (turbo_crypto_random(key, sizeof(key)) != TURBO_CRYPTO_OK ||
-      turbo_crypto_random(iv, sizeof(iv)) != TURBO_CRYPTO_OK ||
+  if (RAND_bytes(key, (int)sizeof(key)) != 1 ||
+      RAND_bytes(iv, (int)sizeof(iv)) != 1 ||
       certificate_identifier(ctx->cert, identifier) != 0 ||
       encrypt_aes256_cbc((const uint8_t *)message, message_len, key, iv,
                          &ciphertext, &ciphertext_len) != 0 ||
@@ -710,7 +712,7 @@ char *mime_smime_encrypt(mime_smime_ctx_t *ctx, const char *message,
   result_error = MIME_SMIME_OK;
 
 cleanup:
-  turbo_crypto_wipe(key, sizeof(key));
+  OPENSSL_cleanse(key, sizeof(key));
   free(ciphertext);
   free(encrypted_key);
   asn1_free(cms);
@@ -792,7 +794,7 @@ char *mime_smime_decrypt(mime_smime_ctx_t *ctx, const char *encrypted,
   result_error = MIME_SMIME_OK;
 
 cleanup:
-  turbo_crypto_wipe(key, sizeof(key));
+  OPENSSL_cleanse(key, sizeof(key));
   free(der);
   asn1_free(root);
   if (error) *error = result_error;
@@ -802,7 +804,7 @@ cleanup:
 char *mime_smime_sign(mime_smime_ctx_t *ctx, const char *message,
                       size_t message_len, size_t *output_len,
                       mime_smime_error_t *error) {
-  uint8_t identifier[TURBO_CRYPTO_SHA256_SIZE];
+  uint8_t identifier[MIME_SMIME_SHA256_SIZE];
   uint8_t *signature = NULL;
   size_t signature_len = 0;
   asn1_value_t *cms = NULL;

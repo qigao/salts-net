@@ -409,9 +409,119 @@ jobs:
           if-no-files-found: error
           compression-level: 9
 
+  ios:
+    name: iOS SDK / ${{ matrix.name }}
+    needs: metadata
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: device arm64, triplet: arm64-ios, rid: ios-arm64, sysroot: iphoneos}
+          - {name: simulator arm64, triplet: arm64-ios-simulator, rid: ios-simulator-arm64, sysroot: iphonesimulator}
+    env:
+      X_VCPKG_NUGET_ID_PREFIX: vcpkg-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@master
+        with:
+          mode: read
+      - uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@master
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Prepare iOS host tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          brew install ninja nasm
+          cc tools/lemon/lemon.c -O2 -o "$RUNNER_TEMP/lemon"
+          chmod +x "$RUNNER_TEMP/lemon"
+          echo "LEMON_EXECUTABLE=$RUNNER_TEMP/lemon" >> "$GITHUB_ENV"
+
+      - name: Restore latest Salts iOS SDK
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          config="$RUNNER_TEMP/saltsnet-ios.config"
+          project="$RUNNER_TEMP/saltsnet-ios.csproj"
+          packages="$RUNNER_TEMP/saltsnet-ios-packages"
+          printf '<configuration><packageSources><clear /></packageSources></configuration>\n' > "$config"
+          dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json \
+            --name github --username qigao --password "$GITHUB_TOKEN" \
+            --store-password-in-clear-text --configfile "$config"
+          cat > "$project" <<EOF
+          <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="*" /></ItemGroup></Project>
+          EOF
+          dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache --force-evaluate
+          salts_count="$(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d ' ')"
+          test "$salts_count" -eq 1
+          salts_dir="$(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$salts_dir"
+          salts_version="$(basename "$salts_dir")"
+          salts_root="$salts_dir/sdk/${{ matrix.rid }}"
+          test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"
+          echo "SALTS_ROOT=$salts_root" >> "$GITHUB_ENV"
+          echo "SALTS_PACKAGE_VERSION=$salts_version" >> "$GITHUB_ENV"
+
+      - name: Restore iOS vcpkg dependencies cache-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$GITHUB_WORKSPACE/vcpkg_installed-${{ matrix.triplet }}"
+          rm -rf "$install_root"
+          "$VCPKG_ROOT/vcpkg" install \
+            --x-manifest-root=. \
+            --x-install-root="$install_root" \
+            --triplet "${{ matrix.triplet }}" \
+            --only-binarycaching
+          echo "SALTSNET_IOS_VCPKG_INSTALLED=$install_root" >> "$GITHUB_ENV"
+
+      - name: Build and install iOS SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          build="$GITHUB_WORKSPACE/build/${{ matrix.rid }}"
+          prefix="$GITHUB_WORKSPACE/stage/sdk/${{ matrix.rid }}"
+          cmake -S . -B "$build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT="${{ matrix.sysroot }}" \
+            -DCMAKE_TOOLCHAIN_FILE="$QIGAO_VCPKG_TOOLCHAIN_FILE" \
+            -DVCPKG_TARGET_TRIPLET="${{ matrix.triplet }}" \
+            -DVCPKG_MANIFEST_MODE=OFF \
+            -DVCPKG_INSTALLED_DIR="$SALTSNET_IOS_VCPKG_INSTALLED" \
+            -DLEMON_EXECUTABLE="$LEMON_EXECUTABLE" \
+            -DPERL_EXECUTABLE="$(command -v perl)" \
+            -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DBUILD_TESTING=OFF -DBUILD_EXAMPLES=OFF
+          cmake --build "$build" --parallel 2
+          cmake --install "$build"
+          test -f "$prefix/lib/cmake/SaltsNet/SaltsNetConfig.cmake"
+          cat > "$prefix/saltsnet-sdk-manifest.txt" <<EOF
+          version=${{ needs.metadata.outputs.version }}
+          commit=${{ needs.metadata.outputs.source_commit }}
+          salts=$SALTS_PACKAGE_VERSION
+          rid=${{ matrix.rid }}
+          triplet=${{ matrix.triplet }}
+          build_type=Release
+          qualification=compile-link
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-sdk-${{ matrix.rid }}
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+
   pack:
     name: Pack SaltsNet.Native
-    needs: [metadata, linux, windows, macos, android]
+    needs: [metadata, linux, windows, macos, android, ios]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -427,9 +537,11 @@ jobs:
           test -f package/sdk/linux-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           test -f package/sdk/windows-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           test -f package/sdk/android-arm64-v8a/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/ios-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/ios-simulator-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           mac_config="$(find package/sdk -path '*macos-*/lib/cmake/SaltsNet/SaltsNetConfig.cmake' -print -quit)"
           test -n "$mac_config"
-          test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 4
+          test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 6
           mapfile -t salts_versions < <(
             sed -n 's/^salts=//p' package/sdk/*/saltsnet-sdk-manifest.txt | tr -d '\r' | sort -u
           )

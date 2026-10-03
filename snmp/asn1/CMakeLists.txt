@@ -102,22 +102,31 @@ set_target_properties(
 # MIB Compiler Executable
 # =============================================================================
 
-add_executable(mib_compiler
-               ${CMAKE_CURRENT_SOURCE_DIR}/tools/mib_compiler_main.c)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  add_executable(mib_compiler
+                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/mib_compiler_main.c)
 
-target_link_libraries(mib_compiler PRIVATE ${TARGET_NAME})
-target_include_directories(mib_compiler
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+  target_link_libraries(mib_compiler PRIVATE ${TARGET_NAME})
+  target_include_directories(mib_compiler
+                             PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-set_target_properties(mib_compiler PROPERTIES FOLDER snmp/asn1/tools)
+  set_target_properties(mib_compiler PROPERTIES FOLDER snmp/asn1/tools)
+endif()
 
 # Install
 install(
-  TARGETS ${TARGET_NAME} mib_compiler
+  TARGETS ${TARGET_NAME}
   EXPORT SaltsNetTargets
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib
   RUNTIME DESTINATION bin)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  install(
+    TARGETS mib_compiler
+    EXPORT SaltsNetTargets
+    RUNTIME DESTINATION bin)
+endif()
 
 install(
   DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/

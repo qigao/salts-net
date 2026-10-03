@@ -458,9 +458,10 @@ jobs:
           <Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net8.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="Salts.Native" Version="*" /></ItemGroup></Project>
           EOF
           dotnet restore "$project" --configfile "$config" --packages "$packages" --no-cache --force-evaluate
-          mapfile -t salts_versions < <(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print)
-          test "${#salts_versions[@]}" -eq 1
-          salts_dir="${salts_versions[0]}"
+          salts_count="$(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d ' ')"
+          test "$salts_count" -eq 1
+          salts_dir="$(find "$packages/salts.native" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -n "$salts_dir"
           salts_version="$(basename "$salts_dir")"
           salts_root="$salts_dir/sdk/${{ matrix.rid }}"
           test -f "$salts_root/lib/cmake/Salts/SaltsConfig.cmake"

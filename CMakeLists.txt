@@ -9,7 +9,7 @@ endif()
 # SaltsNet Project - Network tools built on Salts
 project(
   SaltsNet
-  VERSION 1.0.4
+  VERSION 1.0.5
   LANGUAGES C CXX)
 
 # Project configuration - output directories

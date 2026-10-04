@@ -119,7 +119,7 @@ static int calculate_turn_message_integrity(
     const char *username, const char *realm, const char *password,
     uint8_t *hmac_out
 ) {
-    uint8_t key[16];
+    uint8_t key[SALTS_MD5_DIGEST_BYTES];
     if (calculate_long_term_key(username, realm, password, key) != 0) return -1;
     return salts_hmac_sha1(key, sizeof(key), data, len, hmac_out) == SALTS_OK ? 0 : -1;
 }
@@ -131,7 +131,7 @@ static int turn_validate_message_integrity(
     const uint8_t *integrity = NULL;
     const uint8_t *integrity_header = NULL;
     size_t remaining;
-    uint8_t expected[20];
+    uint8_t expected[SALTS_SHA1_DIGEST_BYTES];
     uint8_t *hmac_data;
     size_t hmac_data_len;
 
@@ -254,7 +254,7 @@ static int turn_append_authentication(uint8_t *buffer, uint8_t **p, uint16_t mes
                                       const stun_transaction_id_t *txn_id,
                                       const char *username, const char *realm,
                                       const char *nonce, const char *password) {
-    uint8_t hmac[20];
+    uint8_t hmac[SALTS_SHA1_DIGEST_BYTES];
     size_t attributes_length;
 
     *p = turn_write_string_attribute(*p, STUN_ATTR_USERNAME, username);
@@ -265,9 +265,9 @@ static int turn_append_authentication(uint8_t *buffer, uint8_t **p, uint16_t mes
     if (calculate_turn_message_integrity(buffer, STUN_HEADER_SIZE + attributes_length,
                                          username, realm, password, hmac) != 0) return -1;
     write_u16_be(*p, STUN_ATTR_MESSAGE_INTEGRITY);
-    write_u16_be(*p + 2, 20);
-    memcpy(*p + 4, hmac, 20);
-    *p += 24;
+    write_u16_be(*p + 2, SALTS_SHA1_DIGEST_BYTES);
+    memcpy(*p + 4, hmac, sizeof(hmac));
+    *p += 4u + sizeof(hmac);
     return 0;
 }
 

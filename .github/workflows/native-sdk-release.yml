@@ -45,6 +45,7 @@ jobs:
       source_commit: ${{ steps.meta.outputs.source_commit }}
       tag: ${{ steps.meta.outputs.tag }}
       publish: ${{ steps.meta.outputs.publish }}
+      qualify: ${{ steps.meta.outputs.qualify }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve release metadata
@@ -58,6 +59,7 @@ jobs:
           tag="v$source_version"
           source_commit="$(git rev-parse HEAD)"
           publish=false
+          qualify=true
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
             version="$source_version"
@@ -66,15 +68,16 @@ jobs:
             version="$source_version"
             remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$tag" | awk '{print $1}')"
             if [[ -n "$remote_tag_sha" ]]; then
-              peeled_tag_sha="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
-              if [[ -n "$peeled_tag_sha" ]]; then
-                remote_tag_sha="$peeled_tag_sha"
-              fi
-              test "$remote_tag_sha" = "$source_commit"
               if GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
                 publish=false
+                qualify=false
                 version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
               else
+                peeled_tag_sha="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
+                if [[ -n "$peeled_tag_sha" ]]; then
+                  remote_tag_sha="$peeled_tag_sha"
+                fi
+                test "$remote_tag_sha" = "$source_commit"
                 publish=true
               fi
             else
@@ -88,10 +91,12 @@ jobs:
           echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "qualify=$qualify" >> "$GITHUB_OUTPUT"
 
   linux:
     name: Linux x64 SDK
     needs: metadata
+    if: needs.metadata.outputs.qualify == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -167,6 +172,7 @@ jobs:
   windows:
     name: Windows x64 SDK
     needs: metadata
+    if: needs.metadata.outputs.qualify == 'true'
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -263,6 +269,7 @@ jobs:
   macos:
     name: macOS SDK
     needs: metadata
+    if: needs.metadata.outputs.qualify == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -348,6 +355,7 @@ jobs:
   android:
     name: Android arm64-v8a SDK
     needs: metadata
+    if: needs.metadata.outputs.qualify == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -436,6 +444,7 @@ jobs:
   ios:
     name: iOS SDK / ${{ matrix.name }}
     needs: metadata
+    if: needs.metadata.outputs.qualify == 'true'
     runs-on: macos-15
     strategy:
       fail-fast: false

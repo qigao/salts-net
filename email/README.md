@@ -14,7 +14,7 @@ Complete email client library with SMTP, POP3, and IMAP support.
 - MIME multipart messages (text/html alternatives)
 - File attachments (regular and inline)
 - Base64 encoding for attachments
-- S/MIME encryption and signing (via OpenSSL)
+- S/MIME content-type detection
 - Priority headers (high/normal/low)
 
 ### Integration
@@ -178,16 +178,6 @@ email_message_add_inline_attachment(msg, "logo", "logo.png", "image/png",
                                     image_data, image_size);
 ```
 
-### S/MIME Encryption
-
-```c
-// Enable signing
-email_message_enable_signing(msg, "cert.pem", "key.pem", NULL);
-
-// Enable encryption
-email_message_enable_encryption(msg, "recipient-cert.pem");
-```
-
 ## API Reference
 
 ### SMTP Client
@@ -256,11 +246,6 @@ int email_message_add_inline_attachment(email_message_t *msg, const char *conten
                                         const char *filename, const char *content_type,
                                         const char *data, size_t data_len);
 
-// S/MIME
-int email_message_enable_signing(email_message_t *msg, const char *cert_path,
-                                  const char *key_path, const char *key_password);
-int email_message_enable_encryption(email_message_t *msg, const char *recipient_cert_path);
-
 // Serialization
 tstr email_message_to_string(email_message_t *msg);
 email_message_t *email_message_parse(mem_pool_t *pool, const char *raw_message, size_t len);
@@ -310,7 +295,6 @@ ctest --preset win-release-user -R "email|mime|uri_parser" --output-on-failure
 - **Salts CNet** - Caller-driven bounded TCP/TLS networking
 - **Salts Core** - Strings, buffers, platform primitives, and SIMD scanning
 - **mime_parser** - RFC 2822/MIME parsing
-- **OpenSSL** - TLS/SSL and S/MIME
 
 ## Examples
 

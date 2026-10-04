@@ -8,18 +8,14 @@
 #include "asn1_types.h"
 #include "memory_pool.h"
 #include <salts/clock.h>
+#include <platform.h>
+#include <salts_crypto.h>
 #include <string.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
-/* OpenSSL headers */
-#include <openssl/md5.h>
-#include <openssl/sha.h>
-#include <openssl/hmac.h>
-#include <openssl/evp.h>
+/* Legacy DES-CBC remains on OpenSSL until Salts DES-CBC is released. */
 #include <openssl/des.h>
-#include <openssl/aes.h>
-#include <openssl/rand.h>
 
 static atomic_flag usm_salt_lock = ATOMIC_FLAG_INIT;
 static uint64_t usm_aes_salt_counter;
@@ -46,8 +42,8 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
 
     if (priv_protocol == SNMP_PRIV_DES) {
         if (usm_des_salt_counter == 0u &&
-            RAND_bytes((unsigned char *)&usm_des_salt_counter,
-                       (int)sizeof(usm_des_salt_counter)) != 1) {
+            salts_secure_random(&usm_des_salt_counter,
+                                sizeof(usm_des_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_des_salt_counter == UINT32_MAX) {
             status = USM_ERROR_INVALID;
@@ -58,8 +54,8 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
         }
     } else {
         if (usm_aes_salt_counter == 0u &&
-            RAND_bytes((unsigned char *)&usm_aes_salt_counter,
-                       (int)sizeof(usm_aes_salt_counter)) != 1) {
+            salts_secure_random(&usm_aes_salt_counter,
+                                sizeof(usm_aes_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_aes_salt_counter == UINT64_MAX) {
             status = USM_ERROR_INVALID;
@@ -111,12 +107,18 @@ int usm_password_to_key(
     int result = USM_OK;
     switch (auth_protocol) {
         case SNMP_AUTH_MD5:
-            MD5(buffer, 1048576, key);
-            *key_len = 16;
+            if (salts_md5(buffer, 1048576u, key) != SALTS_OK) {
+                result = USM_ERROR_INVALID;
+            } else {
+                *key_len = SALTS_MD5_DIGEST_BYTES;
+            }
             break;
         case SNMP_AUTH_SHA1:
-            SHA1(buffer, 1048576, key);
-            *key_len = 20;
+            if (salts_sha1(buffer, 1048576u, key) != SALTS_OK) {
+                result = USM_ERROR_INVALID;
+            } else {
+                *key_len = SALTS_SHA1_DIGEST_BYTES;
+            }
             break;
         default:
             result = USM_ERROR_UNSUPPORTED;
@@ -166,12 +168,18 @@ int usm_localize_key(
     int result = USM_OK;
     switch (auth_protocol) {
         case SNMP_AUTH_MD5:
-            MD5(buffer, offset, localized_key);
-            *localized_key_len = 16;
+            if (salts_md5(buffer, offset, localized_key) != SALTS_OK) {
+                result = USM_ERROR_INVALID;
+            } else {
+                *localized_key_len = SALTS_MD5_DIGEST_BYTES;
+            }
             break;
         case SNMP_AUTH_SHA1:
-            SHA1(buffer, offset, localized_key);
-            *localized_key_len = 20;
+            if (salts_sha1(buffer, offset, localized_key) != SALTS_OK) {
+                result = USM_ERROR_INVALID;
+            } else {
+                *localized_key_len = SALTS_SHA1_DIGEST_BYTES;
+            }
             break;
         default:
             result = USM_ERROR_UNSUPPORTED;
@@ -196,28 +204,23 @@ int usm_compute_auth(
         return USM_ERROR_INVALID;
     }
 
-    uint8_t hmac[EVP_MAX_MD_SIZE];
-    unsigned int hmac_len = 0;
+    uint8_t hmac[SALTS_SHA1_DIGEST_BYTES];
+    int status;
 
-    const EVP_MD *md = NULL;
     switch (auth_protocol) {
         case SNMP_AUTH_MD5:
-            md = EVP_md5();
+            status = salts_hmac_md5(key, key_len, message, message_len, hmac);
             break;
         case SNMP_AUTH_SHA1:
-            md = EVP_sha1();
+            status = salts_hmac_sha1(key, key_len, message, message_len, hmac);
             break;
         default:
             return USM_ERROR_UNSUPPORTED;
     }
-
-    /* Compute HMAC */
-    if (!HMAC(md, key, (int)key_len, message, message_len, hmac, &hmac_len)) {
-        return USM_ERROR_INVALID;
-    }
+    if (status != SALTS_OK) return USM_ERROR_INVALID;
 
     /* Truncate to first 12 bytes (RFC 3414) */
-    memcpy(auth_params, hmac, 12);
+    memcpy(auth_params, hmac, 12u);
 
     return USM_OK;
 }
@@ -242,12 +245,12 @@ int usm_verify_auth(
     }
 
     /* Constant-time comparison */
-    int diff = 0;
-    for (int i = 0; i < 12; i++) {
-        diff |= (computed[i] ^ auth_params[i]);
+    {
+        int equal = 0;
+        if (salts_crypto_equal(computed, auth_params, sizeof(computed), &equal) != SALTS_OK)
+            return USM_ERROR_INVALID;
+        return equal ? USM_OK : USM_ERROR_AUTH_FAILED;
     }
-
-    return (diff == 0) ? USM_OK : USM_ERROR_AUTH_FAILED;
 }
 
 /*
@@ -318,8 +321,7 @@ int usm_encrypt(
 
     } else if (priv_protocol == SNMP_PRIV_AES128) {
         /* AES-128-CFB encryption (RFC 3826) */
-        const int key_bits = 128;
-        const size_t required_key_len = 16u;
+        const size_t required_key_len = SALTS_AES128_KEY_BYTES;
 
         if (key_len < required_key_len || *ciphertext_len < plaintext_len) {
             return USM_ERROR_INVALID;
@@ -329,19 +331,13 @@ int usm_encrypt(
         }
 
         /* IV = engineBoots || engineTime || salt */
-        uint8_t iv[16];
+        uint8_t iv[SALTS_AES_BLOCK_BYTES];
         usm_store_u32_be(iv, engine_boots);
         usm_store_u32_be(iv + 4u, engine_time);
-        memcpy(iv + 8, salt_out, 8);
+        memcpy(iv + 8u, salt_out, 8u);
 
-        AES_KEY aes_key;
-        if (AES_set_encrypt_key(key, key_bits, &aes_key) != 0) {
+        if (salts_aes128_cfb_encrypt(key, iv, plaintext, plaintext_len, ciphertext) != SALTS_OK)
             return USM_ERROR_INVALID;
-        }
-
-        int num = 0;
-        AES_cfb128_encrypt(plaintext, ciphertext, plaintext_len,
-                           &aes_key, iv, &num, AES_ENCRYPT);
         *ciphertext_len = plaintext_len;  /* CFB mode, no padding */
 
     } else {
@@ -422,27 +418,20 @@ int usm_decrypt(
 
     } else if (priv_protocol == SNMP_PRIV_AES128) {
         /* AES-128-CFB decryption (RFC 3826) */
-        const int key_bits = 128;
-        const size_t required_key_len = 16u;
+        const size_t required_key_len = SALTS_AES128_KEY_BYTES;
 
         if (key_len < required_key_len || *plaintext_len < ciphertext_len) {
             return USM_ERROR_INVALID;
         }
 
         /* IV = engineBoots || engineTime || salt */
-        uint8_t iv[16];
+        uint8_t iv[SALTS_AES_BLOCK_BYTES];
         usm_store_u32_be(iv, engine_boots);
         usm_store_u32_be(iv + 4u, engine_time);
-        memcpy(iv + 8, salt, 8);
+        memcpy(iv + 8u, salt, 8u);
 
-        AES_KEY aes_key;
-        if (AES_set_encrypt_key(key, key_bits, &aes_key) != 0) {
+        if (salts_aes128_cfb_decrypt(key, iv, ciphertext, ciphertext_len, plaintext) != SALTS_OK)
             return USM_ERROR_INVALID;
-        }
-
-        int num = 0;
-        AES_cfb128_encrypt(ciphertext, plaintext, ciphertext_len,
-                           &aes_key, iv, &num, AES_DECRYPT);
         *plaintext_len = ciphertext_len;  /* CFB mode, no padding */
 
     } else {

@@ -1,8 +1,5 @@
 set(TARGET_NAME asn1_parser)
 
-# Find OpenSSL for Ed25519 key generation and signing
-find_package(OpenSSL REQUIRED)
-
 # =============================================================================
 # re2c Generated Files
 # =============================================================================
@@ -69,9 +66,7 @@ file(
   ${CMAKE_CURRENT_SOURCE_DIR}/src/asn1_der_compat.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/binary_scanner.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/crypto_random.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/sha256.c
   ${CMAKE_CURRENT_SOURCE_DIR}/src/x509_cert.c
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/x509_generate.c
   ${CMAKE_CURRENT_SOURCE_DIR}/include/*.h)
 
 add_library(
@@ -89,7 +84,7 @@ target_include_directories(
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/parser ${CMAKE_CURRENT_BINARY_DIR}
           ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_link_libraries(${TARGET_NAME} PUBLIC Salts::Core OpenSSL::Crypto)
+target_link_libraries(${TARGET_NAME} PUBLIC Salts::Core)
 
 set_target_properties(
   ${TARGET_NAME}

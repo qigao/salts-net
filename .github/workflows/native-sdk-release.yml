@@ -25,6 +25,7 @@ on:
       - "CMakeLists.txt"
       - "vcpkg.json"
       - ".github/workflows/native-sdk-release.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -36,7 +37,7 @@ concurrency:
 
 jobs:
   metadata:
-    if: github.event_name == 'pull_request' || github.ref_type == 'tag' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
+    if: github.event_name == 'pull_request' || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -61,7 +62,7 @@ jobs:
             test "$GITHUB_REF_NAME" = "$tag"
             version="$source_version"
             publish=true
-          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/master" ]]; then
+          elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" || ( "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/master" ) ]]; then
             version="$source_version"
             remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$tag" | awk '{print $1}')"
             if [[ -n "$remote_tag_sha" ]]; then

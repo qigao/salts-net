@@ -52,9 +52,6 @@ void email_message_free(email_message_t *msg) {
 
   // Pool-based allocation, no individual frees needed
   // Just free non-pool allocations
-  if (msg->smime_ctx) {
-    mime_smime_ctx_free(msg->smime_ctx);
-  }
 }
 
 /* ── Address Management ────────────────────────────────────────────── */
@@ -295,48 +292,6 @@ int email_message_add_inline_attachment(email_message_t *msg,
   }
 
   msg->attachment_count++;
-  return 0;
-}
-
-/* ── S/MIME ────────────────────────────────────────────────────────── */
-
-int email_message_enable_signing(email_message_t *msg,
-                                  const char *cert_path,
-                                  const char *key_path,
-                                  const char *key_password) {
-  if (!msg || !cert_path || !key_path) return -1;
-
-  if (!msg->smime_ctx) {
-    msg->smime_ctx = mime_smime_ctx_create();
-    if (!msg->smime_ctx) return -1;
-  }
-
-  if (mime_smime_load_cert(msg->smime_ctx, cert_path) != MIME_SMIME_OK) {
-    return -1;
-  }
-
-  if (mime_smime_load_key(msg->smime_ctx, key_path, key_password) != MIME_SMIME_OK) {
-    return -1;
-  }
-
-  msg->sign_message = 1;
-  return 0;
-}
-
-int email_message_enable_encryption(email_message_t *msg,
-                                     const char *recipient_cert_path) {
-  if (!msg || !recipient_cert_path) return -1;
-
-  if (!msg->smime_ctx) {
-    msg->smime_ctx = mime_smime_ctx_create();
-    if (!msg->smime_ctx) return -1;
-  }
-
-  if (mime_smime_load_cert(msg->smime_ctx, recipient_cert_path) != MIME_SMIME_OK) {
-    return -1;
-  }
-
-  msg->encrypt_message = 1;
   return 0;
 }
 

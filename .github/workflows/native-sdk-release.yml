@@ -19,7 +19,12 @@ on:
       - "packaging/nuget/**"
       - ".github/workflows/native-sdk-release.yml"
   push:
+    branches: [master]
     tags: ["v*"]
+    paths:
+      - "CMakeLists.txt"
+      - "vcpkg.json"
+      - ".github/workflows/native-sdk-release.yml"
 
 permissions:
   contents: read
@@ -31,7 +36,7 @@ concurrency:
 
 jobs:
   metadata:
-    if: github.event_name == 'pull_request' || github.ref_type == 'tag'
+    if: github.event_name == 'pull_request' || github.ref_type == 'tag' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -56,6 +61,24 @@ jobs:
             test "$GITHUB_REF_NAME" = "$tag"
             version="$source_version"
             publish=true
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF" == "refs/heads/master" ]]; then
+            version="$source_version"
+            remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$tag" | awk '{print $1}')"
+            if [[ -n "$remote_tag_sha" ]]; then
+              peeled_tag_sha="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
+              if [[ -n "$peeled_tag_sha" ]]; then
+                remote_tag_sha="$peeled_tag_sha"
+              fi
+              test "$remote_tag_sha" = "$source_commit"
+              if GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                publish=false
+                version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+              else
+                publish=true
+              fi
+            else
+              publish=true
+            fi
           else
             version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           fi
@@ -601,6 +624,21 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: Ensure immutable release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.source_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null)"; then
+            test "$existing" = "$SOURCE_COMMIT"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$SOURCE_COMMIT"
+          fi
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

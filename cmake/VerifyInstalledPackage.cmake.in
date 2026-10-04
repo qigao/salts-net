@@ -47,7 +47,8 @@ foreach(saltsnet_package_cmake_file IN LISTS saltsnet_package_cmake_files)
   file(READ "${saltsnet_package_cmake_file}" saltsnet_package_cmake_content)
   foreach(saltsnet_legacy_token IN ITEMS "TurboNet::" "CoroNet" "turbo_coro"
                                       "SaltsNet::Crypto"
-                                      "SaltsNet::LSQUIC" "SaltsNet::LSQUICCore")
+                                      "SaltsNet::LSQUIC" "SaltsNet::LSQUICCore"
+                                      "OpenSSL::" "BoringSSL::" "boringssl")
     string(FIND "${saltsnet_package_cmake_content}" "${saltsnet_legacy_token}"
            saltsnet_legacy_offset)
     if(NOT saltsnet_legacy_offset EQUAL -1)

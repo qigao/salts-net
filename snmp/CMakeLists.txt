@@ -23,11 +23,9 @@ target_include_directories(
                         $<INSTALL_INTERFACE:include>)
 
 # Link dependencies
-find_package(OpenSSL REQUIRED)
-
 target_link_libraries(
   ${TARGET_NAME}
-  PUBLIC Salts::Core Salts::CMeta OpenSSL::Crypto
+  PUBLIC Salts::Core Salts::CMeta
   PRIVATE Salts::CNet asn1_parser)
 
 set_target_properties(

@@ -14,8 +14,6 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <stdatomic.h>
-/* Legacy DES-CBC remains on OpenSSL until Salts DES-CBC is released. */
-#include <openssl/des.h>
 
 static atomic_flag usm_salt_lock = ATOMIC_FLAG_INIT;
 static uint64_t usm_aes_salt_counter;
@@ -276,8 +274,7 @@ int usm_encrypt(
 
     if (priv_protocol == SNMP_PRIV_DES) {
         /* DES-CBC encryption (RFC 3414) */
-        if (key_len < 16 || plaintext_len > (size_t)LONG_MAX ||
-            plaintext_len > SIZE_MAX - 7u) {
+        if (key_len < 16 || plaintext_len > SIZE_MAX - 7u) {
             return USM_ERROR_INVALID;
         }
 
@@ -288,33 +285,29 @@ int usm_encrypt(
         }
 
         /* Pre-IV: salt XOR key[8..15] */
-        uint8_t iv[8];
-        for (int i = 0; i < 8; i++) {
-            iv[i] = salt_out[i] ^ key[8 + i];
+        uint8_t iv[SALTS_DES_BLOCK_BYTES];
+        for (size_t i = 0; i < SALTS_DES_BLOCK_BYTES; i++) {
+            iv[i] = salt_out[i] ^ key[SALTS_DES_KEY_BYTES + i];
         }
 
-        /* DES key is key[0..7] */
-        DES_cblock des_key;
-        memcpy(&des_key, key, 8);
-
-        DES_key_schedule schedule;
-        DES_set_key_unchecked(&des_key, &schedule);
-
-        /* Pad plaintext to 8-byte blocks */
+        /* Pad plaintext to whole DES blocks; preserve existing USM wire behavior. */
         uint8_t *padded = (uint8_t *)malloc(padded_len);
         if (!padded) {
             return USM_ERROR_INVALID;
         }
 
         memcpy(padded, plaintext, plaintext_len);
-        /* PKCS#5 padding */
-        uint8_t pad_byte = (uint8_t)(padded_len - plaintext_len);
-        for (size_t i = plaintext_len; i < padded_len; i++) {
-            padded[i] = pad_byte;
+        {
+            uint8_t pad_byte = (uint8_t)(padded_len - plaintext_len);
+            for (size_t i = plaintext_len; i < padded_len; i++) {
+                padded[i] = pad_byte;
+            }
         }
 
-        DES_ncbc_encrypt(padded, ciphertext, (long)padded_len, &schedule,
-                         (DES_cblock *)iv, DES_ENCRYPT);
+        if (salts_des_cbc_encrypt(key, iv, padded, padded_len, ciphertext) != SALTS_OK) {
+            free(padded);
+            return USM_ERROR_INVALID;
+        }
         *ciphertext_len = padded_len;
 
         free(padded);
@@ -370,28 +363,22 @@ int usm_decrypt(
 
     if (priv_protocol == SNMP_PRIV_DES) {
         /* DES-CBC decryption (RFC 3414) */
-        if (key_len < 16 || ciphertext_len % 8 != 0 ||
-            ciphertext_len > (size_t)LONG_MAX || *plaintext_len < ciphertext_len) {
+        if (key_len < 16 || ciphertext_len % SALTS_DES_BLOCK_BYTES != 0 ||
+            *plaintext_len < ciphertext_len) {
             return USM_ERROR_INVALID;
         }
 
         /* Pre-IV: salt XOR key[8..15] */
-        uint8_t iv[8];
-        for (int i = 0; i < 8; i++) {
-            iv[i] = salt[i] ^ key[8 + i];
+        uint8_t iv[SALTS_DES_BLOCK_BYTES];
+        for (size_t i = 0; i < SALTS_DES_BLOCK_BYTES; i++) {
+            iv[i] = salt[i] ^ key[SALTS_DES_KEY_BYTES + i];
         }
 
-        /* DES key is key[0..7] */
-        DES_cblock des_key;
-        memcpy(&des_key, key, 8);
+        if (salts_des_cbc_decrypt(key, iv, ciphertext, ciphertext_len, plaintext) != SALTS_OK) {
+            return USM_ERROR_INVALID;
+        }
 
-        DES_key_schedule schedule;
-        DES_set_key_unchecked(&des_key, &schedule);
-
-        DES_ncbc_encrypt(ciphertext, plaintext, (long)ciphertext_len, &schedule,
-                         (DES_cblock *)iv, DES_DECRYPT);
-
-        /* Remove PKCS#5 padding */
+        /* Remove protocol-layer padding */
         if (ciphertext_len > 0) {
             uint8_t pad_byte = plaintext[ciphertext_len - 1];
             if (pad_byte > 0 && pad_byte <= 8) {

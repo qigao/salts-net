@@ -18,6 +18,7 @@
 #include <fmt.h>
 #include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts_crypto.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -29,10 +30,6 @@
 #include <netinet/in.h>
 #endif
 
-#include <openssl/hmac.h>
-#include <openssl/evp.h>
-#include <openssl/md5.h>
-#include <openssl/crypto.h>
 
 enum { TURN_CHANNEL_CAPACITY = 16 };
 
@@ -114,8 +111,7 @@ static int calculate_long_term_key(
     char concat[768];
     int len = fmt(concat, sizeof(concat), "{}:{}:{}", username, realm, password);
     if (len < 0 || len >= (int)sizeof(concat)) return -1;
-    MD5((unsigned char *)concat, len, key_out);
-    return 0;
+    return salts_md5(concat, (size_t)len, key_out) == SALTS_OK ? 0 : -1;
 }
 
 static int calculate_turn_message_integrity(
@@ -125,9 +121,7 @@ static int calculate_turn_message_integrity(
 ) {
     uint8_t key[16];
     if (calculate_long_term_key(username, realm, password, key) != 0) return -1;
-    unsigned int hmac_len = 20;
-    if (!HMAC(EVP_sha1(), key, 16, data, len, hmac_out, &hmac_len)) return -1;
-    return 0;
+    return salts_hmac_sha1(key, sizeof(key), data, len, hmac_out) == SALTS_OK ? 0 : -1;
 }
 
 static int turn_validate_message_integrity(
@@ -176,7 +170,11 @@ static int turn_validate_message_integrity(
         return -5;
     }
     free(hmac_data);
-    return CRYPTO_memcmp(integrity, expected, sizeof(expected)) == 0 ? 0 : -6;
+    {
+        int equal = 0;
+        if (salts_crypto_equal(integrity, expected, sizeof(expected), &equal) != SALTS_OK) return -6;
+        return equal ? 0 : -6;
+    }
 }
 
 static int xor_encode_address(

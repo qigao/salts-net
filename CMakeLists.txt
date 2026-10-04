@@ -46,7 +46,6 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")

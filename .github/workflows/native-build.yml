@@ -47,13 +47,37 @@ jobs:
             triplet: arm64-android
             host_triplet: x64-linux
             preset: ci-android-sdk-release-user
+            host_preset: ci-host-release-user
+            cross: true
+          - runner: macos-15
+            rid: ios-arm64
+            host: macos-arm64
+            triplet: arm64-ios
+            host_triplet: arm64-osx
+            preset: ci-ios-sdk-release-user
+            host_preset: ci-macos-host-release-user
+            sysroot: iphoneos
+            cross: true
+          - runner: macos-15
+            rid: ios-simulator-arm64
+            host: macos-arm64
+            triplet: arm64-ios-simulator
+            host_triplet: arm64-osx
+            preset: ci-ios-sdk-release-user
+            host_preset: ci-macos-host-release-user
+            sysroot: iphonesimulator
             cross: true
     env:
       QIGAO_SDK_RID: ${{ matrix.rid }}
       QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
       QIGAO_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      QIGAO_IOS_SYSROOT: ${{ matrix.sysroot }}
     steps:
       - uses: actions/checkout@v4
+      - name: Select iOS cache namespace
+        if: matrix.preset == 'ci-ios-sdk-release-user'
+        shell: bash
+        run: echo 'X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache' >> "$GITHUB_ENV"
       - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@fafb1efe5ac2440bfd7a08e493988d0459d89e51
         with:
           mode: read
@@ -99,8 +123,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cmake --preset ci-host-release-user
-          cmake --build --preset ci-host-release-user --parallel 2
+          cmake --preset '${{ matrix.host_preset }}'
+          cmake --build --preset '${{ matrix.host_preset }}' --parallel 2
       - name: Configure and build Unix graph
         if: runner.os != 'Windows'
         shell: bash

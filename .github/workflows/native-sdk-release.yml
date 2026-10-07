@@ -23,6 +23,10 @@ on:
   push:
     branches: [master]
     tags: ["v*"]
+    paths:
+      - "CMakeLists.txt"
+      - "vcpkg.json"
+      - ".github/workflows/**"
   workflow_dispatch:
 
 permissions:
@@ -35,6 +39,7 @@ concurrency:
 
 jobs:
   metadata:
+    if: github.event_name == 'pull_request' || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/master')
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.meta.outputs.version }}
@@ -42,6 +47,7 @@ jobs:
       source_commit: ${{ steps.meta.outputs.source_commit }}
       tag: ${{ steps.meta.outputs.tag }}
       publish: ${{ steps.meta.outputs.publish }}
+      qualify: ${{ steps.meta.outputs.qualify }}
     steps:
       - uses: actions/checkout@v4
       - name: Resolve release metadata
@@ -55,10 +61,30 @@ jobs:
           tag="v$source_version"
           source_commit="$(git rev-parse HEAD)"
           publish=false
+          qualify=true
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
             version="$source_version"
             publish=true
+          elif [[ "$GITHUB_REF" == "refs/heads/master" && ( "$GITHUB_EVENT_NAME" == "workflow_dispatch" || "$GITHUB_EVENT_NAME" == "push" ) ]]; then
+            version="$source_version"
+            remote_tag_sha="$(git ls-remote --refs origin "refs/tags/$tag" | awk '{print $1}')"
+            if [[ -n "$remote_tag_sha" ]]; then
+              if GH_TOKEN="${{ secrets.GITHUB_TOKEN }}" gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                publish=false
+                qualify=false
+                version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+              else
+                peeled_tag_sha="$(git ls-remote origin "refs/tags/$tag^{}" | awk '{print $1}')"
+                if [[ -n "$peeled_tag_sha" ]]; then
+                  remote_tag_sha="$peeled_tag_sha"
+                fi
+                test "$remote_tag_sha" = "$source_commit"
+                publish=true
+              fi
+            else
+              publish=true
+            fi
           else
             version="$source_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           fi
@@ -67,9 +93,11 @@ jobs:
           echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "qualify=$qualify" >> "$GITHUB_OUTPUT"
 
   native:
     needs: metadata
+    if: needs.metadata.outputs.qualify == 'true'
     uses: ./.github/workflows/native-build.yml
     with:
       version: ${{ needs.metadata.outputs.version }}
@@ -93,9 +121,11 @@ jobs:
           test -f package/sdk/linux-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           test -f package/sdk/windows-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           test -f package/sdk/android-arm64-v8a/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/ios-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/ios-simulator-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           mac_config="$(find package/sdk -path '*macos-*/lib/cmake/SaltsNet/SaltsNetConfig.cmake' -print -quit)"
           test -n "$mac_config"
-          test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 4
+          test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 6
           mapfile -t salts_versions < <(
             sed -n 's/^salts=//p' package/sdk/*/saltsnet-sdk-manifest.txt | tr -d '\r' | sort -u
           )
@@ -155,6 +185,21 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
+      - name: Ensure immutable release tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.metadata.outputs.tag }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.source_commit }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null)"; then
+            test "$existing" = "$SOURCE_COMMIT"
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
+              -f ref="refs/tags/$TAG" \
+              -f sha="$SOURCE_COMMIT"
+          fi
       - name: Publish to GitHub Packages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

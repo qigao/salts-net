@@ -23,10 +23,7 @@ typedef int turn_test_socket_t;
 #include "tinytest.h"
 
 #include <salts/thread.h>
-
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/md5.h>
+#include <salts_crypto.h>
 
 #include <string.h>
 
@@ -174,21 +171,18 @@ static int turn_test_build_auth_challenge(uint8_t *response,
 static int turn_test_build_authenticated_allocate_response(
     uint8_t *response, const uint8_t *request, turn_test_integrity_t integrity) {
   static const char credentials[] = "test-user:test-realm:test-pass";
-  uint8_t key[16];
-  uint8_t hmac[EVP_MAX_MD_SIZE];
-  unsigned int hmac_len = 0u;
+  uint8_t key[SALTS_MD5_DIGEST_BYTES];
+  uint8_t hmac[SALTS_SHA1_DIGEST_BYTES];
   int response_size = turn_test_build_allocate_response(response, request);
 
   if (integrity == TURN_TEST_INTEGRITY_MISSING) return response_size;
   turn_test_write_u16(response + 2, 44u);
   turn_test_write_u16(response + response_size, STUN_ATTR_MESSAGE_INTEGRITY);
   turn_test_write_u16(response + response_size + 2, 20u);
-  MD5((const unsigned char *)credentials, strlen(credentials), key);
-  if (HMAC(EVP_sha1(), key, (int)sizeof(key), response, (size_t)response_size,
-           hmac, &hmac_len) == NULL || hmac_len != 20u) {
+  if (salts_md5(credentials, strlen(credentials), key) != SALTS_OK) return -1;
+  if (salts_hmac_sha1(key, sizeof(key), response, (size_t)response_size, hmac) != SALTS_OK)
     return -1;
-  }
-  memcpy(response + response_size + 4, hmac, 20u);
+  memcpy(response + response_size + 4, hmac, sizeof(hmac));
   if (integrity == TURN_TEST_INTEGRITY_MUTATED) response[response_size + 4] ^= 0x80u;
   return response_size + 24;
 }

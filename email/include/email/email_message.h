@@ -7,7 +7,6 @@
  * - MIME multipart support (text/html alternatives, attachments)
  * - RFC 2047 encoded-word for non-ASCII headers
  * - RFC 2231 parameter encoding for filenames
- * - S/MIME encryption/signing support
  */
 
 #ifndef EMAIL_MESSAGE_H
@@ -18,7 +17,6 @@
 #include "tstr.h"
 #include "mime_parser.h"
 #include "mime_rfc2822.h"
-#include "mime_smime.h"
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -65,11 +63,6 @@ typedef struct {
   char *html_body;          // HTML version
   email_attachment_t *attachments;
   int attachment_count;
-
-  // S/MIME
-  mime_smime_ctx_t *smime_ctx;  // Optional: for signing/encryption
-  int sign_message;
-  int encrypt_message;
 
   // Internal
   mem_pool_t *pool;
@@ -172,22 +165,6 @@ int email_message_add_inline_attachment(email_message_t *msg,
                                                    const char *content_type,
                                                    const char *data,
                                                    size_t data_len);
-
-/* ── S/MIME ────────────────────────────────────────────────────────── */
-
-/**
- * Enable message signing
- */
-int email_message_enable_signing(email_message_t *msg,
-                                            const char *cert_path,
-                                            const char *key_path,
-                                            const char *key_password);
-
-/**
- * Enable message encryption
- */
-int email_message_enable_encryption(email_message_t *msg,
-                                               const char *recipient_cert_path);
 
 /* ── Serialization ─────────────────────────────────────────────────── */
 

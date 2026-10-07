@@ -260,6 +260,38 @@
         "release-mac-ninja"
       ],
       "hidden": false
+    },
+    {
+      "name": "ci-macos-host-release-user",
+      "inherits": "ci-macos-release-user",
+      "binaryDir": "${sourceDir}/build/ci-host",
+      "cacheVariables": {
+        "BUILD_TESTING": false,
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet-host/release"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_HOST_ROOT}",
+        "QIGAO_TARGET_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-host",
+        "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host",
+        "X_VCPKG_NUGET_ID_PREFIX": ""
+      }
+    },
+    {
+      "name": "ci-ios-sdk-release-user",
+      "inherits": [
+        "ci-sdk-release-user",
+        "AppleClang",
+        "flags-darwin",
+        "ISMac"
+      ],
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_SYSROOT": "$env{QIGAO_IOS_SYSROOT}",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "BUILD_TESTING": false,
+        "LEMON_EXECUTABLE": "${sourceDir}/build/ci-host/bin/lemon"
+      }
     }
   ],
   "buildPresets": [
@@ -411,6 +443,28 @@
     {
       "name": "install-ci-macos-release-user",
       "configurePreset": "ci-macos-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-macos-host-release-user",
+      "configurePreset": "ci-macos-host-release-user"
+    },
+    {
+      "name": "install-ci-macos-host-release-user",
+      "configurePreset": "ci-macos-host-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-ios-sdk-release-user",
+      "configurePreset": "ci-ios-sdk-release-user"
+    },
+    {
+      "name": "install-ci-ios-sdk-release-user",
+      "configurePreset": "ci-ios-sdk-release-user",
       "targets": [
         "install"
       ]

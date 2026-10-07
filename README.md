@@ -75,8 +75,8 @@ The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
 [SaltsUtils 4.2](https://github.com/qigao/salts-utils/releases/tag/v4.2.0), vcpkg runs in manifest mode
 through the shared `qigao/vcpkg-cache` toolchain, with a read-only GitHub feed
-and a writable local cache. The existing vcpkg baseline and BoringSSL dependency
-are retained. Runtime libraries are resolved through the selected preset's
+and a writable local cache. The existing vcpkg baseline is retained. SaltsNet uses the Salts crypto
+provider and has no direct OpenSSL dependency. Runtime libraries are resolved through the selected preset's
 environment.
 
 Prerequisites: PowerShell 7, .NET SDK 8, CMake 3.25 or newer, Ninja, a C/C++ toolchain, vcpkg,
@@ -123,9 +123,10 @@ SaltsUtils; native package restoration still resolves the latest release each ru
 Android arm64 uses `ci-android-sdk-release-user` after building host
 tools. Its `LEMON_EXECUTABLE` must point to that completed host build; the
 target toolchain never produces or searches for an executable to run on the host.
-Host jobs run the formal CTest suites directly. Android is compiled and linked
-only; device execution is separate. SDK staging remains
-`stage/sdk/<RID>`, and publishing remains restricted to version tags.
+The iOS device and simulator builds use `ci-ios-sdk-release-user` after the
+macOS host build. Host jobs run the formal CTest suites directly. Android and
+iOS are compiled and linked only; device execution is separate. SDK staging remains
+`stage/sdk/<RID>`, and master releases retain CI-owned immutable tags and package publication.
 
 `BUILD_TESTING` controls all test targets, and `BUILD_EXAMPLES` controls all
 examples, including the email clients. Email and MIME test directories own their

@@ -9,7 +9,7 @@ endif()
 # SaltsNet Project - Network tools built on Salts
 project(
   SaltsNet
-  VERSION 1.0.3
+  VERSION 1.0.6
   LANGUAGES C CXX)
 
 # Project configuration - output directories
@@ -46,7 +46,6 @@ include(CMakeOptions.cmake)
 include(Sanitizers)
 include(CmakeUtils)
 
-find_package(OpenSSL REQUIRED)
 find_package(Threads REQUIRED)
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")

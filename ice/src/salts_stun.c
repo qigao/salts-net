@@ -18,6 +18,7 @@
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
+#include <salts_crypto.h>
 
 #include <fmt.h>
 #include <stdio.h>
@@ -344,10 +345,7 @@ cleanup:
  * ICE Connectivity Check Functions
  * ============================================================================ */
 
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-
-#define STUN_MESSAGE_INTEGRITY_LEN 20
+#define STUN_MESSAGE_INTEGRITY_LEN SALTS_SHA1_DIGEST_BYTES
 
 static void write_u64_be(uint8_t *buf, uint64_t val) {
   buf[0] = (val >> 56) & 0xFF;
@@ -362,11 +360,7 @@ static void write_u64_be(uint8_t *buf, uint64_t val) {
 
 static int calculate_message_integrity(const uint8_t *data, size_t len, const char *password,
                                        uint8_t *hmac_out) {
-  unsigned int hmac_len = STUN_MESSAGE_INTEGRITY_LEN;
-  if (!HMAC(EVP_sha1(), password, (int)strlen(password), data, len, hmac_out, &hmac_len)) {
-    return -1;
-  }
-  return 0;
+  return salts_hmac_sha1(password, strlen(password), data, len, hmac_out) == SALTS_OK ? 0 : -1;
 }
 
 int stun_build_ice_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
@@ -546,8 +540,13 @@ int stun_validate_message_integrity(const uint8_t *data, size_t len, const char 
   }
   free(temp_buf);
 
-  if (memcmp(mi_attr, expected_hmac, STUN_MESSAGE_INTEGRITY_LEN) != 0)
-    return -7;
+  {
+    int equal = 0;
+    if (salts_crypto_equal(mi_attr, expected_hmac, STUN_MESSAGE_INTEGRITY_LEN, &equal) != SALTS_OK)
+      return -7;
+    if (!equal)
+      return -7;
+  }
 
   return 0;
 }

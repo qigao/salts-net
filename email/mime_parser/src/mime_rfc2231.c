@@ -1,5 +1,5 @@
 #include "mime_rfc2231.h"
-#include "salts_simd_scan.h"
+#include "cmeta_simd_scan.h"
 #include "tstr.h"
 #include <string.h>
 #include <ctype.h>
@@ -36,14 +36,14 @@ int mime_parse_rfc2231_value(const char *value, size_t len,
 
   // Parse charset (before first ')
   result->charset = ptr;
-  ptr = salts_scan_to_char(ptr, end, '\'');
+  ptr = cmeta_scan_to_char(ptr, end, '\'');
   if (ptr >= end) return -1;
   result->charset_len = ptr - result->charset;
   ptr++; // Skip '
 
   // Parse language (before second ')
   result->language = ptr;
-  ptr = salts_scan_to_char(ptr, end, '\'');
+  ptr = cmeta_scan_to_char(ptr, end, '\'');
   if (ptr >= end) return -1;
   result->language_len = ptr - result->language;
   ptr++; // Skip '
@@ -110,7 +110,7 @@ size_t mime_rfc2231_base_name(const char *param_name, size_t len,
   // Find first * or end
   size_t base_len = 0;
   {
-    const char *star = salts_scan_char(param_name, param_name + len, '*');
+    const char *star = cmeta_scan_char(param_name, param_name + len, '*');
     base_len = star ? (size_t)(star - param_name) : len;
   }
 
@@ -146,7 +146,7 @@ static const char *find_param_rfc2231(const char *start, const char *end,
   while (ptr < end) {
     // Skip whitespace
     for (;;) {
-      ptr = salts_scan_skip_sp_tab(ptr, end);
+      ptr = cmeta_scan_skip_sp_tab(ptr, end);
       if (ptr < end && *ptr == ';') {
         ptr++;
         continue;
@@ -157,7 +157,7 @@ static const char *find_param_rfc2231(const char *start, const char *end,
 
     // Check parameter name
     const char *name_start = ptr;
-    ptr = salts_scan_to_any3(ptr, end, '=', ';', ' ');
+    ptr = cmeta_scan_to_any3(ptr, end, '=', ';', ' ');
 
     size_t name_len = ptr - name_start;
 
@@ -173,10 +173,10 @@ static const char *find_param_rfc2231(const char *start, const char *end,
 
     if (match) {
       // Skip whitespace and =
-      ptr = salts_scan_skip_sp_tab(ptr, end);
+      ptr = cmeta_scan_skip_sp_tab(ptr, end);
       if (ptr >= end || *ptr != '=') continue;
       ptr++; // Skip =
-      ptr = salts_scan_skip_sp_tab(ptr, end);
+      ptr = cmeta_scan_skip_sp_tab(ptr, end);
 
       // Parse value
       const char *value_start = ptr;
@@ -185,7 +185,7 @@ static const char *find_param_rfc2231(const char *start, const char *end,
         ptr++;
         value_start = ptr;
         while (ptr < end) {
-          ptr = salts_scan_to_any2(ptr, end, '"', '\\');
+          ptr = cmeta_scan_to_any2(ptr, end, '"', '\\');
           if (ptr >= end || *ptr == '"') break;
           if (*ptr == '\\' && ptr + 1 < end) ptr += 2;
           else ptr++;
@@ -194,7 +194,7 @@ static const char *find_param_rfc2231(const char *start, const char *end,
         return value_start;
       } else {
         // Unquoted value
-        ptr = salts_scan_to_char(ptr, end, ';');
+        ptr = cmeta_scan_to_char(ptr, end, ';');
         *value_len = ptr - value_start;
         // Trim trailing whitespace
         while (*value_len > 0 && (value_start[*value_len - 1] == ' ' ||
@@ -206,7 +206,7 @@ static const char *find_param_rfc2231(const char *start, const char *end,
     }
 
     // Skip to next parameter
-    ptr = salts_scan_to_char(ptr, end, ';');
+    ptr = cmeta_scan_to_char(ptr, end, ';');
   }
 
   return NULL;
@@ -221,7 +221,7 @@ char *mime_get_filename_rfc2231(mem_pool_t *pool,
   const char *end = content_disposition + len;
 
   // Skip disposition type
-  ptr = salts_scan_to_char(ptr, end, ';');
+  ptr = cmeta_scan_to_char(ptr, end, ';');
 
   // Try filename* first (RFC 2231 encoded)
   size_t value_len = 0;
@@ -229,7 +229,7 @@ char *mime_get_filename_rfc2231(mem_pool_t *pool,
 
   if (value && value_len > 0) {
     // Check if it's RFC 2231 encoded (contains charset'language')
-    const char *quote_pos = salts_scan_char(value, value + value_len, '\'');
+    const char *quote_pos = cmeta_scan_char(value, value + value_len, '\'');
     if (quote_pos) {
       // RFC 2231 encoded
       return mime_decode_rfc2231(pool, value, value_len);

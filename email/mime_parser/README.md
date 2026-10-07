@@ -46,7 +46,7 @@ Following Linus Torvalds' "Good Taste" principles:
 
 ```c
 #include "mime_parser.h"
-#include "salts_buffer.h"
+#include "cmeta_buffer.h"
 
 // Setup callbacks
 mime_settings_t settings = {0};

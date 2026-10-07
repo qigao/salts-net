@@ -1,0 +1,5 @@
+foreach(example_name IN ITEMS example_email_send example_email_receive example_email_imap)
+  add_executable(${example_name} ${example_name}.c)
+  target_link_libraries(${example_name} PRIVATE SaltsNet::Email)
+  set_target_properties(${example_name} PROPERTIES FOLDER email/examples)
+endforeach()

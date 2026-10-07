@@ -1,0 +1,482 @@
+{
+  "version": 6,
+  "include": [
+    "CMakePresets.json"
+  ],
+  "configurePresets": [
+    {
+      "name": "vcpkg-cache-ci",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
+      }
+    },
+    {
+      "name": "vcpkg-cache-linux",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "cacheVariables": {
+        "VCPKG_HOST_TRIPLET": "x64-linux"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{HOME}/.cache/qigao/vcpkg-cache"
+      }
+    },
+    {
+      "name": "vcpkg-cache-windows",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "cacheVariables": {
+        "VCPKG_HOST_TRIPLET": "x64-windows"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache"
+      }
+    },
+    {
+      "name": "vcpkg-cache",
+      "hidden": true,
+      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+      "cacheVariables": {
+        "VCPKG_MANIFEST_MODE": true,
+        "VCPKG_APPLOCAL_DEPS": false,
+        "VCPKG_INSTALLED_DIR": "$env{VCPKG_INSTALLED_DIR}"
+      },
+      "environment": {
+        "VCPKG_BINARY_SOURCES": "clear;default,readwrite;nugettimeout,1800;nugetconfig,${sourceDir}/cmake/vcpkg-cache.nuget.config,read",
+        "VCPKG_OVERLAY_PORTS": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/ports",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed",
+        "RE2C_ROOT": "$penv{RE2C_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "local-paths",
+      "hidden": true,
+      "inherits": "vcpkg-cache",
+      "environment": {
+        "PROJECT_ROOT": "$penv{PROJECT_ROOT}",
+        "PKG_ROOT": "$env{PROJECT_ROOT}/external/pkgs",
+        "VCPKG_ROOT": "$penv{VCPKG_ROOT}"
+      }
+    },
+    {
+      "name": "win-paths",
+      "hidden": true,
+      "inherits": [
+        "vcpkg-cache-windows",
+        "local-paths"
+      ],
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "VCPKG_HOST_TRIPLET": "x64-windows"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{LOCALAPPDATA}/qigao/vcpkg-cache"
+      },
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "toolset": {
+        "value": "host=x64",
+        "strategy": "external"
+      }
+    },
+    {
+      "name": "linux-paths",
+      "hidden": true,
+      "inherits": [
+        "local-paths",
+        "vcpkg-cache-linux"
+      ],
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-linux",
+        "VCPKG_HOST_TRIPLET": "x64-linux"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}"
+      }
+    },
+    {
+      "name": "win-dev-user",
+      "inherits": [
+        "win-paths",
+        "dev-win-msvc-ninja"
+      ],
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows/debug",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet/debug"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "win-release-user",
+      "inherits": [
+        "win-paths",
+        "release-win-msvc-ninja"
+      ],
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-windows",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet/release"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}${sourceDir}/build/Msvc-Release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-windows/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "inherits": [
+        "linux-paths",
+        "dev-linux-ninja"
+      ],
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux/debug",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet/debug"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-debug/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/debug/lib${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "inherits": [
+        "linux-paths",
+        "release-linux-ninja"
+      ],
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/x64-linux",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet/release"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "LD_LIBRARY_PATH": "${sourceDir}/build/linux-gcc-release/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/x64-linux/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$penv{PATH}"
+      }
+    },
+    {
+      "name": "ci-paths",
+      "hidden": true,
+      "inherits": [
+        "vcpkg-cache-ci",
+        "vcpkg-cache"
+      ],
+      "generator": "Ninja",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "$env{QIGAO_TARGET_TRIPLET}",
+        "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}"
+      },
+      "environment": {
+        "VCPKG_CACHE_REPOSITORY_ROOT": "$penv{VCPKG_CACHE_REPOSITORY_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
+        "VCPKG_OVERLAY_PORTS": "$penv{VCPKG_OVERLAY_PORTS}",
+        "PKG_ROOT": "${sourceDir}/stage",
+        "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-sdk/$env{QIGAO_SDK_RID}"
+      }
+    },
+    {
+      "name": "ci-sdk-release-user",
+      "inherits": [
+        "ci-paths",
+        "release-mode"
+      ],
+      "binaryDir": "$env{SALTSNET_CI_BUILD_ROOT}",
+      "cacheVariables": {
+        "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}",
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/sdk/$env{QIGAO_SDK_RID}",
+        "BUILD_TESTING": true,
+        "BUILD_EXAMPLES": false,
+        "ENABLE_SANITIZER_ADDRESS": false
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "RE2C_ROOT": "$penv{RE2C_ROOT}",
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+      },
+      "hidden": true
+    },
+    {
+      "name": "ci-win-release-user",
+      "inherits": [
+        "ci-sdk-release-user",
+        "release-win-msvc-ninja"
+      ],
+      "environment": {
+        "VCPKG_ROOT": "$penv{QIGAO_VCPKG_ROOT}"
+      },
+      "hidden": false
+    },
+    {
+      "name": "ci-host-release-user",
+      "inherits": "ci-linux-release-user",
+      "binaryDir": "${sourceDir}/build/ci-host",
+      "cacheVariables": {
+        "BUILD_TESTING": false,
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet-host/release"
+      },
+      "environment": {
+        "SALTS_ROOT": "$penv{SALTS_HOST_ROOT}",
+        "QIGAO_TARGET_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
+        "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-host",
+        "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host"
+      },
+      "hidden": false
+    },
+    {
+      "name": "ci-android-sdk-release-user",
+      "inherits": [
+        "ci-sdk-release-user",
+        "android-arm64-v8a-release"
+      ],
+      "cacheVariables": {
+        "ANDROID_PLATFORM": "android-26",
+        "BUILD_TESTING": false,
+        "LEMON_EXECUTABLE": "${sourceDir}/build/ci-host/bin/lemon"
+      },
+      "hidden": false
+    },
+    {
+      "name": "ci-linux-release-user",
+      "inherits": [
+        "ci-sdk-release-user",
+        "release-linux-ninja"
+      ],
+      "hidden": false
+    },
+    {
+      "name": "ci-macos-release-user",
+      "inherits": [
+        "ci-sdk-release-user",
+        "release-mac-ninja"
+      ],
+      "hidden": false
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "win-dev-user",
+      "configurePreset": "win-dev-user",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "install-win-dev-user",
+      "configurePreset": "win-dev-user",
+      "targets": [
+        "install"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "install-win-release-user",
+      "configurePreset": "win-release-user",
+      "targets": [
+        "install"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "install-linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "targets": [
+        "install"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "install-linux-release-user",
+      "configurePreset": "linux-release-user",
+      "targets": [
+        "install"
+      ],
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "ci-sdk-release-user",
+      "configurePreset": "ci-sdk-release-user",
+      "hidden": true
+    },
+    {
+      "name": "install-ci-sdk-release-user",
+      "configurePreset": "ci-sdk-release-user",
+      "targets": [
+        "install"
+      ],
+      "hidden": true
+    },
+    {
+      "name": "ci-host-release-user",
+      "configurePreset": "ci-host-release-user"
+    },
+    {
+      "name": "install-ci-host-release-user",
+      "configurePreset": "ci-host-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-android-sdk-release-user",
+      "configurePreset": "ci-android-sdk-release-user"
+    },
+    {
+      "name": "install-ci-android-sdk-release-user",
+      "configurePreset": "ci-android-sdk-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-win-release-user",
+      "configurePreset": "ci-win-release-user"
+    },
+    {
+      "name": "install-ci-win-release-user",
+      "configurePreset": "ci-win-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-linux-release-user",
+      "configurePreset": "ci-linux-release-user"
+    },
+    {
+      "name": "install-ci-linux-release-user",
+      "configurePreset": "ci-linux-release-user",
+      "targets": [
+        "install"
+      ]
+    },
+    {
+      "name": "ci-macos-release-user",
+      "configurePreset": "ci-macos-release-user"
+    },
+    {
+      "name": "install-ci-macos-release-user",
+      "configurePreset": "ci-macos-release-user",
+      "targets": [
+        "install"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "win-dev-user",
+      "configurePreset": "win-dev-user",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    {
+      "name": "linux-dev-user",
+      "configurePreset": "linux-dev-user",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "ci-sdk-release-user",
+      "configurePreset": "ci-sdk-release-user",
+      "inherits": "base-test",
+      "hidden": true
+    },
+    {
+      "name": "ci-win-release-user",
+      "inherits": "base-test",
+      "configurePreset": "ci-win-release-user"
+    },
+    {
+      "name": "ci-linux-release-user",
+      "configurePreset": "ci-linux-release-user",
+      "inherits": "base-test"
+    },
+    {
+      "name": "ci-macos-release-user",
+      "configurePreset": "ci-macos-release-user",
+      "inherits": "base-test"
+    }
+  ]
+}

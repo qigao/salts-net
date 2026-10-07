@@ -39,22 +39,10 @@ install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/email
         DESTINATION include
         FILES_MATCHING PATTERN "*.h")
 
-# ── Tests ──────────────────────────────────────────────────────────────
-cmake_add_test(
-  SOURCES
-    test/test_email_smtp.c
-    test/test_email_pop3.c
-    test/test_email_cnet.c
-    test/test_email_message.c
-    test/test_email_integration.c
-  LIBS   ${TARGET_NAME} Salts::TinyTest
-  FOLDER "email/test")
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()
 
-# ── Examples ───────────────────────────────────────────────────────────
-cmake_add_benchmark(
-  SOURCES
-    examples/example_email_send.c
-    examples/example_email_receive.c
-    examples/example_email_imap.c
-  LIBS   ${TARGET_NAME}
-  FOLDER "email/examples")
+if(BUILD_EXAMPLES)
+  add_subdirectory(examples)
+endif()

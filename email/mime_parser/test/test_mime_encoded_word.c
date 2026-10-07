@@ -5,7 +5,7 @@
 
 #include "mime_encoded_word.h"
 #include "tinytest.h"
-#include "salts_buffer.h"
+#include "cmeta_buffer.h"
 #include <string.h>
 
 spec("mime_encoded_word") {

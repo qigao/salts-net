@@ -758,7 +758,7 @@ int usm_decode_security_params(
  * Get current timestamp in milliseconds
  */
 static uint64_t get_current_time_ms(void) {
-    return salts_monotonic_ms();
+    return cmeta_monotonic_ms();
 }
 
 /*

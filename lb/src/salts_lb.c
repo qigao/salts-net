@@ -2,7 +2,7 @@
 
 #include <cnet/cnet.h>
 #include <salts/error_codes.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 
 #include <limits.h>
 #include <stdlib.h>

@@ -180,7 +180,7 @@ static int wait_for_pop3_message(const smtp4dev_test_config_t *cfg, smtp4dev_res
       }
     }
 
-    salts_sleep_ms(200u);
+    cmeta_sleep_ms(200u);
   }
 
   fail_result(result, "POP3 did not return the sent message");
@@ -252,7 +252,7 @@ static int wait_for_imap_message(const smtp4dev_test_config_t *cfg, smtp4dev_res
     }
 
     free(results);
-    salts_sleep_ms(200u);
+    cmeta_sleep_ms(200u);
   }
 
   fail_result(result, "IMAP did not return the sent message");

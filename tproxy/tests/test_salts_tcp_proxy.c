@@ -227,7 +227,7 @@ static void proxy_test_client_run(void *user) {
     char request[256];
     int request_size;
     if (proxy_test_send_all(socket_value, "CON", 3u) != 0) goto done;
-    salts_sleep_ms(30u);
+    cmeta_sleep_ms(30u);
     request_size = snprintf(request, sizeof(request),
                             "NECT 127.0.0.1:%u HTTP/1.1\r\n"
                             "Proxy-Authorization: Basic dXNlcjpwYXNz\r\n\r\nsalts-net",
@@ -280,8 +280,8 @@ static const char *proxy_test_route(const salts_tcp_proxy_route_request_t *reque
 }
 
 static int proxy_test_poll_until(salts_tcp_proxy_t *proxy, proxy_test_client_t *client) {
-  const uint64_t deadline = salts_monotonic_ms() + PROXY_TEST_TIMEOUT_MS;
-  while (salts_monotonic_ms() < deadline) {
+  const uint64_t deadline = cmeta_monotonic_ms() + PROXY_TEST_TIMEOUT_MS;
+  while (cmeta_monotonic_ms() < deadline) {
     size_t events = 0u;
     if (salts_tcp_proxy_poll(proxy, 10u, &events) != SALTS_OK) return -1;
     if (atomic_load_explicit(&client->done, memory_order_acquire)) return 0;
@@ -294,8 +294,8 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
   salts_tcp_proxy_t *proxy;
   proxy_test_echo_t echo = {.listener = PROXY_TEST_INVALID_SOCKET};
   proxy_test_client_t client = {.kind = kind};
-  salts_thread_t echo_thread = NULL;
-  salts_thread_t client_thread = NULL;
+  cmeta_thread_t echo_thread = NULL;
+  cmeta_thread_t client_thread = NULL;
   char raw_uri[64];
   proxy_test_route_t route = {{0}, 0, SALTS_PROXY_PROTOCOL_AUTO, 0u};
 
@@ -304,7 +304,7 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
   if (needs_echo) {
     echo.listener = proxy_test_echo_listener(&echo.port);
     check(echo.listener != PROXY_TEST_INVALID_SOCKET);
-    check_equal(salts_thread_create(&echo_thread, proxy_test_echo_run, &echo), SALTS_OK);
+    check_equal(cmeta_thread_create(&echo_thread, proxy_test_echo_run, &echo), SALTS_OK);
   }
   if (config->protocol == SALTS_PROXY_PROTOCOL_RAW) {
     check(snprintf(raw_uri, sizeof(raw_uri), "tcp://127.0.0.1:%u", (unsigned int)echo.port) > 0);
@@ -320,16 +320,16 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
   check_equal(salts_tcp_proxy_listen(proxy, "127.0.0.1", 0u), SALTS_OK);
   check_equal(salts_tcp_proxy_port(proxy, &client.proxy_port), SALTS_OK);
   client.backend_port = config->route ? 1u : echo.port;
-  check_equal(salts_thread_create(&client_thread, proxy_test_client_run, &client), SALTS_OK);
+  check_equal(cmeta_thread_create(&client_thread, proxy_test_client_run, &client), SALTS_OK);
   check_equal(proxy_test_poll_until(proxy, &client), 0);
   check_equal(salts_tcp_proxy_stop(proxy), SALTS_OK);
   check_equal(salts_tcp_proxy_stop(proxy), SALTS_OK);
   check_equal(salts_tcp_proxy_destroy(proxy), SALTS_OK);
-  check_equal(salts_thread_join(&client_thread), SALTS_OK);
-  salts_thread_destroy(&client_thread);
+  check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
+  cmeta_thread_destroy(&client_thread);
   if (echo_thread) {
-    check_equal(salts_thread_join(&echo_thread), SALTS_OK);
-    salts_thread_destroy(&echo_thread);
+    check_equal(cmeta_thread_join(&echo_thread), SALTS_OK);
+    cmeta_thread_destroy(&echo_thread);
     check_equal(echo.status, 0);
   }
   if (config->route) {

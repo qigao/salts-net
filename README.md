@@ -62,30 +62,83 @@ Use CFlow only when the application genuinely needs graph composition, demand pr
 
 ## Build and test
 
-Install the latest stable released **Salts** SDK that matches the selected build profile and set `SALTS_ROOT`.
+Restore the latest stable released **Salts** SDK before configuring. The restore
+step uses `Version="*"` with `--no-cache --force-evaluate`, and selects package
+paths from NuGet's resolved assets. Salts 2.1.0 is the upgrade target; it is not
+pinned in the build or package metadata. Salts 2.0 is the minimum supported
+version because the buffer, SIMD scan, clock, thread, and random APIs now use
+their `cmeta_*` names.
 
 SaltsNet intentionally does **not** depend on SaltsUtils; keeping `SaltsNet -> Salts` one-way avoids an unnecessary utility-layer dependency.
 
-Windows Release example:
+The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
+presets retain compiler and platform settings. Following
+[SaltsUtils 4.2](https://github.com/qigao/salts-utils/releases/tag/v4.2.0), vcpkg runs in manifest mode
+through the shared `qigao/vcpkg-cache` toolchain, with a read-only GitHub feed
+and a writable local cache. The existing vcpkg baseline and BoringSSL dependency
+are retained. Runtime libraries are resolved through the selected preset's
+environment.
+
+Prerequisites: PowerShell 7, .NET SDK 8, CMake 3.25 or newer, Ninja, a C/C++ toolchain, vcpkg,
+and the [shared cache checkout](https://github.com/qigao/vcpkg-cache).
+Set `PROJECT_ROOT` (the parent of `external/pkgs`), `VCPKG_ROOT`, and
+`GITHUB_TOKEN` with `read:packages`. Windows uses the shared cache at
+`%LOCALAPPDATA%/qigao/vcpkg-cache`; Linux reads `VCPKG_CACHE_REPOSITORY_ROOT`
+from the environment and requires Mono for the NuGet binary cache client.
+
+Windows Release example, from PowerShell in an x64 `VsDevCmd.bat` environment:
 
 ```powershell
-$env:SALTS_ROOT = 'C:/projects/cpp/external/pkgs/salts/release'
+./cmake/ci/restore-native-sdk.ps1 -SaltsRid windows-x64 -HostRid windows-x64 -Local
 cmake --preset win-release-user
 cmake --build --preset win-release-user --parallel
 ctest --preset win-release-user
 ```
 
-Validate the installed package boundary:
+The restore command obtains `Qigao.Re2c.Binary` from the GitHub Packages feed
+in [cmake/vcpkg-cache.nuget.config](cmake/vcpkg-cache.nuget.config), also using
+`Version="*"`. It sets `SALTS_ROOT`, `RE2C_ROOT`, and `RE2C_VERSION` in the current
+PowerShell session. `RE2C_ROOT` selects `tools/<host RID>` from the restored
+package, including when cross-compiling Android. CMake resolves re2c only from
+that root, and lexer generation depends on that executable. The Docker build
+base does not install a distribution re2c; derived build environments must
+provide the restored package root as well.
 
-```powershell
-ctest --preset win-release-user -L package
-```
+Linux uses the same script with `linux-x64` for both RIDs, then
+`linux-release-user` for configure, build, and test. Debug/ASan builds use
+`win-dev-user` or `linux-dev-user` and require a matching Debug Salts SDK supplied
+through `SALTS_ROOT`; the published Release SDK is not a Debug SDK.
 
 Install SaltsNet:
 
 ```powershell
 cmake --build --preset install-win-release-user --parallel
 ```
+
+CI uses `ci-linux-release-user`, `ci-macos-release-user`, and
+`ci-win-release-user`. Each inherits the corresponding shared compiler profile:
+GCC on Linux, Homebrew GCC 15 on macOS, and MSVC with UTF-8 on Windows.
+The vcpkg setup action uses the same pinned tool bootstrap as current Salts and
+SaltsUtils; native package restoration still resolves the latest release each run.
+Android arm64 uses `ci-android-sdk-release-user` after building host
+tools. Its `LEMON_EXECUTABLE` must point to that completed host build; the
+target toolchain never produces or searches for an executable to run on the host.
+Host jobs run the formal CTest suites directly. Android is compiled and linked
+only; device execution is separate. SDK staging remains
+`stage/sdk/<RID>`, and publishing remains restricted to version tags.
+
+`BUILD_TESTING` controls all test targets, and `BUILD_EXAMPLES` controls all
+examples, including the email clients. Email and MIME test directories own their
+explicit test target names and sources. The old package consumer harness and
+the unused `BUILD_BENCHMARKS` option have been removed; SDK installation is a
+normal build/install step.
+
+The upgrade changes build inputs and orchestration, not SaltsNet's public API.
+Reconfigure and rebuild consumers together with the selected SDK to avoid
+mixing headers and runtime versions. Local restoration stays under ignored
+`stage/nuget` and does not overwrite installed SDKs. To undo the build migration,
+revert its configuration changes and rebuild with the previous matching SDK;
+automatic fallback to an older package is intentionally unsupported.
 
 Android device testing and LLDB notes are documented in [tools/android-test.md](tools/android-test.md).
 

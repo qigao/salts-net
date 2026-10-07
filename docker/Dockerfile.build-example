@@ -10,10 +10,10 @@ RUN vcpkg install --triplet x64-linux
 
 COPY . ./
 
-RUN cmake --preset release-linux-ninja \
+RUN cmake --preset linux-release-user \
     -DBUILD_TESTING=OFF \
     -DBUILD_EXAMPLES=OFF \
-    && cmake --build --preset build-default-linux
+    && cmake --build --preset linux-release-user
 
 # Optional:
 # RUN ctest --preset linux-release-user

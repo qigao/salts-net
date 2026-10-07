@@ -129,14 +129,14 @@ static void stun_test_server_run(void *user) {
 spec("STUN CNet transport") {
   it("performs a binding request without an external runtime context") {
     stun_test_server_t server;
-    salts_thread_t server_thread = NULL;
+    cmeta_thread_t server_thread = NULL;
     stun_mapped_address_t mapped;
     uint16_t port = 0u;
     int status;
 
     check_equal(stun_test_server_open(&server, &port), 0);
     server.send_mismatched_first = 1;
-    check_equal(salts_thread_create(&server_thread, stun_test_server_run, &server), 0);
+    check_equal(cmeta_thread_create(&server_thread, stun_test_server_run, &server), 0);
 
     const stun_client_config_t config = {.server_host = "localhost",
                                          .server_port = port,
@@ -145,8 +145,8 @@ spec("STUN CNet transport") {
     memset(&mapped, 0, sizeof(mapped));
     status = stun_binding_request(&config, &mapped);
 
-    check_equal(salts_thread_join(&server_thread), 0);
-    salts_thread_destroy(&server_thread);
+    check_equal(cmeta_thread_join(&server_thread), 0);
+    cmeta_thread_destroy(&server_thread);
     stun_test_server_close(&server);
 
     check_equal(status, 0);

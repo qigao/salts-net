@@ -263,7 +263,7 @@ static turn_test_auth_exchange_t turn_test_authenticated_allocate(
   turn_test_auth_exchange_t exchange = {.client_status = -1, .server_status = -1};
   turn_test_server_t socket_owner;
   turn_test_auth_server_t server;
-  salts_thread_t server_thread = NULL;
+  cmeta_thread_t server_thread = NULL;
   turn_allocation_t allocation;
   uint16_t port = 0u;
 
@@ -271,7 +271,7 @@ static turn_test_auth_exchange_t turn_test_authenticated_allocate(
   server.socket = socket_owner.socket;
   server.status = -1;
   server.integrity = integrity;
-  if (salts_thread_create(&server_thread, turn_test_auth_server_run, &server) != 0) {
+  if (cmeta_thread_create(&server_thread, turn_test_auth_server_run, &server) != 0) {
     turn_test_server_close(&socket_owner);
     return exchange;
   }
@@ -288,8 +288,8 @@ static turn_test_auth_exchange_t turn_test_authenticated_allocate(
     }
     turn_client_destroy(client);
   }
-  if (salts_thread_join(&server_thread) == 0) exchange.server_status = server.status;
-  salts_thread_destroy(&server_thread);
+  if (cmeta_thread_join(&server_thread) == 0) exchange.server_status = server.status;
+  cmeta_thread_destroy(&server_thread);
   turn_test_server_close(&socket_owner);
   return exchange;
 }
@@ -313,12 +313,12 @@ spec("turn") {
 
     it("should allocate through a CNet datagram transport") {
       turn_test_server_t server;
-      salts_thread_t server_thread = NULL;
+      cmeta_thread_t server_thread = NULL;
       turn_allocation_t allocation;
       uint16_t port = 0u;
 
       check_equal(turn_test_server_open(&server, &port), 0);
-      check_equal(salts_thread_create(&server_thread, turn_test_server_run, &server), 0);
+      check_equal(cmeta_thread_create(&server_thread, turn_test_server_run, &server), 0);
 
       const turn_client_config_t config = {.server_host = "localhost",
                                            .server_port = port,
@@ -329,8 +329,8 @@ spec("turn") {
       check_equal(turn_client_allocate(client, &allocation), 0);
       turn_client_destroy(client);
 
-      check_equal(salts_thread_join(&server_thread), 0);
-      salts_thread_destroy(&server_thread);
+      check_equal(cmeta_thread_join(&server_thread), 0);
+      cmeta_thread_destroy(&server_thread);
       turn_test_server_close(&server);
       check_equal(server.status, 0);
       check_equal(allocation.relayed_ip, "203.0.113.9");

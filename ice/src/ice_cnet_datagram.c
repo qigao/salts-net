@@ -32,7 +32,7 @@ static native_io_backend_kind ice_cnet_backend(void) {
 }
 
 static uint32_t ice_cnet_remaining_ms(uint64_t deadline) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   const uint64_t remaining = now < deadline ? deadline - now : 0u;
   return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
 }
@@ -246,7 +246,7 @@ int ice_cnet_datagram_send(ice_cnet_datagram_t *transport, const cnet_datagram_p
     return status;
   }
 
-  deadline = salts_monotonic_ms() + timeout_ms;
+  deadline = cmeta_monotonic_ms() + timeout_ms;
   while (transport->send_pending) {
     status = ice_cnet_poll(transport, deadline);
     if (status != SALTS_OK) return status;
@@ -268,7 +268,7 @@ int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer
     transport->receive_armed = 1;
   }
 
-  deadline = salts_monotonic_ms() + timeout_ms;
+  deadline = cmeta_monotonic_ms() + timeout_ms;
   while (transport->receive_ready == 0) {
     status = ice_cnet_poll(transport, deadline);
     if (status != SALTS_OK) return status;

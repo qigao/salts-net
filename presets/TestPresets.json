@@ -9,6 +9,11 @@
       "hidden": true,
       "displayName": "Base Test Preset",
       "description": "Base configuration for running tests",
+      "filter": {
+        "exclude": {
+          "label": "benchmark"
+        }
+      },
       "execution": {
         "noTestsAction": "error",
         "stopOnFailure": false
@@ -26,40 +31,56 @@
         "lhs": "${hostSystemName}",
         "rhs": "Windows"
       },
-      "configurePreset": "dev-win-msvc-ninja"
+      "configurePreset": "dev-win-msvc-ninja",
+      "hidden": true
     },
     {
-       "name": "test-release-windows",
-       "displayName": "Release Windows Tests",
-       "inherits": "base-test",
-       "condition": {
-         "type": "equals",
-         "lhs": "${hostSystemName}",
-         "rhs": "Windows"
-       },
-       "configurePreset": "release-win-msvc-ninja"
+      "name": "test-release-windows",
+      "displayName": "Release Windows Tests",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "configurePreset": "release-win-msvc-ninja",
+      "hidden": true
     },
     {
-       "name": "test-dev-linux",
-       "displayName": "Developer Linux Tests",
-       "inherits": "base-test",
-       "condition": {
-         "type": "equals",
-         "lhs": "${hostSystemName}",
-         "rhs": "Linux"
-       },
-       "configurePreset": "dev-linux-ninja"
+      "name": "test-dev-linux",
+      "displayName": "Developer Linux Tests",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "configurePreset": "dev-linux-ninja",
+      "hidden": true
     },
     {
-       "name": "test-release-linux",
-       "displayName": "Release Linux Tests",
-       "inherits": "base-test",
-       "condition": {
-         "type": "equals",
-         "lhs": "${hostSystemName}",
-         "rhs": "Linux"
-       },
-       "configurePreset": "release-linux-ninja"
+      "name": "test-release-linux",
+      "displayName": "Release Linux Tests",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "configurePreset": "release-linux-ninja",
+      "hidden": true
+    },
+    {
+      "name": "test-release-mac",
+      "displayName": "Release macOS Tests",
+      "inherits": "base-test",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "configurePreset": "release-mac-ninja",
+      "hidden": true
     }
   ]
 }

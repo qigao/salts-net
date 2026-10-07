@@ -668,7 +668,7 @@ static int turn_server_peer_matches(const salts_turn_client_t *tc,
 
 static int turn_receive_owned(salts_turn_client_t *tc, char **data_out, size_t *data_len_out,
                               uint32_t timeout_ms) {
-    const uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+    const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
     char *data;
     if (!tc || !data_out || !data_len_out || timeout_ms == 0u) return SALTS_EINVAL;
     data = (char *)malloc(CNET_DATAGRAM_MAX_PAYLOAD_BYTES);
@@ -677,7 +677,7 @@ static int turn_receive_owned(salts_turn_client_t *tc, char **data_out, size_t *
     for (;;) {
         cnet_datagram_peer peer;
         size_t data_len = 0u;
-        const uint64_t now = salts_monotonic_ms();
+        const uint64_t now = cmeta_monotonic_ms();
         const uint32_t remaining_ms = now < deadline ? (uint32_t)(deadline - now) : 0u;
         int rc;
         if (remaining_ms == 0u) {
@@ -707,9 +707,9 @@ static int turn_send_and_recv(salts_turn_client_t *tc,
                                 (uint32_t)tc->timeout_ms);
     if (rc != SALTS_OK) return rc;
 
-    deadline = salts_monotonic_ms() + (uint64_t)tc->timeout_ms;
+    deadline = cmeta_monotonic_ms() + (uint64_t)tc->timeout_ms;
     for (;;) {
-        uint64_t now = salts_monotonic_ms();
+        uint64_t now = cmeta_monotonic_ms();
         uint64_t remaining = (deadline > now) ? (deadline - now) : 0;
         char *data = NULL;
         size_t data_len = 0;
@@ -988,7 +988,7 @@ int turn_client_allocate(salts_turn_client_t *tc, turn_allocation_t *allocation_
     tc->allocation = alloc;
     if (tc->allocation.lifetime == 0) tc->allocation.lifetime = tc->requested_lifetime;
     tc->allocation_valid = 1;
-    tc->allocation_expires_at_ms = salts_monotonic_ms() +
+    tc->allocation_expires_at_ms = cmeta_monotonic_ms() +
                                    (uint64_t)tc->allocation.lifetime * 1000ULL;
     *allocation_out = alloc;
     return 0;
@@ -1034,7 +1034,7 @@ int turn_client_refresh(salts_turn_client_t *tc) {
         if (rc != 0) return rc;
 
         tc->allocation.lifetime = lifetime;
-        tc->allocation_expires_at_ms = salts_monotonic_ms() + (uint64_t)lifetime * 1000ULL;
+        tc->allocation_expires_at_ms = cmeta_monotonic_ms() + (uint64_t)lifetime * 1000ULL;
         return 0;
     }
     return -TURN_ERROR_STALE_NONCE;
@@ -1043,7 +1043,7 @@ int turn_client_refresh(salts_turn_client_t *tc) {
 int turn_client_create_permission(salts_turn_client_t *tc,
                                   const char *peer_ip, uint16_t peer_port) {
     if (!tc || !peer_ip || !tc->allocation_valid) return -1;
-    uint64_t now = salts_monotonic_ms();
+    uint64_t now = cmeta_monotonic_ms();
     turn_channel_t *entry = turn_find_peer_entry(tc, peer_ip, peer_port, 0);
     int entry_index = entry ? (int)(entry - tc->channels) : -1;
     if (entry && tc->permission_expires_at_ms[entry_index] >
@@ -1089,7 +1089,7 @@ int turn_client_create_permission(salts_turn_client_t *tc,
     entry = turn_remember_peer_permission(tc, peer_ip, peer_port);
     if (!entry) return -3;
     entry_index = (int)(entry - tc->channels);
-    tc->permission_expires_at_ms[entry_index] = salts_monotonic_ms() +
+    tc->permission_expires_at_ms[entry_index] = cmeta_monotonic_ms() +
                                                 (uint64_t)TURN_PERMISSION_LIFETIME * 1000ULL;
     return 0;
 }
@@ -1101,7 +1101,7 @@ int turn_client_channel_bind(salts_turn_client_t *tc,
 
     turn_channel_t *entry = turn_find_peer_entry(tc, peer_ip, peer_port, 0);
     int entry_index = entry ? (int)(entry - tc->channels) : -1;
-    uint64_t now = salts_monotonic_ms();
+    uint64_t now = cmeta_monotonic_ms();
     if (entry && entry->active &&
         tc->channel_expires_at_ms[entry_index] > now + TURN_CHANNEL_REFRESH_MARGIN_MS) {
         if (channel_out) *channel_out = entry->channel_number;
@@ -1157,9 +1157,9 @@ int turn_client_channel_bind(salts_turn_client_t *tc,
 
     entry->channel_number = channel;
     entry->active = 1;
-    tc->permission_expires_at_ms[entry_index] = salts_monotonic_ms() +
+    tc->permission_expires_at_ms[entry_index] = cmeta_monotonic_ms() +
                                                 (uint64_t)TURN_PERMISSION_LIFETIME * 1000ULL;
-    tc->channel_expires_at_ms[entry_index] = salts_monotonic_ms() +
+    tc->channel_expires_at_ms[entry_index] = cmeta_monotonic_ms() +
                                              (uint64_t)TURN_CHANNEL_LIFETIME * 1000ULL;
     if (channel_out) *channel_out = channel;
     return 0;
@@ -1260,11 +1260,11 @@ int turn_client_maintain(salts_turn_client_t *tc) {
     int rc;
 
     if (!tc || !tc->allocation_valid) return -1;
-    now = salts_monotonic_ms();
+    now = cmeta_monotonic_ms();
     if (tc->allocation_expires_at_ms <= now + TURN_ALLOCATION_REFRESH_MARGIN_MS) {
         rc = turn_client_refresh(tc);
         if (rc != 0) return rc;
-        now = salts_monotonic_ms();
+        now = cmeta_monotonic_ms();
     }
 
     for (int i = 0; i < tc->channel_count; ++i) {

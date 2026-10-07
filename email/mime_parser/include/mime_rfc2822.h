@@ -20,7 +20,7 @@
 
 #include "platform.h"
 #include <stddef.h>
-#include "salts_buffer.h"
+#include "cmeta_buffer.h"
 
 #ifdef __cplusplus
 extern "C" {

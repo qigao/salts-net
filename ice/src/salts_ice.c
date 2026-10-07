@@ -75,7 +75,7 @@ static void ice_tracef(const char *fmt, ...) {
 static int generate_random_u64(uint64_t *value) {
   if (!value)
     return -1;
-  return salts_secure_random(value, sizeof(*value));
+  return cmeta_secure_random(value, sizeof(*value));
 }
 
 static int resolve_mdns_hostname(ice_candidate_t *candidate) {
@@ -148,7 +148,7 @@ typedef int (*ice_wait_wake_fn)(void *target);
 
 typedef struct {
   atomic_int close_requested;
-  salts_mutex_t mutex;
+  cmeta_mutex_t mutex;
   int owner_active;
   unsigned int owner_depth;
 #if defined(_WIN32)
@@ -175,7 +175,7 @@ static int generate_random_string(char *buf, size_t len) {
 
   while (i + 1 < len) {
     uint8_t random_byte;
-    if (salts_secure_random(&random_byte, sizeof(random_byte)) != 0)
+    if (cmeta_secure_random(&random_byte, sizeof(random_byte)) != 0)
       return -1;
     if (random_byte >= uniform_limit)
       continue;
@@ -239,19 +239,19 @@ static void ice_agent_owner_enter(salts_ice_agent_t *agent) {
   ice_progress_owner_t *progress = ice_agent_progress(agent);
   if (!progress) return;
   for (;;) {
-    salts_mutex_lock(&progress->mutex);
+    cmeta_mutex_lock(&progress->mutex);
     if (!progress->owner_active) {
       ice_progress_set_current_thread_owner(progress);
-      salts_mutex_unlock(&progress->mutex);
+      cmeta_mutex_unlock(&progress->mutex);
       return;
     }
     if (ice_progress_current_thread_is_owner(progress)) {
       progress->owner_depth++;
-      salts_mutex_unlock(&progress->mutex);
+      cmeta_mutex_unlock(&progress->mutex);
       return;
     }
-    salts_mutex_unlock(&progress->mutex);
-    salts_sleep_ms(1u);
+    cmeta_mutex_unlock(&progress->mutex);
+    cmeta_sleep_ms(1u);
   }
 }
 
@@ -259,14 +259,14 @@ static void ice_agent_owner_leave(salts_ice_agent_t *agent) {
   ice_progress_owner_t *progress = ice_agent_progress(agent);
   int finish_close;
   if (!progress) return;
-  salts_mutex_lock(&progress->mutex);
+  cmeta_mutex_lock(&progress->mutex);
   if (!ice_progress_current_thread_is_owner(progress)) {
-    salts_mutex_unlock(&progress->mutex);
+    cmeta_mutex_unlock(&progress->mutex);
     return;
   }
   if (progress->owner_depth > 1u) {
     progress->owner_depth--;
-    salts_mutex_unlock(&progress->mutex);
+    cmeta_mutex_unlock(&progress->mutex);
     return;
   }
   progress->wait_target = NULL;
@@ -277,13 +277,13 @@ static void ice_agent_owner_leave(salts_ice_agent_t *agent) {
     progress->owner_active = 0;
     progress->owner_depth = 0u;
   }
-  salts_mutex_unlock(&progress->mutex);
+  cmeta_mutex_unlock(&progress->mutex);
   if (finish_close) {
     ice_agent_finish_close(agent);
-    salts_mutex_lock(&progress->mutex);
+    cmeta_mutex_lock(&progress->mutex);
     progress->owner_active = 0;
     progress->owner_depth = 0u;
-    salts_mutex_unlock(&progress->mutex);
+    cmeta_mutex_unlock(&progress->mutex);
   }
 }
 
@@ -291,26 +291,26 @@ static int ice_agent_wait_begin(salts_ice_agent_t *agent, void *target,
                                 ice_wait_wake_fn wake) {
   ice_progress_owner_t *progress = ice_agent_progress(agent);
   if (!progress || !target || !wake) return -1;
-  salts_mutex_lock(&progress->mutex);
+  cmeta_mutex_lock(&progress->mutex);
   if (atomic_load_explicit(&progress->close_requested, memory_order_acquire)) {
-    salts_mutex_unlock(&progress->mutex);
+    cmeta_mutex_unlock(&progress->mutex);
     return -1;
   }
   progress->wait_target = target;
   progress->wait_wake = wake;
-  salts_mutex_unlock(&progress->mutex);
+  cmeta_mutex_unlock(&progress->mutex);
   return 0;
 }
 
 static void ice_agent_wait_end(salts_ice_agent_t *agent, void *target) {
   ice_progress_owner_t *progress = ice_agent_progress(agent);
   if (!progress) return;
-  salts_mutex_lock(&progress->mutex);
+  cmeta_mutex_lock(&progress->mutex);
   if (progress->wait_target == target) {
     progress->wait_target = NULL;
     progress->wait_wake = NULL;
   }
-  salts_mutex_unlock(&progress->mutex);
+  cmeta_mutex_unlock(&progress->mutex);
 }
 
 static int ice_wake_datagram(void *target) {
@@ -329,9 +329,9 @@ static int ice_agent_is_closed(const salts_ice_agent_t *agent) {
       !atomic_load_explicit(&progress->close_requested, memory_order_acquire)) {
     return 0;
   }
-  salts_mutex_lock(&progress->mutex);
+  cmeta_mutex_lock(&progress->mutex);
   const int is_owner = ice_progress_current_thread_is_owner(progress);
-  salts_mutex_unlock(&progress->mutex);
+  cmeta_mutex_unlock(&progress->mutex);
   if (is_owner) ice_agent_finish_close((salts_ice_agent_t *)agent);
   return 1;
 }
@@ -345,7 +345,7 @@ static void set_state(salts_ice_agent_t *agent, ice_state_t new_state) {
 
     if ((new_state == ICE_STATE_CONNECTED || new_state == ICE_STATE_COMPLETED) &&
         old_state != ICE_STATE_CONNECTED && old_state != ICE_STATE_COMPLETED) {
-      uint64_t now = salts_monotonic_ms();
+      uint64_t now = cmeta_monotonic_ms();
       memset(agent->consent_txn_ids, 0, sizeof(agent->consent_txn_ids));
       memset(agent->consent_txn_sent_ms, 0, sizeof(agent->consent_txn_sent_ms));
       agent->consent_txn_next = 0;
@@ -868,7 +868,7 @@ static void gather_relay_candidates(salts_ice_agent_t *agent) {
       TLOG_WARNF("TURN allocate failed server={} port={} attempt={} rc={}", host, port,
                 attempt + 1, result);
       if (attempt + 1 < 3) {
-        salts_sleep_ms(200u);
+        cmeta_sleep_ms(200u);
         if (ice_agent_is_closed(agent))
           return;
       }
@@ -967,7 +967,7 @@ salts_ice_agent_t *ice_agent_create(const ice_config_t *config) {
     return NULL;
   }
   atomic_init(&progress->close_requested, 0);
-  salts_mutex_init(&progress->mutex);
+  cmeta_mutex_init(&progress->mutex);
   agent->progress_owner_reserved = progress;
 
   agent->config = *config;
@@ -978,7 +978,7 @@ salts_ice_agent_t *ice_agent_create(const ice_config_t *config) {
   if (generate_random_u64(&agent->tie_breaker) != 0 ||
       generate_random_string(agent->local_ufrag, 8) != 0 ||
       generate_random_string(agent->local_pwd, 24) != 0) {
-    salts_mutex_destroy(&progress->mutex);
+    cmeta_mutex_destroy(&progress->mutex);
     free(progress);
     free(agent);
     return NULL;
@@ -1033,7 +1033,7 @@ static void ice_agent_release(salts_ice_agent_t *agent) {
   ice_agent_quiesce_transports(agent);
   progress = ice_agent_progress(agent);
   if (progress) {
-    salts_mutex_destroy(&progress->mutex);
+    cmeta_mutex_destroy(&progress->mutex);
     free(progress);
     agent->progress_owner_reserved = NULL;
   }
@@ -1459,7 +1459,7 @@ static int send_connectivity_check_internal(salts_ice_agent_t *agent, ice_candid
     if (track_transaction) {
       pair->state = ICE_PAIR_STATE_IN_PROGRESS;
       pair->check_count++;
-      pair->last_check_time = salts_monotonic_ms();
+      pair->last_check_time = cmeta_monotonic_ms();
       agent->current_check_nominating = nominate;
     }
     TLOG_DEBUGF("ICE check sent {}:{} -> {}:{} nominate={} pair_state={}",
@@ -1728,7 +1728,7 @@ static void handle_stun_response(salts_ice_agent_t *agent, const uint8_t *data, 
     memset(&agent->consent_txn_ids[consent_txn_index], 0,
            sizeof(agent->consent_txn_ids[consent_txn_index]));
     agent->consent_txn_sent_ms[consent_txn_index] = 0;
-    agent->last_consent_response_ms = salts_monotonic_ms();
+    agent->last_consent_response_ms = cmeta_monotonic_ms();
     return;
   }
 
@@ -2157,7 +2157,7 @@ static int schedule_next_consent_check(salts_ice_agent_t *agent, uint64_t now) {
   uint64_t minimum_interval;
   uint64_t jitter_span;
 
-  if (!agent || salts_secure_random(&random_byte, sizeof(random_byte)) != 0)
+  if (!agent || cmeta_secure_random(&random_byte, sizeof(random_byte)) != 0)
     return -1;
 
   base_interval = (uint64_t)agent->config.keepalive_interval_ms;
@@ -2220,7 +2220,7 @@ static void service_selected_pair_once(salts_ice_agent_t *agent, uint64_t timeou
       !agent->selected_pair || !agent->selected_pair->local) {
     return;
   }
-  now = salts_monotonic_ms();
+  now = cmeta_monotonic_ms();
   if (agent->last_consent_response_ms == 0 ||
       now - agent->last_consent_response_ms >= ICE_CONSENT_EXPIRY_MS) {
     set_state(agent, ICE_STATE_DISCONNECTED);
@@ -2275,7 +2275,7 @@ static void run_connectivity_checks(salts_ice_agent_t *agent) {
     return;
 
   while (agent->state == ICE_STATE_CONNECTING) {
-    uint64_t now = salts_monotonic_ms();
+    uint64_t now = cmeta_monotonic_ms();
     uint64_t elapsed = now - agent->check_start_time;
 
     /* Connectivity checks need inbound STUN pumping before a pair can advance. */
@@ -2309,7 +2309,7 @@ static void run_connectivity_checks(salts_ice_agent_t *agent) {
           }
         }
       }
-      salts_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
+      cmeta_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
       continue;
     }
 
@@ -2331,7 +2331,7 @@ static void run_connectivity_checks(salts_ice_agent_t *agent) {
         }
       }
       if (found) {
-        salts_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
+        cmeta_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
         continue;
       }
     }
@@ -2355,7 +2355,7 @@ static void run_connectivity_checks(salts_ice_agent_t *agent) {
       }
     }
     if (found) {
-      salts_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
+      cmeta_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
       continue;
     }
 
@@ -2403,7 +2403,7 @@ static void run_connectivity_checks(salts_ice_agent_t *agent) {
       }
     }
 
-    salts_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
+    cmeta_sleep_ms(ICE_DEFAULT_TA_INTERVAL);
   }
   agent->checks_in_progress = 0;
   agent->current_check_pair = -1;
@@ -2463,7 +2463,7 @@ int ice_agent_start_checks(salts_ice_agent_t *agent) {
   agent->checks_in_progress = 0;
   agent->valid_pairs_count = 0;
   agent->nomination_started = 0;
-  agent->check_start_time = salts_monotonic_ms();
+  agent->check_start_time = cmeta_monotonic_ms();
 
   set_state(agent, ICE_STATE_CONNECTING);
   if (ice_agent_is_closed(agent)) {
@@ -2623,7 +2623,7 @@ void ice_agent_close(salts_ice_agent_t *agent) {
   if (!agent) return;
   progress = ice_agent_progress(agent);
   if (!progress) return;
-  salts_mutex_lock(&progress->mutex);
+  cmeta_mutex_lock(&progress->mutex);
   atomic_store_explicit(&progress->close_requested, 1, memory_order_release);
   owner_active = progress->owner_active;
   current_is_owner = ice_progress_current_thread_is_owner(progress);
@@ -2636,13 +2636,13 @@ void ice_agent_close(salts_ice_agent_t *agent) {
       progress->wait_target) {
     (void)progress->wait_wake(progress->wait_target);
   }
-  salts_mutex_unlock(&progress->mutex);
+  cmeta_mutex_unlock(&progress->mutex);
   if (current_is_owner) ice_agent_finish_close(agent);
   if (finish_here) {
-    salts_mutex_lock(&progress->mutex);
+    cmeta_mutex_lock(&progress->mutex);
     progress->owner_active = 0;
     progress->owner_depth = 0u;
-    salts_mutex_unlock(&progress->mutex);
+    cmeta_mutex_unlock(&progress->mutex);
   }
 }
 

@@ -125,7 +125,7 @@ static void lb_test_peer_run(void *user) {
           goto done;
         }
         offset += fragment_size;
-        if (offset < group_size + 1u) salts_sleep_ms(10u);
+        if (offset < group_size + 1u) cmeta_sleep_ms(10u);
       }
     }
     const int exchange_count = peer->exchange_count > 0 ? peer->exchange_count : 1;
@@ -146,7 +146,7 @@ static void lb_test_peer_run(void *user) {
           }
           if (lb_test_send_all(socket_value, input + offset, fragment_size) != 0) goto done;
           offset += fragment_size;
-          if (offset < (size_t)received) salts_sleep_ms(10u);
+          if (offset < (size_t)received) cmeta_sleep_ms(10u);
         }
       }
     }
@@ -174,8 +174,8 @@ done:
 }
 
 static int lb_test_poll_until(salts_lb_t *lb, lb_test_peer_t *worker, lb_test_peer_t *client) {
-  const uint64_t deadline = salts_monotonic_ms() + LB_TEST_TIMEOUT_MS;
-  while (salts_monotonic_ms() < deadline) {
+  const uint64_t deadline = cmeta_monotonic_ms() + LB_TEST_TIMEOUT_MS;
+  while (cmeta_monotonic_ms() < deadline) {
     size_t events = 0u;
     if (salts_lb_poll(lb, 10u, &events) != SALTS_OK) return -1;
     if ((!worker || atomic_load_explicit(&worker->done, memory_order_acquire)) &&
@@ -212,8 +212,8 @@ static ptrdiff_t lb_test_tlv_frame(const void *data, size_t size, void *user) {
 static void lb_test_run_pair(salts_lb_config_t *config, lb_test_peer_t *worker,
                              lb_test_peer_t *client) {
   salts_lb_t *lb = salts_lb_create(config);
-  salts_thread_t worker_thread = NULL;
-  salts_thread_t client_thread = NULL;
+  cmeta_thread_t worker_thread = NULL;
+  cmeta_thread_t client_thread = NULL;
   uint16_t frontend_port = 0u;
   uint16_t worker_port = 0u;
 
@@ -226,13 +226,13 @@ static void lb_test_run_pair(salts_lb_config_t *config, lb_test_peer_t *worker,
   client->port = frontend_port;
   atomic_init(&worker->done, 0);
   atomic_init(&client->done, 0);
-  check_equal(salts_thread_create(&worker_thread, lb_test_peer_run, worker), SALTS_OK);
-  check_equal(salts_thread_create(&client_thread, lb_test_peer_run, client), SALTS_OK);
+  check_equal(cmeta_thread_create(&worker_thread, lb_test_peer_run, worker), SALTS_OK);
+  check_equal(cmeta_thread_create(&client_thread, lb_test_peer_run, client), SALTS_OK);
   check_equal(lb_test_poll_until(lb, worker, client), 0);
-  check_equal(salts_thread_join(&worker_thread), SALTS_OK);
-  check_equal(salts_thread_join(&client_thread), SALTS_OK);
-  salts_thread_destroy(&worker_thread);
-  salts_thread_destroy(&client_thread);
+  check_equal(cmeta_thread_join(&worker_thread), SALTS_OK);
+  check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
+  cmeta_thread_destroy(&worker_thread);
+  cmeta_thread_destroy(&client_thread);
   check_equal(worker->status, 0);
   check_equal(client->status, 0);
   check_equal(salts_lb_stop(lb), SALTS_OK);
@@ -311,7 +311,7 @@ spec("Salts CNet load balancer") {
     it("rejects filtered sessions without consuming a worker") {
       salts_lb_config_t config = salts_lb_config_default();
       salts_lb_t *lb;
-      salts_thread_t client_thread = NULL;
+      cmeta_thread_t client_thread = NULL;
       lb_test_peer_t client = {.request = "BLOCK:payload", .expected_response_size = 7u};
       uint16_t port = 0u;
       config.filter = lb_test_filter;
@@ -321,10 +321,10 @@ spec("Salts CNet load balancer") {
       check_equal(salts_lb_frontend_port(lb, &port), SALTS_OK);
       client.port = port;
       atomic_init(&client.done, 0);
-      check_equal(salts_thread_create(&client_thread, lb_test_peer_run, &client), SALTS_OK);
+      check_equal(cmeta_thread_create(&client_thread, lb_test_peer_run, &client), SALTS_OK);
       check_equal(lb_test_poll_until(lb, NULL, &client), 0);
-      check_equal(salts_thread_join(&client_thread), SALTS_OK);
-      salts_thread_destroy(&client_thread);
+      check_equal(cmeta_thread_join(&client_thread), SALTS_OK);
+      cmeta_thread_destroy(&client_thread);
       check_equal(client.status, 0);
       check_equal(client.response_size, 7u);
       check(memcmp(client.response, "BLOCKED", 7u) == 0);

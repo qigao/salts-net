@@ -75,9 +75,10 @@ The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
 [SaltsUtils 4.2](https://github.com/qigao/salts-utils/releases/tag/v4.2.0), vcpkg runs in manifest mode
 through the shared `qigao/vcpkg-cache` toolchain, with a read-only GitHub feed
-and a writable local cache. The existing vcpkg baseline is retained. SaltsNet uses the Salts crypto
-provider and has no direct OpenSSL dependency. Runtime libraries are resolved through the selected preset's
-environment.
+and a writable local cache. The existing vcpkg baseline is retained. SaltsNet
+uses the [GmSSL-backed crypto provider in Salts 2.1](https://github.com/qigao/salts/blob/v2.1.0/utils/CMakeLists.txt)
+through its public CMeta APIs; it has no direct OpenSSL/BoringSSL dependency.
+Runtime libraries are resolved through the selected preset's environment.
 
 Prerequisites: PowerShell 7, .NET SDK 8, CMake 3.25 or newer, Ninja, a C/C++ toolchain, vcpkg,
 and the [shared cache checkout](https://github.com/qigao/vcpkg-cache).

@@ -2,6 +2,7 @@
   "version": 6,
   "include": [
     "ConfigurePresets.json",
+    "AndroidPresets.json",
     "Platforms.json"
   ],
   "buildPresets": [
@@ -9,31 +10,43 @@
       "name": "build-default-windows",
       "displayName": "Build (Default, Windows)",
       "inherits": "ISWindows",
-      "configurePreset": "dev-win-msvc-ninja"
+      "configurePreset": "dev-win-msvc-ninja",
+      "hidden": true
     },
     {
       "name": "build-release-windows",
       "displayName": "Build (Release, Windows)",
       "inherits": "ISWindows",
-      "configurePreset": "release-win-msvc-ninja"
+      "configurePreset": "release-win-msvc-ninja",
+      "hidden": true
     },
     {
       "name": "build-default-linux",
       "displayName": "Build (Default, Linux)",
       "inherits": "ISLinux",
-      "configurePreset": "release-linux-ninja"
+      "configurePreset": "release-linux-ninja",
+      "hidden": true
     },
     {
       "name": "build-debug-linux",
       "displayName": "Build Debug (Linux)",
       "inherits": "ISLinux",
-      "configurePreset": "dev-linux-ninja"
+      "configurePreset": "dev-linux-ninja",
+      "hidden": true
     },
     {
       "name": "build-default-mac",
       "displayName": "Build (Default, Mac)",
       "inherits": "ISMac",
-      "configurePreset": "release-mac-ninja"
+      "configurePreset": "release-mac-ninja",
+      "hidden": true
+    },
+    {
+      "name": "build-android-arm64-v8a-release",
+      "displayName": "Build (Android arm64-v8a Release)",
+      "inherits": "ISLinux",
+      "configurePreset": "android-arm64-v8a-release",
+      "hidden": true
     }
   ]
 }

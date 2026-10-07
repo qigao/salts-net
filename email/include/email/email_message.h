@@ -13,7 +13,7 @@
 #define EMAIL_MESSAGE_H
 
 #include "platform.h"
-#include "salts_buffer.h"
+#include "cmeta_buffer.h"
 #include "tstr.h"
 #include "mime_parser.h"
 #include "mime_rfc2822.h"

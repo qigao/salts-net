@@ -22,19 +22,6 @@ function(cmake_config_api target_name api_macro)
     PRIVATE "$<$<PLATFORM_ID:Windows>:${api_macro}=__declspec(dllexport)>")
 endfunction()
 
-function(cmake_copy_runtime_dlls target_name)
-  if(WIN32)
-    add_custom_command(
-      TARGET ${target_name}
-      POST_BUILD
-      COMMAND
-        ${CMAKE_COMMAND}
-        "-DRUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:${target_name}>,@@>"
-        "-DRUNTIME_DESTINATION=$<TARGET_FILE_DIR:${target_name}>" -P
-        "${PROJECT_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake")
-  endif()
-endfunction()
-
 function(cmake_config_target target_name)
   set(options NO_INSTALL)
   set(oneValueArgs FOLDER VERSION SOVERSION EXPORT_NAME ALIAS)
@@ -118,7 +105,7 @@ function(cmake_add_grammar TARGET_NAME)
     add_custom_command(
       OUTPUT ${LEXER_GEN}
       COMMAND ${RE2C_EXECUTABLE} -o ${LEXER_GEN} ${ARG_LEXER_RE}
-      DEPENDS ${ARG_LEXER_RE}
+      DEPENDS ${ARG_LEXER_RE} "${RE2C_EXECUTABLE}"
       COMMENT "Generating ${TARGET_NAME} lexer with re2c"
       VERBATIM)
     set(LEXER_TARGET "${TARGET_NAME}_lexer_codegen")
@@ -204,56 +191,24 @@ function(cmake_add_source VAR)
       PARENT_SCOPE)
 endfunction()
 
-function(cmake_add_test)
-  if(NOT BUILD_TESTING)
-    return()
+function(cmake_add_test target_name)
+  set(options)
+  set(oneValueArgs FOLDER)
+  set(multiValueArgs SOURCES LIBS DEFS INCLUDES)
+  cmake_parse_arguments(PARSE_ARGV 1 ARG "${options}" "${oneValueArgs}" "${multiValueArgs}")
+  if(ARG_UNPARSED_ARGUMENTS OR ARG_KEYWORDS_MISSING_VALUES)
+    message(FATAL_ERROR "Invalid arguments to cmake_add_test(${target_name})")
+  endif()
+  if(NOT ARG_SOURCES)
+    message(FATAL_ERROR "cmake_add_test(${target_name}) requires SOURCES")
   endif()
 
-  set(options)
-  set(oneValueArgs FOLDER)
-  set(multiValueArgs SOURCES LIBS DEFS INCLUDES)
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
-                        ${ARGN})
-
-  foreach(src ${ARG_SOURCES})
-    get_filename_component(name ${src} NAME_WE)
-    if(NOT TARGET ${name})
-      add_executable(${name} ${src})
-      target_link_libraries(${name} PRIVATE ${ARG_LIBS})
-      target_compile_definitions(${name} PRIVATE ${ARG_DEFS})
-      target_include_directories(${name} PRIVATE ${ARG_INCLUDES})
-      add_test(NAME ${name} COMMAND ${name})
-
-      cmake_copy_runtime_dlls(${name})
-
-      if(ARG_FOLDER)
-        set_target_properties(${name} PROPERTIES FOLDER ${ARG_FOLDER})
-      endif()
-
-    endif()
-  endforeach()
-endfunction()
-
-function(cmake_add_benchmark)
-  set(options)
-  set(oneValueArgs FOLDER)
-  set(multiValueArgs SOURCES LIBS DEFS INCLUDES)
-  cmake_parse_arguments(ARG "${options}" "${oneValueArgs}" "${multiValueArgs}"
-                        ${ARGN})
-
-  foreach(src ${ARG_SOURCES})
-    get_filename_component(name ${src} NAME_WE)
-    if(NOT TARGET ${name})
-      add_executable(${name} ${src})
-      target_link_libraries(${name} PRIVATE ${ARG_LIBS})
-      target_compile_definitions(${name} PRIVATE ${ARG_DEFS})
-      target_include_directories(${name} PRIVATE ${ARG_INCLUDES})
-
-      cmake_copy_runtime_dlls(${name})
-
-      if(ARG_FOLDER)
-        set_target_properties(${name} PROPERTIES FOLDER ${ARG_FOLDER})
-      endif()
-    endif()
-  endforeach()
+  add_executable(${target_name} ${ARG_SOURCES})
+  target_link_libraries(${target_name} PRIVATE ${ARG_LIBS})
+  target_compile_definitions(${target_name} PRIVATE ${ARG_DEFS})
+  target_include_directories(${target_name} PRIVATE ${ARG_INCLUDES})
+  add_test(NAME ${target_name} COMMAND ${target_name})
+  if(ARG_FOLDER)
+    set_target_properties(${target_name} PROPERTIES FOLDER "${ARG_FOLDER}")
+  endif()
 endfunction()

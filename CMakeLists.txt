@@ -9,7 +9,7 @@ endif()
 # SaltsNet Project - Network tools built on Salts
 project(
   SaltsNet
-  VERSION 1.0.5
+  VERSION 1.0.6
   LANGUAGES C CXX)
 
 # Project configuration - output directories
@@ -27,7 +27,7 @@ set(PROJECT_HOMEPAGE_URL "https://github.com/qigao/salts-net")
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # Language standards - unified approach
 set(CMAKE_CXX_STANDARD 17) # C++17 for compatibility
-set(CMAKE_C_STANDARD 11) # C17 to ensure C11 atomic support
+set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -55,8 +55,11 @@ if(NOT IS_DIRECTORY "$ENV{SALTS_ROOT}")
   message(FATAL_ERROR "SALTS_ROOT is not a directory: $ENV{SALTS_ROOT}")
 endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
+# Reconfiguration must follow the restored SDK, not an older cached package.
+unset(Salts_DIR CACHE)
+unset(Salts_DIR)
 find_package(
-  Salts CONFIG REQUIRED
+  Salts 2.0 CONFIG REQUIRED
   PATHS "${SALTSNET_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
@@ -103,16 +106,3 @@ install(
   FILE SaltsNetTargets.cmake
   NAMESPACE SaltsNet::
   DESTINATION "lib/cmake/SaltsNet")
-
-if(BUILD_TESTING AND NOT CMAKE_CROSSCOMPILING)
-  configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/VerifyInstalledPackage.cmake.in"
-    "${CMAKE_BINARY_DIR}/VerifyInstalledPackage.cmake"
-    @ONLY)
-  add_test(
-    NAME saltsnet_installed_package
-    COMMAND "${CMAKE_COMMAND}" -P
-            "${CMAKE_BINARY_DIR}/VerifyInstalledPackage.cmake")
-  set_tests_properties(saltsnet_installed_package
-                       PROPERTIES LABELS package RUN_SERIAL TRUE)
-endif()

@@ -2,7 +2,7 @@
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 
 #include <limits.h>
 #include <stdio.h>
@@ -100,7 +100,7 @@ static void email_cnet_on_send(void *user, cnet_connection connection, size_t si
 }
 
 static uint32_t email_cnet_remaining_ms(uint64_t deadline) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   uint64_t remaining;
   if (now >= deadline) return 0u;
   remaining = deadline - now;
@@ -152,7 +152,7 @@ static int email_cnet_poll(email_cnet_transport_t *transport, uint64_t deadline)
 }
 
 static int email_cnet_wait_connected(email_cnet_transport_t *transport) {
-  const uint64_t deadline = salts_monotonic_ms() + transport->timeout_ms;
+  const uint64_t deadline = cmeta_monotonic_ms() + transport->timeout_ms;
   int status;
   while (!transport->connected && !transport->terminal) {
     status = email_cnet_poll(transport, deadline);
@@ -304,7 +304,7 @@ int email_cnet_transport_send(email_cnet_transport_t *transport, const void *dat
   while (remaining > 0u) {
     const size_t chunk =
         remaining > EMAIL_CNET_MAX_SEND_BYTES ? EMAIL_CNET_MAX_SEND_BYTES : remaining;
-    const uint64_t deadline = salts_monotonic_ms() + transport->timeout_ms;
+    const uint64_t deadline = cmeta_monotonic_ms() + transport->timeout_ms;
     int status;
     transport->send_pending = 1;
     status = email_cnet_send_bytes(
@@ -352,7 +352,7 @@ int email_cnet_transport_receive(email_cnet_transport_t *transport, void *data, 
       return status;
     }
 
-    deadline = salts_monotonic_ms() + transport->timeout_ms;
+    deadline = cmeta_monotonic_ms() + transport->timeout_ms;
     while (!transport->receive_ready && transport->receive_error == SALTS_OK &&
            !transport->terminal) {
       status = email_cnet_poll(transport, deadline);
@@ -390,7 +390,7 @@ int email_cnet_transport_close(email_cnet_transport_t *transport) {
     }
   }
 
-  deadline = salts_monotonic_ms() + transport->timeout_ms;
+  deadline = cmeta_monotonic_ms() + transport->timeout_ms;
   while (!transport->terminal) {
     size_t events = 0u;
     const uint32_t wait_ms = email_cnet_remaining_ms(deadline);

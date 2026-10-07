@@ -31,7 +31,7 @@ typedef struct {
 
 typedef struct {
     atomic_int close_requested;
-    salts_mutex_t mutex;
+    cmeta_mutex_t mutex;
     int owner_active;
 } test_ice_progress_owner_view_t;
 
@@ -214,7 +214,7 @@ static void on_restart_close_state_change(salts_ice_agent_t *agent,
     if (new_state == ICE_STATE_NEW) {
         atomic_store_explicit(&observer->restart_entered, 1, memory_order_release);
         while (!atomic_load_explicit(&observer->release_restart, memory_order_acquire)) {
-            salts_sleep_ms(1u);
+            cmeta_sleep_ms(1u);
         }
     } else if (new_state == ICE_STATE_CLOSED) {
         observer->close_callback_on_owner_thread = ice_test_owner_thread;
@@ -251,7 +251,7 @@ static void on_close_handoff_state_change(salts_ice_agent_t *agent,
     if (!observer || new_state != ICE_STATE_CLOSED) return;
     atomic_store_explicit(&observer->close_entered, 1, memory_order_release);
     while (!atomic_load_explicit(&observer->release_close, memory_order_acquire)) {
-        salts_sleep_ms(1u);
+        cmeta_sleep_ms(1u);
     }
 }
 
@@ -274,18 +274,18 @@ static void ice_role_task(void *arg) {
 static int ice_test_wait_for_owner(salts_ice_agent_t *agent, uint64_t timeout_ms) {
     salts_ice_agent_t *view = agent;
     test_ice_progress_owner_view_t *progress;
-    uint64_t deadline = salts_monotonic_ms() + timeout_ms;
+    uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
 
     if (!view || !view->progress_owner_reserved) return 0;
     progress = (test_ice_progress_owner_view_t *)view->progress_owner_reserved;
     do {
         int owner_active;
-        salts_mutex_lock(&progress->mutex);
+        cmeta_mutex_lock(&progress->mutex);
         owner_active = progress->owner_active;
-        salts_mutex_unlock(&progress->mutex);
+        cmeta_mutex_unlock(&progress->mutex);
         if (owner_active) return 1;
-        salts_sleep_ms(1u);
-    } while (salts_monotonic_ms() < deadline);
+        cmeta_sleep_ms(1u);
+    } while (cmeta_monotonic_ms() < deadline);
     return 0;
 }
 
@@ -946,7 +946,7 @@ spec("ice") {
         ice_callbacks_t callbacks;
         ice_lifecycle_observer_t observer;
         ice_poll_task_state_t poll_task;
-        salts_thread_t poll_thread = NULL;
+        cmeta_thread_t poll_thread = NULL;
         uint64_t close_started_ms;
 
         config.allow_loopback = 1;
@@ -971,21 +971,21 @@ spec("ice") {
         view->pairs[0].remote = &view->remote_candidates[0];
         view->selected_pair = &view->pairs[0];
         view->state = ICE_STATE_CONNECTED;
-        view->last_consent_response_ms = salts_monotonic_ms();
+        view->last_consent_response_ms = cmeta_monotonic_ms();
         view->next_consent_check_ms = view->last_consent_response_ms + 10000u;
 
         memset(&poll_task, 0, sizeof(poll_task));
         poll_task.agent = agent;
         poll_task.timeout_ms = 5000u;
-        check_equal(salts_thread_create(&poll_thread, ice_poll_task, &poll_task), 0);
-        salts_sleep_ms(50u);
-        close_started_ms = salts_monotonic_ms();
+        check_equal(cmeta_thread_create(&poll_thread, ice_poll_task, &poll_task), 0);
+        cmeta_sleep_ms(50u);
+        close_started_ms = cmeta_monotonic_ms();
         ice_agent_close(agent);
-        check_equal(salts_thread_join(&poll_thread), 0);
-        salts_thread_destroy(&poll_thread);
+        check_equal(cmeta_thread_join(&poll_thread), 0);
+        cmeta_thread_destroy(&poll_thread);
 
         check(poll_task.done);
-        check(salts_monotonic_ms() - close_started_ms < 1000u);
+        check(cmeta_monotonic_ms() - close_started_ms < 1000u);
         check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
         check_equal(observer.close_callback_on_poll_thread, 1);
         ice_agent_destroy(agent);
@@ -998,7 +998,7 @@ spec("ice") {
         ice_callbacks_t callbacks;
         ice_restart_close_observer_t observer;
         ice_restart_task_state_t restart_task;
-        salts_thread_t restart_thread = NULL;
+        cmeta_thread_t restart_thread = NULL;
         uint64_t deadline;
 
         check_not_null(agent);
@@ -1012,18 +1012,18 @@ spec("ice") {
         memset(&restart_task, 0, sizeof(restart_task));
         restart_task.agent = agent;
         restart_task.options = ice_restart_options_default();
-        check_equal(salts_thread_create(&restart_thread, ice_restart_task, &restart_task), 0);
-        deadline = salts_monotonic_ms() + 1000u;
+        check_equal(cmeta_thread_create(&restart_thread, ice_restart_task, &restart_task), 0);
+        deadline = cmeta_monotonic_ms() + 1000u;
         while (!atomic_load_explicit(&observer.restart_entered, memory_order_acquire) &&
-               salts_monotonic_ms() < deadline) {
-            salts_sleep_ms(1u);
+               cmeta_monotonic_ms() < deadline) {
+            cmeta_sleep_ms(1u);
         }
         check(atomic_load_explicit(&observer.restart_entered, memory_order_acquire));
 
         ice_agent_close(agent);
         atomic_store_explicit(&observer.release_restart, 1, memory_order_release);
-        check_equal(salts_thread_join(&restart_thread), 0);
-        salts_thread_destroy(&restart_thread);
+        check_equal(cmeta_thread_join(&restart_thread), 0);
+        cmeta_thread_destroy(&restart_thread);
 
         check(atomic_load_explicit(&restart_task.done, memory_order_acquire));
         check_equal(restart_task.rc, ICE_AGENT_ERROR_CLOSED);
@@ -1041,8 +1041,8 @@ spec("ice") {
         ice_callbacks_t callbacks;
         ice_close_handoff_observer_t observer;
         ice_role_task_state_t role_task;
-        salts_thread_t close_thread = NULL;
-        salts_thread_t role_thread = NULL;
+        cmeta_thread_t close_thread = NULL;
+        cmeta_thread_t role_thread = NULL;
         uint64_t deadline;
 
         check_not_null(agent);
@@ -1052,25 +1052,25 @@ spec("ice") {
         callbacks.user_data = &observer;
         ice_agent_set_callbacks(agent, &callbacks);
 
-        check_equal(salts_thread_create(&close_thread, ice_close_task, agent), 0);
-        deadline = salts_monotonic_ms() + 1000u;
+        check_equal(cmeta_thread_create(&close_thread, ice_close_task, agent), 0);
+        deadline = cmeta_monotonic_ms() + 1000u;
         while (!atomic_load_explicit(&observer.close_entered, memory_order_acquire) &&
-               salts_monotonic_ms() < deadline) {
-            salts_sleep_ms(1u);
+               cmeta_monotonic_ms() < deadline) {
+            cmeta_sleep_ms(1u);
         }
         check(atomic_load_explicit(&observer.close_entered, memory_order_acquire));
 
         memset(&role_task, 0, sizeof(role_task));
         role_task.agent = agent;
-        check_equal(salts_thread_create(&role_thread, ice_role_task, &role_task), 0);
-        salts_sleep_ms(20u);
+        check_equal(cmeta_thread_create(&role_thread, ice_role_task, &role_task), 0);
+        cmeta_sleep_ms(20u);
         check(!atomic_load_explicit(&role_task.done, memory_order_acquire));
 
         atomic_store_explicit(&observer.release_close, 1, memory_order_release);
-        check_equal(salts_thread_join(&close_thread), 0);
-        check_equal(salts_thread_join(&role_thread), 0);
-        salts_thread_destroy(&close_thread);
-        salts_thread_destroy(&role_thread);
+        check_equal(cmeta_thread_join(&close_thread), 0);
+        check_equal(cmeta_thread_join(&role_thread), 0);
+        cmeta_thread_destroy(&close_thread);
+        cmeta_thread_destroy(&role_thread);
 
         check(atomic_load_explicit(&role_task.done, memory_order_acquire));
         check_equal(role_task.rc, ICE_AGENT_ERROR_CLOSED);
@@ -1089,7 +1089,7 @@ spec("ice") {
         ice_callbacks_t callbacks;
         ice_lifecycle_observer_t observer;
         ice_candidate_task_state_t candidate_task;
-        salts_thread_t candidate_thread = NULL;
+        cmeta_thread_t candidate_thread = NULL;
 #ifdef _WIN32
         WSADATA wsa_data;
         check_equal(WSAStartup(MAKEWORD(2, 2), &wsa_data), 0);
@@ -1107,12 +1107,12 @@ spec("ice") {
         memset(&candidate_task, 0, sizeof(candidate_task));
         candidate_task.agent = agent;
         candidate_task.candidate = candidate;
-        check_equal(salts_thread_create(&candidate_thread, ice_candidate_task,
+        check_equal(cmeta_thread_create(&candidate_thread, ice_candidate_task,
                                         &candidate_task), 0);
         check(ice_test_wait_for_owner(agent, 1000u));
         ice_agent_close(agent);
-        check_equal(salts_thread_join(&candidate_thread), 0);
-        salts_thread_destroy(&candidate_thread);
+        check_equal(cmeta_thread_join(&candidate_thread), 0);
+        cmeta_thread_destroy(&candidate_thread);
 
         check(atomic_load_explicit(&candidate_task.done, memory_order_acquire));
         check_equal(candidate_task.rc, ICE_AGENT_ERROR_CLOSED);
@@ -1146,8 +1146,8 @@ spec("ice") {
         ice_config_t config = ice_default_config();
         salts_ice_agent_t *left;
         salts_ice_agent_t *right;
-        salts_thread_t left_thread = NULL;
-        salts_thread_t right_thread = NULL;
+        cmeta_thread_t left_thread = NULL;
+        cmeta_thread_t right_thread = NULL;
         ice_callbacks_t callbacks;
         ice_test_bridge_t left_bridge;
         ice_test_bridge_t right_bridge;
@@ -1220,12 +1220,12 @@ spec("ice") {
         memset(&right_task, 0, sizeof(right_task));
         left_task.agent = left;
         right_task.agent = right;
-        check_equal(salts_thread_create(&left_thread, ice_start_checks_task, &left_task), 0);
-        check_equal(salts_thread_create(&right_thread, ice_start_checks_task, &right_task), 0);
-        check_equal(salts_thread_join(&left_thread), 0);
-        check_equal(salts_thread_join(&right_thread), 0);
-        salts_thread_destroy(&left_thread);
-        salts_thread_destroy(&right_thread);
+        check_equal(cmeta_thread_create(&left_thread, ice_start_checks_task, &left_task), 0);
+        check_equal(cmeta_thread_create(&right_thread, ice_start_checks_task, &right_task), 0);
+        check_equal(cmeta_thread_join(&left_thread), 0);
+        check_equal(cmeta_thread_join(&right_thread), 0);
+        cmeta_thread_destroy(&left_thread);
+        cmeta_thread_destroy(&right_thread);
 
         check(left_task.done);
         check(right_task.done);
@@ -1246,8 +1246,8 @@ spec("ice") {
         check_equal(right_view->checks_in_progress, 0);
 
         check_equal(ice_agent_send(left, application_data, sizeof(application_data) - 1), 0);
-        consent_deadline = salts_monotonic_ms() + 1000;
-        while (right_bridge.data_rx == 0 && salts_monotonic_ms() < consent_deadline) {
+        consent_deadline = cmeta_monotonic_ms() + 1000;
+        while (right_bridge.data_rx == 0 && cmeta_monotonic_ms() < consent_deadline) {
             ice_agent_poll_selected_pair(right, 1);
         }
         check_equal(right_bridge.data_rx, 1);
@@ -1258,19 +1258,19 @@ spec("ice") {
             left_view->last_consent_response_ms -= 100;
         }
         initial_consent_time = left_view->last_consent_response_ms;
-        left_view->next_consent_check_ms = salts_monotonic_ms();
-        consent_deadline = salts_monotonic_ms() + 1000;
+        left_view->next_consent_check_ms = cmeta_monotonic_ms();
+        consent_deadline = cmeta_monotonic_ms() + 1000;
         while (left_view->last_consent_response_ms <= initial_consent_time &&
-               salts_monotonic_ms() < consent_deadline) {
+               cmeta_monotonic_ms() < consent_deadline) {
             ice_agent_poll_selected_pair(left, 1);
             ice_agent_poll_selected_pair(right, 1);
         }
         check(left_view->last_consent_response_ms > initial_consent_time);
 
         left_view->last_consent_response_ms = 0;
-        consent_deadline = salts_monotonic_ms() + 1000;
+        consent_deadline = cmeta_monotonic_ms() + 1000;
         while (ice_agent_get_state(left) != ICE_STATE_DISCONNECTED &&
-               salts_monotonic_ms() < consent_deadline) {
+               cmeta_monotonic_ms() < consent_deadline) {
             ice_agent_poll_selected_pair(left, 1);
         }
         check_equal(ice_agent_get_state(left), ICE_STATE_DISCONNECTED);

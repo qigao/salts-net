@@ -145,7 +145,7 @@ static int ldap_test_make_url(char *url, size_t capacity, const char *scheme, ui
 spec("LDAP CNet transport") {
   it("performs a loopback bind without a coroutine context") {
     ldap_test_server_t server;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     ldap_client_t *client = NULL;
     ldap_result_data_t result = {0};
     char url[LDAP_TEST_URI_CAPACITY];
@@ -155,7 +155,7 @@ spec("LDAP CNet transport") {
     check_equal(ldap_test_server_open(&server, &port), 0);
     server.behavior = LDAP_TEST_SEND_BIND_RESPONSE;
     check_equal(ldap_test_make_url(url, sizeof(url), "ldap", port), 0);
-    check_equal(salts_thread_create(&thread, ldap_test_server_run, &server), 0);
+    check_equal(cmeta_thread_create(&thread, ldap_test_server_run, &server), 0);
 
     const ldap_client_config_t config = {.url = url, .timeout_ms = LDAP_TEST_CLIENT_TIMEOUT_MS};
     client = ldap_client_create(&config);
@@ -165,8 +165,8 @@ spec("LDAP CNet transport") {
     ldap_client_destroy(client);
     ldap_test_close_socket(server.listener);
     server.listener = LDAP_TEST_INVALID_SOCKET;
-    check_equal(salts_thread_join(&thread), 0);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), 0);
+    cmeta_thread_destroy(&thread);
     ldap_test_server_close(&server);
 
     check_equal(client_status, 0);
@@ -177,7 +177,7 @@ spec("LDAP CNet transport") {
 
   it("rejects plaintext when the URL requires LDAPS") {
     ldap_test_server_t server;
-    salts_thread_t thread = NULL;
+    cmeta_thread_t thread = NULL;
     ldap_client_t *client = NULL;
     char url[LDAP_TEST_URI_CAPACITY];
     uint16_t port = 0u;
@@ -186,7 +186,7 @@ spec("LDAP CNet transport") {
     check_equal(ldap_test_server_open(&server, &port), 0);
     server.behavior = LDAP_TEST_CLOSE_PLAINTEXT;
     check_equal(ldap_test_make_url(url, sizeof(url), "ldaps", port), 0);
-    check_equal(salts_thread_create(&thread, ldap_test_server_run, &server), 0);
+    check_equal(cmeta_thread_create(&thread, ldap_test_server_run, &server), 0);
 
     const ldap_client_config_t config = {.url = url, .timeout_ms = LDAP_TEST_TLS_TIMEOUT_MS};
     client = ldap_client_create(&config);
@@ -196,8 +196,8 @@ spec("LDAP CNet transport") {
     ldap_client_destroy(client);
     ldap_test_close_socket(server.listener);
     server.listener = LDAP_TEST_INVALID_SOCKET;
-    check_equal(salts_thread_join(&thread), 0);
-    salts_thread_destroy(&thread);
+    check_equal(cmeta_thread_join(&thread), 0);
+    cmeta_thread_destroy(&thread);
     ldap_test_server_close(&server);
 
     check_not_equal(connect_status, 0);

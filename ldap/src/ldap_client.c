@@ -9,7 +9,7 @@
 #include <cnet/cnet.h>
 #include <salts/clock.h>
 #include <salts/error_codes.h>
-#include <salts_buffer.h>
+#include <cmeta_buffer.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,7 +367,7 @@ static int ldap_client_drain_recv_buffer(ldap_client_t *client) {
 }
 
 static uint32_t ldap_client_remaining_ms(uint64_t deadline) {
-  const uint64_t now = salts_monotonic_ms();
+  const uint64_t now = cmeta_monotonic_ms();
   const uint64_t remaining = deadline > now ? deadline - now : 0u;
   return remaining > UINT32_MAX ? UINT32_MAX : (uint32_t)remaining;
 }
@@ -455,7 +455,7 @@ static int ldap_client_send_and_wait(ldap_client_t *client, const uint8_t *data,
     ldap_client_set_transport_error(client, "send admission", status);
     return LDAP_CLIENT_ERROR_NETWORK;
   }
-  deadline = salts_monotonic_ms() + client->timeout_ms;
+  deadline = cmeta_monotonic_ms() + client->timeout_ms;
   return ldap_client_recv_until_response(client, deadline);
 }
 
@@ -499,7 +499,7 @@ static int ldap_client_connect_impl(ldap_client_t *client) {
     return client->use_tls ? LDAP_CLIENT_ERROR_TLS : LDAP_CLIENT_ERROR_NETWORK;
   }
 
-  deadline = salts_monotonic_ms() + client->timeout_ms;
+  deadline = cmeta_monotonic_ms() + client->timeout_ms;
   while (!client->connected && !client->terminal) {
     size_t events = 0u;
     const uint32_t wait_ms = ldap_client_remaining_ms(deadline);
@@ -788,7 +788,7 @@ static int ldap_client_unbind_impl(ldap_client_t *client) {
     return LDAP_CLIENT_ERROR_NETWORK;
   }
 
-  deadline = salts_monotonic_ms() + client->timeout_ms;
+  deadline = cmeta_monotonic_ms() + client->timeout_ms;
   while (!client->terminal) {
     size_t events = 0u;
     const uint32_t wait_ms = ldap_client_remaining_ms(deadline);

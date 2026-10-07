@@ -1,5 +1,5 @@
 #include "mime_content_disposition.h"
-#include "salts_simd_scan.h"
+#include "cmeta_simd_scan.h"
 #include "tstr.h"
 #include <string.h>
 
@@ -17,7 +17,7 @@ const char *mime_disposition_type_name(mime_disposition_type_t type) {
 /* ── Parsing helpers ───────────────────────────────────────────────── */
 
 static void skip_whitespace(const char **ptr, const char *end) {
-  *ptr = salts_scan_skip_sp_tab(*ptr, end);
+  *ptr = cmeta_scan_skip_sp_tab(*ptr, end);
 }
 
 static mime_disposition_type_t parse_disposition_type(const char *type_str, size_t len) {
@@ -44,7 +44,7 @@ static const char *find_param_value(const char *start, const char *end,
 
     // Check if matches param_name
     const char *name_start = ptr;
-    ptr = salts_scan_to_any3(ptr, end, '=', ';', ' ');
+    ptr = cmeta_scan_to_any3(ptr, end, '=', ';', ' ');
 
     size_t name_len = ptr - name_start;
 
@@ -62,7 +62,7 @@ static const char *find_param_value(const char *start, const char *end,
           ptr++;
           value_start = ptr;
           while (ptr < end) {
-            ptr = salts_scan_to_any2(ptr, end, '"', '\\');
+            ptr = cmeta_scan_to_any2(ptr, end, '"', '\\');
             if (ptr >= end || *ptr == '"') {
               break;
             }
@@ -73,7 +73,7 @@ static const char *find_param_value(const char *start, const char *end,
           return value_start;
         } else {
           // Unquoted value (until semicolon or end)
-          ptr = salts_scan_to_char(ptr, end, ';');
+          ptr = cmeta_scan_to_char(ptr, end, ';');
           *value_len = ptr - value_start;
           // Trim trailing whitespace
           while (*value_len > 0 && (value_start[*value_len - 1] == ' ' ||
@@ -86,7 +86,7 @@ static const char *find_param_value(const char *start, const char *end,
     }
 
     // Skip to next parameter
-    ptr = salts_scan_to_char(ptr, end, ';');
+    ptr = cmeta_scan_to_char(ptr, end, ';');
     if (ptr < end) ptr++; // Skip semicolon
   }
 
@@ -124,7 +124,7 @@ int mime_parse_content_disposition(const char *value, size_t len,
 
   // Parse disposition type
   const char *type_start = ptr;
-  ptr = salts_scan_to_any2(ptr, end, ';', ' ');
+  ptr = cmeta_scan_to_any2(ptr, end, ';', ' ');
 
   size_t type_len = ptr - type_start;
   result->type = parse_disposition_type(type_start, type_len);

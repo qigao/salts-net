@@ -38,19 +38,6 @@ install(
   FILES_MATCHING
   PATTERN "*.h")
 
-# ── Tests ──────────────────────────────────────────────────────────────
-cmake_add_test(
-  SOURCES
-  test/test_mime_parser.c
-  test/test_mime_utils.c
-  test/test_mime_content_disposition.c
-  test/test_mime_encoded_word.c
-  test/test_mime_rfc2231.c
-  test/test_mime_rfc2822.c
-  test/test_mime_smime.c
-  test/test_mime_mhtml.c
-  LIBS
-  ${TARGET_NAME}
-  Salts::TinyTest
-  FOLDER
-  "email/${TARGET_NAME}/test")
+if(BUILD_TESTING)
+  add_subdirectory(test)
+endif()

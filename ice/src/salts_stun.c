@@ -18,7 +18,7 @@
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <fmt.h>
 #include <stdio.h>
@@ -99,7 +99,7 @@ static uint32_t stun_crc32(const uint8_t *data, size_t len) {
 int stun_generate_transaction_id(stun_transaction_id_t *txn_id) {
   if (!txn_id)
     return -1;
-  return salts_secure_random(txn_id->id, sizeof(txn_id->id));
+  return cmeta_secure_random(txn_id->id, sizeof(txn_id->id));
 }
 
 static int txn_id_matches(const stun_transaction_id_t *a, const stun_transaction_id_t *b) {
@@ -301,7 +301,7 @@ int stun_binding_request(const stun_client_config_t *config, stun_mapped_address
   for (int attempt = 0; attempt < retries; attempt++) {
     stun_transaction_id_t transaction_id;
     uint8_t request[STUN_HEADER_SIZE];
-    const uint64_t deadline = salts_monotonic_ms() + (uint32_t)timeout_ms;
+    const uint64_t deadline = cmeta_monotonic_ms() + (uint32_t)timeout_ms;
     size_t request_size;
 
     if (stun_generate_transaction_id(&transaction_id) != 0) {
@@ -313,11 +313,11 @@ int stun_binding_request(const stun_client_config_t *config, stun_mapped_address
                                     (uint32_t)timeout_ms);
     if (result != SALTS_OK) break;
 
-    while (salts_monotonic_ms() < deadline) {
+    while (cmeta_monotonic_ms() < deadline) {
       cnet_datagram_peer response_peer;
       uint8_t response[STUN_MAX_MESSAGE_SIZE];
       size_t response_size = 0u;
-      const uint64_t now = salts_monotonic_ms();
+      const uint64_t now = cmeta_monotonic_ms();
       const uint32_t remaining_ms = now < deadline ? (uint32_t)(deadline - now) : 0u;
       if (remaining_ms == 0u) break;
       result = ice_cnet_datagram_receive(&transport, &response_peer, response, sizeof(response),
@@ -360,7 +360,7 @@ static void write_u64_be(uint8_t *buf, uint64_t val) {
 
 static int calculate_message_integrity(const uint8_t *data, size_t len, const char *password,
                                        uint8_t *hmac_out) {
-  return salts_hmac_sha1(password, strlen(password), data, len, hmac_out) == SALTS_OK ? 0 : -1;
+  return cmeta_hmac_sha1(password, strlen(password), data, len, hmac_out) == SALTS_OK ? 0 : -1;
 }
 
 int stun_build_ice_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
@@ -542,7 +542,7 @@ int stun_validate_message_integrity(const uint8_t *data, size_t len, const char 
 
   {
     int equal = 0;
-    if (salts_crypto_equal(mi_attr, expected_hmac, STUN_MESSAGE_INTEGRITY_LEN, &equal) != SALTS_OK)
+    if (cmeta_crypto_equal(mi_attr, expected_hmac, STUN_MESSAGE_INTEGRITY_LEN, &equal) != SALTS_OK)
       return -7;
     if (!equal)
       return -7;

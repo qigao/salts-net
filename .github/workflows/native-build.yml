@@ -1,0 +1,198 @@
+name: Build and test SaltsNet native SDKs
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  build:
+    name: ${{ matrix.rid }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            rid: linux-x64
+            host: linux-x64
+            triplet: x64-linux
+            host_triplet: x64-linux
+            preset: ci-linux-release-user
+            cross: false
+          - runner: windows-2025
+            rid: windows-x64
+            host: windows-x64
+            triplet: x64-windows
+            host_triplet: x64-windows
+            preset: ci-win-release-user
+            cross: false
+          - runner: macos-15
+            rid: macos-arm64
+            host: macos-arm64
+            triplet: arm64-osx
+            host_triplet: arm64-osx
+            preset: ci-macos-release-user
+            cross: false
+          - runner: ubuntu-24.04
+            rid: android-arm64-v8a
+            host: linux-x64
+            triplet: arm64-android
+            host_triplet: x64-linux
+            preset: ci-android-sdk-release-user
+            host_preset: ci-host-release-user
+            cross: true
+          - runner: macos-15
+            rid: ios-arm64
+            host: macos-arm64
+            triplet: arm64-ios
+            host_triplet: arm64-osx
+            preset: ci-ios-sdk-release-user
+            host_preset: ci-macos-host-release-user
+            sysroot: iphoneos
+            cross: true
+          - runner: macos-15
+            rid: ios-simulator-arm64
+            host: macos-arm64
+            triplet: arm64-ios-simulator
+            host_triplet: arm64-osx
+            preset: ci-ios-sdk-release-user
+            host_preset: ci-macos-host-release-user
+            sysroot: iphonesimulator
+            cross: true
+    env:
+      QIGAO_SDK_RID: ${{ matrix.rid }}
+      QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
+      QIGAO_HOST_TRIPLET: ${{ matrix.host_triplet }}
+      QIGAO_IOS_SYSROOT: ${{ matrix.sysroot }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select iOS cache namespace
+        if: matrix.preset == 'ci-ios-sdk-release-user'
+        shell: bash
+        run: echo 'X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache' >> "$GITHUB_ENV"
+      - uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@fafb1efe5ac2440bfd7a08e493988d0459d89e51
+        with:
+          mode: read
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Prepare Linux tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm perl
+      - name: Prepare macOS tools
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ninja nasm gcc@15
+          echo "$(brew --prefix gcc@15)/bin" >> "$GITHUB_PATH"
+      - name: Prepare Windows tools
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          choco install ninja nasm strawberryperl -y --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Build tool installation failed' }
+          $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
+          $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($vsInstall)) { throw 'MSVC x64 toolchain not found' }
+          "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
+          if (-not $env:VCPKG_ROOT -or -not $env:QIGAO_VCPKG_WINDOWS_TRIPLET) { throw 'Shared vcpkg environment is missing' }
+          "QIGAO_VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
+          "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+          "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+      - name: Restore latest published Salts and re2c
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./cmake/ci/restore-native-sdk.ps1 -SaltsRid '${{ matrix.rid }}' -HostRid '${{ matrix.host }}'
+      - name: Build host tools for cross compilation
+        if: matrix.cross
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset '${{ matrix.host_preset }}'
+          cmake --build --preset '${{ matrix.host_preset }}' --parallel 2
+      - name: Configure and build Unix graph
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmake --preset '${{ matrix.preset }}'
+          cmake --build --preset '${{ matrix.preset }}' --parallel 2
+      - name: Configure and build Windows graph
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_VCPKG_ROOT%"
+          cmake --preset "${{ matrix.preset }}"
+          if errorlevel 1 exit /b 1
+          cmake --build --preset "${{ matrix.preset }}" --parallel 2
+          if errorlevel 1 exit /b 1
+      - name: Run Unix tests
+        if: runner.os != 'Windows' && !matrix.cross
+        shell: bash
+        run: ctest --preset '${{ matrix.preset }}' --output-on-failure --timeout 180 --parallel 2
+      - name: Run Windows tests
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          ctest --preset "${{ matrix.preset }}" --output-on-failure --timeout 180 --parallel 2
+          if errorlevel 1 exit /b 1
+      - name: Install Unix SDK
+        if: runner.os != 'Windows'
+        shell: bash
+        run: cmake --build --preset 'install-${{ matrix.preset }}' --parallel 2
+      - name: Install Windows SDK
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          call "%VSINSTALL%\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 >nul
+          if errorlevel 1 exit /b 1
+          set "VCPKG_ROOT=%QIGAO_VCPKG_ROOT%"
+          cmake --build --preset "install-${{ matrix.preset }}" --parallel 2
+          if errorlevel 1 exit /b 1
+      - name: Record SDK provenance
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $prefix = Join-Path $env:GITHUB_WORKSPACE "stage/sdk/$env:QIGAO_SDK_RID"
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read source commit' }
+          @("version=$env:PACKAGE_VERSION", "commit=$commit", "rid=$env:QIGAO_SDK_RID",
+            "triplet=$env:QIGAO_TARGET_TRIPLET", 'build_type=Release',
+            "salts=$env:SALTS_VERSION", "re2c=$env:RE2C_VERSION") |
+            Set-Content -LiteralPath (Join-Path $prefix 'saltsnet-sdk-manifest.txt')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: saltsnet-sdk-${{ matrix.rid }}
+          path: stage/sdk
+          if-no-files-found: error
+          compression-level: 9
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: native-diagnostics-${{ matrix.rid }}
+          path: |
+            build/ci-sdk/${{ matrix.rid }}/CMakeFiles/CMakeConfigureLog.yaml
+            build/ci-sdk/${{ matrix.rid }}/vcpkg-manifest-install.log
+            build/ci-sdk/${{ matrix.rid }}/Testing/Temporary
+          if-no-files-found: warn

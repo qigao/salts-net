@@ -9,7 +9,7 @@
 #include "memory_pool.h"
 #include <salts/clock.h>
 #include <platform.h>
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 #include <string.h>
 #include <stdlib.h>
 #include <limits.h>
@@ -40,7 +40,7 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
 
     if (priv_protocol == SNMP_PRIV_DES) {
         if (usm_des_salt_counter == 0u &&
-            salts_secure_random(&usm_des_salt_counter,
+            cmeta_secure_random(&usm_des_salt_counter,
                                 sizeof(usm_des_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_des_salt_counter == UINT32_MAX) {
@@ -52,7 +52,7 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
         }
     } else {
         if (usm_aes_salt_counter == 0u &&
-            salts_secure_random(&usm_aes_salt_counter,
+            cmeta_secure_random(&usm_aes_salt_counter,
                                 sizeof(usm_aes_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_aes_salt_counter == UINT64_MAX) {
@@ -105,14 +105,14 @@ int usm_password_to_key(
     int result = USM_OK;
     switch (auth_protocol) {
         case SNMP_AUTH_MD5:
-            if (salts_md5(buffer, 1048576u, key) != SALTS_OK) {
+            if (cmeta_md5(buffer, 1048576u, key) != SALTS_OK) {
                 result = USM_ERROR_INVALID;
             } else {
                 *key_len = SALTS_MD5_DIGEST_BYTES;
             }
             break;
         case SNMP_AUTH_SHA1:
-            if (salts_sha1(buffer, 1048576u, key) != SALTS_OK) {
+            if (cmeta_sha1(buffer, 1048576u, key) != SALTS_OK) {
                 result = USM_ERROR_INVALID;
             } else {
                 *key_len = SALTS_SHA1_DIGEST_BYTES;
@@ -166,14 +166,14 @@ int usm_localize_key(
     int result = USM_OK;
     switch (auth_protocol) {
         case SNMP_AUTH_MD5:
-            if (salts_md5(buffer, offset, localized_key) != SALTS_OK) {
+            if (cmeta_md5(buffer, offset, localized_key) != SALTS_OK) {
                 result = USM_ERROR_INVALID;
             } else {
                 *localized_key_len = SALTS_MD5_DIGEST_BYTES;
             }
             break;
         case SNMP_AUTH_SHA1:
-            if (salts_sha1(buffer, offset, localized_key) != SALTS_OK) {
+            if (cmeta_sha1(buffer, offset, localized_key) != SALTS_OK) {
                 result = USM_ERROR_INVALID;
             } else {
                 *localized_key_len = SALTS_SHA1_DIGEST_BYTES;
@@ -207,10 +207,10 @@ int usm_compute_auth(
 
     switch (auth_protocol) {
         case SNMP_AUTH_MD5:
-            status = salts_hmac_md5(key, key_len, message, message_len, hmac);
+            status = cmeta_hmac_md5(key, key_len, message, message_len, hmac);
             break;
         case SNMP_AUTH_SHA1:
-            status = salts_hmac_sha1(key, key_len, message, message_len, hmac);
+            status = cmeta_hmac_sha1(key, key_len, message, message_len, hmac);
             break;
         default:
             return USM_ERROR_UNSUPPORTED;
@@ -245,7 +245,7 @@ int usm_verify_auth(
     /* Constant-time comparison */
     {
         int equal = 0;
-        if (salts_crypto_equal(computed, auth_params, sizeof(computed), &equal) != SALTS_OK)
+        if (cmeta_crypto_equal(computed, auth_params, sizeof(computed), &equal) != SALTS_OK)
             return USM_ERROR_INVALID;
         return equal ? USM_OK : USM_ERROR_AUTH_FAILED;
     }
@@ -304,7 +304,7 @@ int usm_encrypt(
             }
         }
 
-        if (salts_des_cbc_encrypt(key, iv, padded, padded_len, ciphertext) != SALTS_OK) {
+        if (cmeta_des_cbc_encrypt(key, iv, padded, padded_len, ciphertext) != SALTS_OK) {
             free(padded);
             return USM_ERROR_INVALID;
         }
@@ -329,7 +329,7 @@ int usm_encrypt(
         usm_store_u32_be(iv + 4u, engine_time);
         memcpy(iv + 8u, salt_out, 8u);
 
-        if (salts_aes128_cfb_encrypt(key, iv, plaintext, plaintext_len, ciphertext) != SALTS_OK)
+        if (cmeta_aes128_cfb_encrypt(key, iv, plaintext, plaintext_len, ciphertext) != SALTS_OK)
             return USM_ERROR_INVALID;
         *ciphertext_len = plaintext_len;  /* CFB mode, no padding */
 
@@ -374,7 +374,7 @@ int usm_decrypt(
             iv[i] = salt[i] ^ key[SALTS_DES_KEY_BYTES + i];
         }
 
-        if (salts_des_cbc_decrypt(key, iv, ciphertext, ciphertext_len, plaintext) != SALTS_OK) {
+        if (cmeta_des_cbc_decrypt(key, iv, ciphertext, ciphertext_len, plaintext) != SALTS_OK) {
             return USM_ERROR_INVALID;
         }
 
@@ -417,7 +417,7 @@ int usm_decrypt(
         usm_store_u32_be(iv + 4u, engine_time);
         memcpy(iv + 8u, salt, 8u);
 
-        if (salts_aes128_cfb_decrypt(key, iv, ciphertext, ciphertext_len, plaintext) != SALTS_OK)
+        if (cmeta_aes128_cfb_decrypt(key, iv, ciphertext, ciphertext_len, plaintext) != SALTS_OK)
             return USM_ERROR_INVALID;
         *plaintext_len = ciphertext_len;  /* CFB mode, no padding */
 
@@ -734,7 +734,7 @@ int usm_decode_security_params(
  * Get current timestamp in milliseconds
  */
 static uint64_t get_current_time_ms(void) {
-    return salts_monotonic_ms();
+    return cmeta_monotonic_ms();
 }
 
 /*

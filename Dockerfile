@@ -20,7 +20,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ninja-build \
     pkg-config \
     python3 \
-    re2c \
     tar \
     unzip \
     wget \
@@ -39,3 +38,4 @@ WORKDIR /workspace
 # This image is a reusable Linux build base.
 # It intentionally avoids exporting project-specific preset variables.
 # Derived images or user presets should decide how build tools are wired in.
+# Restore Qigao.Re2c.Binary from GitHub Packages and supply its host RE2C_ROOT.

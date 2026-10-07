@@ -1,7 +1,7 @@
 #include "mime_encoded_word.h"
 #include "mime_utils.h"
 #include "base64_utils.h"
-#include "salts_simd_scan.h"
+#include "cmeta_simd_scan.h"
 #include "tstr.h"
 #include <string.h>
 #include <ctype.h>
@@ -27,7 +27,7 @@ size_t mime_parse_encoded_word(const char *str, size_t len,
 
   // Parse charset
   result->charset = ptr;
-  ptr = salts_scan_to_char(ptr, end, '?');
+  ptr = cmeta_scan_to_char(ptr, end, '?');
   if (ptr >= end) return 0;
   result->charset_len = ptr - result->charset;
   ptr++; // Skip '?'
@@ -50,7 +50,7 @@ size_t mime_parse_encoded_word(const char *str, size_t len,
   // Parse encoded text
   result->encoded_text = ptr;
   while (ptr < end - 1) {
-    ptr = salts_scan_to_char(ptr, end - 1, '?');
+    ptr = cmeta_scan_to_char(ptr, end - 1, '?');
     if (ptr < end - 1 && ptr[1] == '=') {
       result->encoded_text_len = ptr - result->encoded_text;
       return (ptr + 2) - str; // Total length including ?=

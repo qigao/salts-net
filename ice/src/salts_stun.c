@@ -18,7 +18,7 @@
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <fmt.h>
 #include <stdio.h>
@@ -360,7 +360,7 @@ static void write_u64_be(uint8_t *buf, uint64_t val) {
 
 static int calculate_message_integrity(const uint8_t *data, size_t len, const char *password,
                                        uint8_t *hmac_out) {
-  return salts_hmac_sha1(password, strlen(password), data, len, hmac_out) == SALTS_OK ? 0 : -1;
+  return cmeta_hmac_sha1(password, strlen(password), data, len, hmac_out) == SALTS_OK ? 0 : -1;
 }
 
 int stun_build_ice_request(uint8_t *buffer, const stun_transaction_id_t *txn_id,
@@ -542,7 +542,7 @@ int stun_validate_message_integrity(const uint8_t *data, size_t len, const char 
 
   {
     int equal = 0;
-    if (salts_crypto_equal(mi_attr, expected_hmac, STUN_MESSAGE_INTEGRITY_LEN, &equal) != SALTS_OK)
+    if (cmeta_crypto_equal(mi_attr, expected_hmac, STUN_MESSAGE_INTEGRITY_LEN, &equal) != SALTS_OK)
       return -7;
     if (!equal)
       return -7;

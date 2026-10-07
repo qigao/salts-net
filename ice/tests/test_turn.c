@@ -23,7 +23,7 @@ typedef int turn_test_socket_t;
 #include "tinytest.h"
 
 #include <salts/thread.h>
-#include <salts_crypto.h>
+#include <cmeta_crypto.h>
 
 #include <string.h>
 
@@ -179,8 +179,8 @@ static int turn_test_build_authenticated_allocate_response(
   turn_test_write_u16(response + 2, 44u);
   turn_test_write_u16(response + response_size, STUN_ATTR_MESSAGE_INTEGRITY);
   turn_test_write_u16(response + response_size + 2, 20u);
-  if (salts_md5(credentials, strlen(credentials), key) != SALTS_OK) return -1;
-  if (salts_hmac_sha1(key, sizeof(key), response, (size_t)response_size, hmac) != SALTS_OK)
+  if (cmeta_md5(credentials, strlen(credentials), key) != SALTS_OK) return -1;
+  if (cmeta_hmac_sha1(key, sizeof(key), response, (size_t)response_size, hmac) != SALTS_OK)
     return -1;
   memcpy(response + response_size + 4, hmac, sizeof(hmac));
   if (integrity == TURN_TEST_INTEGRITY_MUTATED) response[response_size + 4] ^= 0x80u;

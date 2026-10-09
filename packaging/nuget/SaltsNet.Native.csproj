@@ -17,8 +17,8 @@
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="2.3.0-*" />
     <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
-    <!-- The CI release qualification may select the newest published RC tag
-         (not unqualified Linux-only rc.sha snapshots in the same feed). -->
+    <!-- CI dynamically chooses the newest tagged stable or numeric RC,
+         excluding Linux-only rc.sha snapshots in the same public feed. -->
     <PackageReference Update="Salts.Native" Version="$(SaltsNativeQualifiedVersion)"
                       Condition="'$(SaltsNativeQualifiedVersion)' != ''" />
     <PackageReference Update="SaltsUtils.Native" Version="$(SaltsUtilsNativeQualifiedVersion)"

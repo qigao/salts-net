@@ -66,8 +66,8 @@ The native build and packaging qualification declare floating **prerelease**
 ranges using `Salts.Native Version="2.3.0-*"` and
 `SaltsUtils.Native Version="4.3.0-*"`. Because the NuGet feed also contains
 SHA-qualified Linux-only verification snapshots (which can sort *above*
-`rc.1` or `rc.2`), the CI restore resolves the latest **official published
-RC tag** of each package from GitHub Releases at the start of each job. It
+`rc.1` or `rc.2`), the CI restore dynamically selects the newest **official numeric RC tag**, or
+the **stable release** when available, from GitHub Releases. It
 passes these selected identities into the floating MSBuild projects only for
 qualification, so no fixed RC number is committed. The restore uses
 `--no-cache --force-evaluate`, selects SDK roots from NuGet's actual
@@ -132,8 +132,8 @@ CI uses `ci-linux-release-user`, `ci-macos-release-user`, and
 `ci-win-release-user`. Each inherits the corresponding shared compiler profile:
 GCC on Linux, Homebrew GCC 15 on macOS, and MSVC with UTF-8 on Windows.
 The vcpkg setup action uses the same pinned tool bootstrap as current Salts and
-SaltsUtils; native package restoration re-evaluates the two published RC channels
-on every run. CI uses platform-separated ccache objects (including
+SaltsUtils; native package restoration re-evaluates the two official release channels
+(RC or stable) on every run. CI uses platform-separated ccache objects (including
 MSVC), read-only shared vcpkg binary caching, and cached NuGet package payloads.
 Android arm64 uses `ci-android-sdk-release-user` after building host
 tools. Its `LEMON_EXECUTABLE` must point to that completed host build; the

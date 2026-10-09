@@ -144,8 +144,8 @@ jobs:
           )
           test "${#salts_utils_versions[@]}" -eq 1
           test "$(grep -l '^salts_utils=' package/sdk/*/saltsnet-sdk-manifest.txt | wc -l)" -eq 6
-          [[ "${salts_versions[0]}" == 2.3.0-* ]]
-          [[ "${salts_utils_versions[0]}" == 4.3.0-* ]]
+          [[ "${salts_versions[0]}" == 2.3.0 || "${salts_versions[0]}" =~ ^2\.3\.0-rc\.[0-9]+$ ]]
+          [[ "${salts_utils_versions[0]}" == 4.3.0 || "${salts_utils_versions[0]}" =~ ^4\.3\.0-rc\.[0-9]+$ ]]
           echo "SALTS_PACKAGE_VERSION=${salts_versions[0]}" >> "$GITHUB_ENV"
           echo "SALTS_UTILS_PACKAGE_VERSION=${salts_utils_versions[0]}" >> "$GITHUB_ENV"
           du -sh package/sdk

@@ -29,8 +29,8 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="2.3.0-*" />
     <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
-    <!-- The CI release qualification may select the newest published RC tag
-         (not unqualified Linux-only rc.sha snapshots in the same feed). -->
+    <!-- CI dynamically chooses the newest tagged stable or numeric RC,
+         excluding Linux-only rc.sha snapshots in the same public feed. -->
     <PackageReference Update="Salts.Native" Version="$(SaltsNativeQualifiedVersion)"
                       Condition="'$(SaltsNativeQualifiedVersion)' != ''" />
     <PackageReference Update="SaltsUtils.Native" Version="$(SaltsUtilsNativeQualifiedVersion)"
@@ -40,48 +40,54 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
 </Project>
 '@ | Set-Content -LiteralPath $project -Encoding utf8NoBOM
 
-# Choose the newest *officially released* prerelease, not arbitrary internal
-# rc.sha qualification snapshots which may contain Linux-only SDK payloads.
-# Both PackageReference declarations remain floating 2.3.0-*/4.3.0-*;
-# these MSBuild overrides are resolved afresh from the GitHub Release channel.
-function Get-OfficialNativeRc([string]$repository, [string]$tagPattern,
-                              [string]$packageName) {
+# Choose the newest officially tagged release in the requested native SDK
+# line: stable 2.3.0/4.3.0 if published, otherwise highest numeric rc.N.
+# Never choose arbitrary internal Linux-only rc.sha snapshots in NuGet.
+# The PackageReference declarations remain floating 2.3.0-*/4.3.0-*;
+# these MSBuild overrides are determined afresh on every qualification run.
+function Get-OfficialNativeVersion([string]$repository, [string]$line,
+                                   [string]$packageName) {
   $url = "https://api.github.com/repos/qigao/$repository/releases?per_page=100"
   $headers = @{
     Accept = 'application/vnd.github+json'
     Authorization = "Bearer $env:GITHUB_TOKEN"
-    'User-Agent' = 'saltsnet-native-rc-qualification'
+    'User-Agent' = 'saltsnet-native-sdk-qualification'
   }
-  # Invoke-RestMethod already returns the JSON list as an array. Wrapping
-  # it in @() can keep that array as one nested pipeline object.
+  # Do not wrap Invoke-RestMethod in @(): on pwsh it may become a nested array.
   $releasePayload = Invoke-RestMethod -Method Get -Uri $url -Headers $headers
+  $rcPattern = '^v' + [regex]::Escape($line) + '-rc\.([0-9]+)$'
   $candidates = @(
     foreach ($release in $releasePayload) {
-      if ($release.draft -or -not $release.prerelease) { continue }
-      if ([string]$release.tag_name -match $tagPattern) {
-        $ordinal = [int]$Matches[1]
-        [pscustomobject]@{ Ordinal = $ordinal; Version = $release.tag_name.Substring(1); Release = $release }
+      if ($release.draft) { continue }
+      $tag = [string]$release.tag_name
+      if ($tag -eq "v$line" -and -not $release.prerelease) {
+        $priority = [int]::MaxValue
+      } elseif ($release.prerelease -and $tag -match $rcPattern) {
+        $priority = [int]$Matches[1]
+      } else {
+        continue
       }
+      [pscustomobject]@{ Priority = $priority; Version = $tag.Substring(1); Release = $release }
     }
   )
   if ($candidates.Count -eq 0) {
-    throw "No published prerelease tag matching $tagPattern in qigao/$repository"
+    throw "No published stable or numeric RC native release for $line in qigao/$repository"
   }
-  $selected = $candidates | Sort-Object Ordinal -Descending | Select-Object -First 1
+  $selected = $candidates | Sort-Object Priority -Descending | Select-Object -First 1
   $asset = "$packageName.$($selected.Version).nupkg"
   if (@($selected.Release.assets | Where-Object { $_.name -eq $asset }).Count -ne 1) {
-    throw "Latest published RC $($selected.Release.tag_name) is missing package asset $asset"
+    throw "Latest published release $($selected.Release.tag_name) lacks asset $asset"
   }
   return $selected.Version
 }
 
-$saltsOfficialVersion = Get-OfficialNativeRc 'salts' '^v2\.3\.0-rc\.([0-9]+)$' 'Salts.Native'
-$saltsUtilsOfficialVersion = Get-OfficialNativeRc 'salts-utils' '^v4\.3\.0-rc\.([0-9]+)$' 'SaltsUtils.Native'
+$saltsOfficialVersion = Get-OfficialNativeVersion 'salts' '2.3.0' 'Salts.Native'
+$saltsUtilsOfficialVersion = Get-OfficialNativeVersion 'salts-utils' '4.3.0' 'SaltsUtils.Native'
 $restoreProperties = @(
   "-p:SaltsNativeQualifiedVersion=$saltsOfficialVersion",
   "-p:SaltsUtilsNativeQualifiedVersion=$saltsUtilsOfficialVersion"
 )
-Write-Host "Qualifying published RCs: Salts.Native $saltsOfficialVersion + SaltsUtils.Native $saltsUtilsOfficialVersion"
+Write-Host "Qualifying published native SDK releases: Salts.Native $saltsOfficialVersion + SaltsUtils.Native $saltsUtilsOfficialVersion"
 
 dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate @restoreProperties
 if ($LASTEXITCODE -ne 0) { throw 'Failed to restore Salts 2.3 / SaltsUtils 4.3 prereleases and re2c' }
@@ -98,14 +104,14 @@ $saltsPackage = Get-RestoredPackage 'Salts.Native'
 $saltsUtilsPackage = Get-RestoredPackage 'SaltsUtils.Native'
 $saltsVersion = Split-Path $saltsPackage -Leaf
 $saltsUtilsVersion = Split-Path $saltsUtilsPackage -Leaf
-if ($saltsVersion -notmatch '^2\.3\.0-') {
-  throw "Salts.Native must resolve a 2.3.0 prerelease, got: $saltsVersion"
+if ($saltsVersion -notmatch '^2\.3\.0(-rc\.[0-9]+)?$') {
+  throw "Salts.Native must resolve a tagged 2.3.0 release (stable or numeric RC), got: $saltsVersion"
 }
-if ($saltsUtilsVersion -notmatch '^4\.3\.0-') {
-  throw "SaltsUtils.Native must resolve a 4.3.0 prerelease, got: $saltsUtilsVersion"
+if ($saltsUtilsVersion -notmatch '^4\.3\.0(-rc\.[0-9]+)?$') {
+  throw "SaltsUtils.Native must resolve a tagged 4.3.0 release (stable or numeric RC), got: $saltsUtilsVersion"
 }
 if ($saltsVersion -ne $saltsOfficialVersion -or $saltsUtilsVersion -ne $saltsUtilsOfficialVersion) {
-  throw "NuGet resolved a different prerelease than the latest published RCs: $saltsVersion / $saltsUtilsVersion"
+  throw "NuGet resolved a different version than the selected tagged release: $saltsVersion / $saltsUtilsVersion"
 }
 $saltsRoot = Join-Path $saltsPackage "sdk/$SaltsRid"
 $saltsHostRoot = Join-Path $saltsPackage "sdk/$HostRid"

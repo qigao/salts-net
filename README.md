@@ -62,21 +62,26 @@ Use CFlow only when the application genuinely needs graph composition, demand pr
 
 ## Build and test
 
-Restore the latest stable released **Salts** SDK before configuring. The restore
-step uses `Version="*"` with `--no-cache --force-evaluate`, and selects package
-paths from NuGet's resolved assets. Salts 2.1.0 is the upgrade target; it is not
-pinned in the build or package metadata. Salts 2.0 is the minimum supported
-version because the buffer, SIMD scan, clock, thread, and random APIs now use
-their `cmeta_*` names.
+The native build and packaging qualification now restore the newest matching
+**prerelease** packages using `Salts.Native Version="2.3.0-*"` and
+`SaltsUtils.Native Version="4.3.0-*"` (CI-candidate floating ranges, not
+exact release pins). The restore script uses `--no-cache --force-evaluate`,
+selects SDK roots from NuGet's actual `project.assets.json`, checks the
+resolved prerelease identities, and **fails fast** if the requested prerelease
+or target/host SDK is unavailable. It does not fall back to Salts 2.2 or
+SaltsUtils 4.2. Rebuild all linked native dependencies against the same
+ABI-qualified candidate; do not mix prerelease and old stable binaries.
 
-SaltsNet intentionally does **not** depend on SaltsUtils; keeping `SaltsNet -> Salts` one-way avoids an unnecessary utility-layer dependency.
+SaltsNet currently links directly to Salts/CNet, while SaltsUtils is
+resolved and validated as an explicit prerequisite for the shared 2.3/4.3
+SDK qualification. Protocol-layer business logic remains in SaltsNet.
 
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
-[SaltsUtils 4.2](https://github.com/qigao/salts-utils/releases/tag/v4.2.0), vcpkg runs in manifest mode
+[SaltsUtils 4.3 prerelease](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.1), vcpkg runs in manifest mode
 through the shared `qigao/vcpkg-cache` toolchain, with a read-only GitHub feed
 and a writable local cache. The existing vcpkg baseline is retained. SaltsNet
-uses the [GmSSL-backed crypto provider in Salts 2.1](https://github.com/qigao/salts/blob/v2.1.0/utils/CMakeLists.txt)
+uses the [GmSSL-backed crypto provider in Salts](https://github.com/qigao/salts)
 through its public CMeta APIs; it has no direct OpenSSL/BoringSSL dependency.
 Runtime libraries are resolved through the selected preset's environment.
 
@@ -98,7 +103,8 @@ ctest --preset win-release-user
 
 The restore command obtains `Qigao.Re2c.Binary` from the GitHub Packages feed
 in [cmake/vcpkg-cache.nuget.config](cmake/vcpkg-cache.nuget.config), also using
-`Version="*"`. It sets `SALTS_ROOT`, `RE2C_ROOT`, and `RE2C_VERSION` in the current
+`Version="*"`. It sets `SALTS_ROOT`, `SALTS_UTILS_ROOT`, their resolved versions and host
+SDK roots, plus `RE2C_ROOT` and `RE2C_VERSION`, in the current
 PowerShell session. `RE2C_ROOT` selects `tools/<host RID>` from the restored
 package, including when cross-compiling Android. CMake resolves re2c only from
 that root, and lexer generation depends on that executable. The Docker build
@@ -108,7 +114,8 @@ provide the restored package root as well.
 Linux uses the same script with `linux-x64` for both RIDs, then
 `linux-release-user` for configure, build, and test. Debug/ASan builds use
 `win-dev-user` or `linux-dev-user` and require a matching Debug Salts SDK supplied
-through `SALTS_ROOT`; the published Release SDK is not a Debug SDK.
+through `SALTS_ROOT` and `SALTS_UTILS_ROOT`; the prerelease Release SDKs
+are not Debug SDKs.
 
 Install SaltsNet:
 
@@ -120,7 +127,9 @@ CI uses `ci-linux-release-user`, `ci-macos-release-user`, and
 `ci-win-release-user`. Each inherits the corresponding shared compiler profile:
 GCC on Linux, Homebrew GCC 15 on macOS, and MSVC with UTF-8 on Windows.
 The vcpkg setup action uses the same pinned tool bootstrap as current Salts and
-SaltsUtils; native package restoration still resolves the latest release each run.
+SaltsUtils; native package restoration re-evaluates the two prerelease
+ranges on every run. CI uses platform-separated ccache objects (including
+MSVC), read-only shared vcpkg binary caching, and cached NuGet package payloads.
 Android arm64 uses `ci-android-sdk-release-user` after building host
 tools. Its `LEMON_EXECUTABLE` must point to that completed host build; the
 target toolchain never produces or searches for an executable to run on the host.
@@ -135,7 +144,9 @@ explicit test target names and sources. The old package consumer harness and
 the unused `BUILD_BENCHMARKS` option have been removed; SDK installation is a
 normal build/install step.
 
-The upgrade changes build inputs and orchestration, not SaltsNet's public API.
+The current prerequisite bump changes build inputs and orchestration, not
+SaltsNet's public API. A separate integration milestone will adopt CNet 2.3
+Server/Client strategies in LB, TCP proxy, and protocol consumers as needed.
 Reconfigure and rebuild consumers together with the selected SDK to avoid
 mixing headers and runtime versions. Local restoration stays under ignored
 `stage/nuget` and does not overwrite installed SDKs. To undo the build migration,

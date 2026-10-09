@@ -33,7 +33,8 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(MSVC)
-  add_compile_options(/experimental:c11atomics)
+  # Align with Salts 2.3: the dash spelling is compatible with the MSVC ccache launcher.
+  add_compile_options("$<$<COMPILE_LANGUAGE:C>:-experimental:c11atomics>")
 endif()
 # Enable folder organization in IDEs
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
@@ -59,8 +60,20 @@ file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 find_package(
-  Salts 2.0 CONFIG REQUIRED
+  Salts 2.3 CONFIG REQUIRED
   PATHS "${SALTSNET_SALTS_ROOT_PATH}"
+  NO_DEFAULT_PATH
+  NO_CMAKE_FIND_ROOT_PATH)
+
+if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
+  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the restored SaltsUtils 4.3 SDK")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTSNET_SALTS_UTILS_ROOT_PATH)
+unset(SaltsUtils_DIR CACHE)
+unset(SaltsUtils_DIR)
+find_package(
+  SaltsUtils 4.3 CONFIG REQUIRED
+  PATHS "${SALTSNET_SALTS_UTILS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 # Additional components
@@ -74,6 +87,10 @@ add_subdirectory(ldap)
 add_subdirectory(email)
 add_subdirectory(lb)
 add_subdirectory(tproxy)
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
 # Package Configuration
 include(CMakePackageConfigHelpers)

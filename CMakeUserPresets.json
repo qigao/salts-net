@@ -199,9 +199,10 @@
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
         "RE2C_ROOT": "$penv{RE2C_ROOT}",
-        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
-        "LD_LIBRARY_PATH": "$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
-        "DYLD_LIBRARY_PATH": "$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}"
+        "PATH": "$env{RE2C_ROOT}/bin${pathListSep}$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/bin${pathListSep}$env{SALTS_UTILS_ROOT}/bin${pathListSep}$env{SALTS_ROOT}/bin${pathListSep}$penv{PATH}",
+        "LD_LIBRARY_PATH": "$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{LD_LIBRARY_PATH}",
+        "DYLD_LIBRARY_PATH": "$env{SALTSNET_CI_BUILD_ROOT}/bin${pathListSep}$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}/lib${pathListSep}$env{SALTS_UTILS_ROOT}/lib${pathListSep}$env{SALTS_ROOT}/lib${pathListSep}$penv{DYLD_LIBRARY_PATH}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}"
       },
       "hidden": true
     },
@@ -228,7 +229,8 @@
         "SALTS_ROOT": "$penv{SALTS_HOST_ROOT}",
         "QIGAO_TARGET_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-host",
-        "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host"
+        "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_HOST_ROOT}"
       },
       "hidden": false
     },
@@ -274,7 +276,8 @@
         "QIGAO_TARGET_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-host",
         "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host",
-        "X_VCPKG_NUGET_ID_PREFIX": ""
+        "X_VCPKG_NUGET_ID_PREFIX": "",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_HOST_ROOT}"
       }
     },
     {

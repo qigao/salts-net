@@ -1,8 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 foreach ($name in @('GITHUB_WORKSPACE', 'QIGAO_SDK_RID', 'QIGAO_TARGET_TRIPLET',
-                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT',
-                    'QIGAO_VCPKG_TOOLCHAIN_FILE')) {
+                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT')) {
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
     throw "Installed SDK verification requires $name"
   }
@@ -13,18 +12,16 @@ $config = Join-Path $prefix 'lib/cmake/SaltsNet/SaltsNetConfig.cmake'
 if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
   throw "Missing installed SaltsNet config: $config"
 }
-$toolchain = $env:QIGAO_VCPKG_TOOLCHAIN_FILE
-if (-not (Test-Path -LiteralPath $toolchain -PathType Leaf)) {
-  throw "Missing shared vcpkg toolchain: $toolchain"
-}
+# An out-of-tree consumer of the public SDK must not need the source-tree
+# vcpkg toolchain. SaltsNet's manifest can be empty; absence of an installed
+# third-party dependency tree is a valid and important test case.
 $env:SALTSNET_ROOT = $prefix
 $triplet = $env:QIGAO_TARGET_TRIPLET
 $dependencies = Join-Path $repositoryRoot "vcpkg_installed/$triplet"
 $binaryDir = Join-Path $repositoryRoot "build/ci-installed/$env:QIGAO_SDK_RID"
 $sourceDir = Join-Path $repositoryRoot 'tests/installed_sdk'
-if (-not (Test-Path -LiteralPath $dependencies -PathType Container)) {
-  throw "Missing native dependency tree: $dependencies"
-}
+# The optional resolved binary cache is only a runtime search location when
+# it actually exists; no project dependency shall be rebuilt as a fallback.
 
 # The package import is from the fresh install prefix. Runtime search never
 # relies on build/ci-sdk objects or a sibling SaltsNet source-tree target.
@@ -48,13 +45,8 @@ if (-not $IsWindows) {
 $cmakeArgs = @(
   '-S', $sourceDir, '-B', $binaryDir, '-G', 'Ninja',
   '-DCMAKE_BUILD_TYPE=Release',
-  "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
-  "-DVCPKG_TARGET_TRIPLET=$triplet",
-  "-DVCPKG_HOST_TRIPLET=$env:QIGAO_HOST_TRIPLET",
-  "-DVCPKG_INSTALLED_DIR=$(Join-Path $repositoryRoot 'vcpkg_installed')",
-  '-DVCPKG_MANIFEST_MODE=OFF',
-  '-DVCPKG_APPLOCAL_DEPS=OFF',
-  "-DCMAKE_PREFIX_PATH=$dependencies"
+  '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
+  '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF'
 )
 & cmake @cmakeArgs
 if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 configure failed" }

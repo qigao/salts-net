@@ -20,6 +20,7 @@ on:
       - "vcpkg.json"
       - "packaging/nuget/**"
       - ".github/workflows/**"
+      - "tests/**"
   push:
     branches: [master]
     tags: ["v*"]
@@ -27,6 +28,10 @@ on:
       - "CMakeLists.txt"
       - "vcpkg.json"
       - ".github/workflows/**"
+      - "packaging/nuget/**"
+      - "cmake/**"
+      - "CMakeUserPresets.json"
+      - "tests/**"
   workflow_dispatch:
 
 permissions:
@@ -50,6 +55,8 @@ jobs:
       qualify: ${{ steps.meta.outputs.qualify }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Resolve release metadata
         id: meta
         shell: bash
@@ -109,6 +116,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/download-artifact@v4
         with:
           pattern: saltsnet-sdk-*
@@ -130,7 +139,15 @@ jobs:
             sed -n 's/^salts=//p' package/sdk/*/saltsnet-sdk-manifest.txt | tr -d '\r' | sort -u
           )
           test "${#salts_versions[@]}" -eq 1
+          mapfile -t salts_utils_versions < <(
+            sed -n 's/^salts_utils=//p' package/sdk/*/saltsnet-sdk-manifest.txt | tr -d '\r' | sort -u
+          )
+          test "${#salts_utils_versions[@]}" -eq 1
+          test "$(grep -l '^salts_utils=' package/sdk/*/saltsnet-sdk-manifest.txt | wc -l)" -eq 6
+          [[ "${salts_versions[0]}" == 2.3.0-* ]]
+          [[ "${salts_utils_versions[0]}" == 4.3.0-* ]]
           echo "SALTS_PACKAGE_VERSION=${salts_versions[0]}" >> "$GITHUB_ENV"
+          echo "SALTS_UTILS_PACKAGE_VERSION=${salts_utils_versions[0]}" >> "$GITHUB_ENV"
           du -sh package/sdk
       - uses: actions/setup-dotnet@v4
         with:
@@ -159,7 +176,7 @@ jobs:
             -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}
           test -f "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg"
           unzip -p "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg" "SaltsNet.Native.nuspec" > "$RUNNER_TEMP/saltsnet.nuspec"
-          if grep -F 'id="Salts.Native"' "$RUNNER_TEMP/saltsnet.nuspec"; then
+          if grep -E 'id="(Salts.Native|SaltsUtils.Native)"' "$RUNNER_TEMP/saltsnet.nuspec"; then
             echo "SaltsNet.Native must not embed GitHub package dependency metadata" >&2
             exit 1
           fi

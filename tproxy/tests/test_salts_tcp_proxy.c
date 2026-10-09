@@ -32,7 +32,8 @@ typedef enum proxy_test_kind {
   PROXY_TEST_SOCKS_AUTH,
   PROXY_TEST_SOCKS_AUTH_FAILURE,
   PROXY_TEST_RAW,
-  PROXY_TEST_DENIED
+  PROXY_TEST_DENIED,
+  PROXY_TEST_SOCKS_REJECT
 } proxy_test_kind_t;
 
 typedef struct proxy_test_echo {
@@ -255,6 +256,20 @@ static void proxy_test_client_run(void *user) {
     }
   } else if (client->kind == PROXY_TEST_RAW) {
     if (proxy_test_exchange(socket_value) != 0) goto done;
+  } else if (client->kind == PROXY_TEST_SOCKS_REJECT) {
+    static const unsigned char greeting[] = {5u, 1u, 0u};
+    unsigned char request[10] = {5u, 1u, 0u, 1u, 127u, 0u, 0u, 1u, 0u, 0u};
+    request[8] = (unsigned char)(client->backend_port >> 8u);
+    request[9] = (unsigned char)client->backend_port;
+    if (proxy_test_send_all(socket_value, greeting, sizeof(greeting)) != 0 ||
+        proxy_test_recv_exact(socket_value, response, sizeof(response)) != 0 ||
+        response[0] != 5u || response[1] != 0u ||
+        proxy_test_send_all(socket_value, request, sizeof(request)) != 0) goto done;
+    {
+      unsigned char outcome[10];
+      if (proxy_test_recv_exact(socket_value, outcome, sizeof(outcome)) != 0 ||
+          outcome[0] != 5u || outcome[1] != 5u) goto done;
+    }
   } else if (client->kind == PROXY_TEST_DENIED) {
     char byte;
     if (recv(socket_value, &byte, 1, 0) > 0) goto done;
@@ -297,6 +312,7 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
   cmeta_thread_t echo_thread = NULL;
   cmeta_thread_t client_thread = NULL;
   char raw_uri[64];
+  salts_tcp_proxy_upstream_t upstreams[2] = {0};
   proxy_test_route_t route = {{0}, 0, SALTS_PROXY_PROTOCOL_AUTO, 0u};
 
   atomic_init(&echo.done, 0);
@@ -310,6 +326,15 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
     check(snprintf(raw_uri, sizeof(raw_uri), "tcp://127.0.0.1:%u", (unsigned int)echo.port) > 0);
     config->raw_backend_uri = raw_uri;
   }
+  if (config->upstream_count == 2u && config->upstreams == NULL) {
+    check(snprintf(raw_uri, sizeof(raw_uri), "tcp://127.0.0.1:%u",
+                   echo.port ? (unsigned int)echo.port : 1u) > 0);
+    upstreams[0] = (salts_tcp_proxy_upstream_t){
+        .endpoint_id = 101u, .uri = "tcp://127.0.0.1:1", .weight = 1u, .eligible = false};
+    upstreams[1] = (salts_tcp_proxy_upstream_t){
+        .endpoint_id = 202u, .uri = raw_uri, .weight = 3u, .eligible = true};
+    config->upstreams = upstreams;
+  }
   if (config->route) {
     check(snprintf(route.uri, sizeof(route.uri), "tcp://127.0.0.1:%u",
                    (unsigned int)echo.port) > 0);
@@ -319,7 +344,7 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
   check_not_null(proxy);
   check_equal(salts_tcp_proxy_listen(proxy, "127.0.0.1", 0u), SALTS_OK);
   check_equal(salts_tcp_proxy_port(proxy, &client.proxy_port), SALTS_OK);
-  client.backend_port = config->route ? 1u : echo.port;
+  client.backend_port = config->route ? 1u : (echo.port ? echo.port : 443u);
   check_equal(cmeta_thread_create(&client_thread, proxy_test_client_run, &client), SALTS_OK);
   check_equal(proxy_test_poll_until(proxy, &client), 0);
   check_equal(salts_tcp_proxy_stop(proxy), SALTS_OK);
@@ -366,6 +391,34 @@ spec("Salts CNet TCP proxy") {
       check_null(salts_tcp_proxy_create(&config));
     }
 
+    it("validates immutable CNet upstream policy and forbids route bypass") {
+      salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
+      salts_tcp_proxy_upstream_t endpoints[2] = {
+          {.endpoint_id = 1u, .uri = "tcp://127.0.0.1:1", .weight = 1u, .eligible = true},
+          {.endpoint_id = 2u, .uri = "tcp://127.0.0.1:2", .weight = 1u, .eligible = true}};
+      config.protocol = SALTS_PROXY_PROTOCOL_SOCKS5;
+      config.upstream_count = 2u;
+      config.upstreams = endpoints;
+      config.upstream_policy = CNET_DESTINATION_STRICT_KEY;
+      check_null(salts_tcp_proxy_create(&config));
+      config.upstream_policy = CNET_DESTINATION_ROUND_ROBIN;
+      config.route = proxy_test_route;
+      check_null(salts_tcp_proxy_create(&config));
+      config.route = NULL;
+      endpoints[1].endpoint_id = 1u;
+      check_null(salts_tcp_proxy_create(&config));
+      endpoints[1].endpoint_id = 2u;
+      endpoints[0].weight = 0u;
+      check_null(salts_tcp_proxy_create(&config));
+      endpoints[0].weight = 1u;
+      endpoints[0].uri = "tls://127.0.0.1:1";
+      check_null(salts_tcp_proxy_create(&config));
+      endpoints[0].uri = "tcp://127.0.0.1:1";
+      config.upstream_policy = CNET_DESTINATION_EXPLICIT;
+      config.explicit_upstream_id = 999u;
+      check_null(salts_tcp_proxy_create(&config));
+    }
+
     it("opens an ephemeral listener and stops without sessions") {
       salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
       salts_tcp_proxy_t *proxy = salts_tcp_proxy_create(&config);
@@ -392,6 +445,23 @@ spec("Salts CNet TCP proxy") {
       salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
       config.protocol = SALTS_PROXY_PROTOCOL_SOCKS5;
       proxy_test_run(&config, PROXY_TEST_SOCKS, 1);
+    }
+
+    it("selects the authorized static backend via CNet 2.3 weighted strategy") {
+      salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
+      config.protocol = SALTS_PROXY_PROTOCOL_SOCKS5;
+      config.upstream_count = 2u; /* Fixture fills immutable source endpoint set. */
+      config.upstream_policy = CNET_DESTINATION_WEIGHTED_RR;
+      proxy_test_run(&config, PROXY_TEST_SOCKS, 1);
+    }
+
+    it("rejects strict endpoint admission without silently failing over") {
+      salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
+      config.protocol = SALTS_PROXY_PROTOCOL_SOCKS5;
+      config.upstream_count = 2u;
+      config.upstream_policy = CNET_DESTINATION_EXPLICIT;
+      config.explicit_upstream_id = 101u; /* Deliberately ineligible. */
+      proxy_test_run(&config, PROXY_TEST_SOCKS_REJECT, 0);
     }
 
     it("routes a SOCKS5 target through the configured backend boundary") {

@@ -58,15 +58,14 @@ jobs:
             host_preset: ci-macos-host-release-user
             sysroot: iphoneos
             cross: true
-          - runner: macos-15
-            rid: ios-simulator-arm64
-            host: macos-arm64
-            triplet: arm64-ios-simulator
-            host_triplet: arm64-osx
-            preset: ci-ios-sdk-release-user
-            host_preset: ci-macos-host-release-user
-            sysroot: iphonesimulator
-            cross: true
+          # Published upstream RC packages ship linux-arm64, not iOS simulator.
+          - runner: ubuntu-24.04-arm
+            rid: linux-arm64
+            host: linux-arm64
+            triplet: arm64-linux
+            host_triplet: arm64-linux
+            preset: ci-linux-arm64-release-user
+            cross: false
     env:
       QIGAO_SDK_RID: ${{ matrix.rid }}
       QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
@@ -91,9 +90,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: stage/nuget
-          key: saltsnet-nuget-v1-${{ runner.os }}-${{ matrix.host }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: saltsnet-nuget-v1-${{ runner.os }}-${{ matrix.rid }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
-            saltsnet-nuget-v1-${{ runner.os }}-${{ matrix.host }}-
+            saltsnet-nuget-v1-${{ runner.os }}-${{ matrix.rid }}-
       - name: Prepare Linux tools
         if: runner.os == 'Linux'
         shell: bash

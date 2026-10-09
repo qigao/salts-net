@@ -6,7 +6,7 @@
     <SuppressDependenciesWhenPacking>true</SuppressDependenciesWhenPacking>
     <PackageId>SaltsNet.Native</PackageId>
     <Authors>qigao</Authors>
-    <Description>SaltsNet native C SDK for Linux x64, Windows x64, macOS host architecture, Android arm64-v8a, and iOS device/simulator Release builds.</Description>
+    <Description>SaltsNet native C SDK for Linux x64/arm64, Windows x64, macOS arm64, Android arm64-v8a, and iOS device Release builds.</Description>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/qigao/salts-net</RepositoryUrl>

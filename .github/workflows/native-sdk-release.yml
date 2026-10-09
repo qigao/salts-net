@@ -131,7 +131,7 @@ jobs:
           test -f package/sdk/windows-x64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           test -f package/sdk/android-arm64-v8a/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           test -f package/sdk/ios-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
-          test -f package/sdk/ios-simulator-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
+          test -f package/sdk/linux-arm64/lib/cmake/SaltsNet/SaltsNetConfig.cmake
           mac_config="$(find package/sdk -path '*macos-*/lib/cmake/SaltsNet/SaltsNetConfig.cmake' -print -quit)"
           test -n "$mac_config"
           test "$(find package/sdk -maxdepth 2 -name saltsnet-sdk-manifest.txt | wc -l)" -eq 6

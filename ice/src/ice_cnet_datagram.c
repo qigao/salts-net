@@ -235,6 +235,10 @@ int ice_cnet_datagram_send(ice_cnet_datagram_t *transport, const cnet_datagram_p
     return SALTS_EINVAL;
   }
   if (transport->send_pending) return SALTS_EBUSY;
+  /* CNet 2.3 completions are correlated by tag. Never reuse zero or wrap
+   * the tag identity while an old UDP completion could still arrive. */
+  if (transport->next_send_tag == 0u || transport->next_send_tag == UINT64_MAX)
+    return SALTS_ERANGE;
 
   transport->pending_send_tag = transport->next_send_tag++;
   transport->send_status = SALTS_EBUSY;

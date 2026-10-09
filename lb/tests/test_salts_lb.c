@@ -261,6 +261,28 @@ spec("Salts CNet load balancer") {
       check_null(salts_lb_create(&config));
     }
 
+    it("rejects unsupported or incomplete destination strategies") {
+      salts_lb_config_t config = salts_lb_config_default();
+      check_equal(config.worker_policy, CNET_DESTINATION_ROUND_ROBIN);
+      config.worker_policy = CNET_DESTINATION_STRICT_KEY;
+      check_null(salts_lb_create(&config));
+      config.worker_policy = CNET_DESTINATION_EXPLICIT;
+      check_null(salts_lb_create(&config));
+      config.worker_policy = (cnet_destination_policy_kind)999;
+      check_null(salts_lb_create(&config));
+    }
+
+    it("uses CNet least-inflight among eligible workers without bypassing group routing") {
+      salts_lb_config_t config = salts_lb_config_default();
+      lb_test_peer_t worker = {.is_worker = 1, .registration = "api", .prefix = "[API]"};
+      lb_test_peer_t client = {.request = "API:list", .expected_response_size = 13u};
+      config.route = lb_test_route;
+      config.worker_policy = CNET_DESTINATION_LEAST_INFLIGHT;
+      lb_test_run_pair(&config, &worker, &client);
+      check(client.response_size >= 5u);
+      check(memcmp(client.response, "[API]", 5u) == 0);
+    }
+
     it("opens ephemeral listeners and stops deterministically") {
       salts_lb_config_t config = salts_lb_config_default();
       salts_lb_t *lb = salts_lb_create(&config);

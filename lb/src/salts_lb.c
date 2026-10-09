@@ -1,6 +1,7 @@
 #include "salts_lb.h"
 
 #include <cnet/cnet.h>
+#include <cnet/destination_policy.h>
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
 
@@ -91,6 +92,8 @@ struct salts_lb_s {
   cnet_listener workers;
   salts_lb_slot_t *slots;
   unsigned char *slot_storage;
+  cnet_destination_hint *worker_endpoints; /* Fixed, owner-local endpoint snapshot. */
+  uint64_t worker_sequence;
   int client_initialized;
   int frontend_initialized;
   int workers_initialized;
@@ -140,16 +143,38 @@ static int salts_lb_group_matches(const char *worker_group, const char *requeste
   return !worker_group[0] || !requested_group[0] || strcmp(worker_group, requested_group) == 0;
 }
 
+/* A registered worker is a remote destination, not a network Owner shard.
+ * Application group selection remains the LB protocol's responsibility. */
 static salts_lb_slot_t *salts_lb_idle_worker(struct salts_lb_s *lb, const char *group) {
+  cnet_destination_selection input;
+  cnet_destination_result selected;
   size_t index;
+  int status;
   for (index = 0u; index < lb->config.connection_capacity; ++index) {
-    salts_lb_slot_t *slot = &lb->slots[index];
-    if (slot->role == SALTS_LB_ROLE_WORKER && slot->phase == SALTS_LB_PHASE_WORKER_IDLE &&
-        salts_lb_group_matches(slot->group, group)) {
-      return slot;
-    }
+    const salts_lb_slot_t *slot = &lb->slots[index];
+    cnet_destination_hint *hint = &lb->worker_endpoints[index];
+    hint->eligible = slot->role == SALTS_LB_ROLE_WORKER &&
+                     slot->phase == SALTS_LB_PHASE_WORKER_IDLE &&
+                     salts_lb_group_matches(slot->group, group);
+    hint->inflight = hint->eligible ? 0u : 1u;
   }
-  return NULL;
+  input = (cnet_destination_selection){
+      .size = sizeof(input),
+      .version = CNET_DESTINATION_POLICY_VERSION,
+      .kind = lb->config.worker_policy,
+      .endpoints = lb->worker_endpoints,
+      .endpoint_count = lb->config.connection_capacity,
+      .snapshot_generation = 1u,
+      .expires_at_ms = UINT64_MAX,
+      .sequence = lb->worker_sequence};
+  status = cnet_destination_choose(&input, &selected);
+  if (status == SALTS_ENOBUFS) return NULL; /* Preserve bounded worker wait. */
+  if (status != SALTS_OK || selected.index >= lb->config.connection_capacity) {
+    lb->fatal_status = status == SALTS_OK ? SALTS_EPROTO : status;
+    return NULL;
+  }
+  ++lb->worker_sequence;
+  return &lb->slots[selected.index];
 }
 
 static void salts_lb_unpair(salts_lb_slot_t *slot) {
@@ -551,6 +576,7 @@ salts_lb_config_t salts_lb_config_default(void) {
   config.read_timeout_ms = SALTS_LB_DEFAULT_IO_TIMEOUT_MS;
   config.write_timeout_ms = SALTS_LB_DEFAULT_IO_TIMEOUT_MS;
   config.shutdown_timeout_ms = SALTS_LB_DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  config.worker_policy = CNET_DESTINATION_ROUND_ROBIN;
   return config;
 }
 
@@ -564,7 +590,11 @@ salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
       config->backlog == 0u || config->shutdown_timeout_ms == 0u ||
       config->max_message_bytes > SIZE_MAX / config->connection_capacity ||
       (config->mode == SALTS_LB_MODE_REQUEST && !config->frame) ||
-      (config->mode != SALTS_LB_MODE_SESSION && config->mode != SALTS_LB_MODE_REQUEST)) {
+      (config->mode != SALTS_LB_MODE_SESSION && config->mode != SALTS_LB_MODE_REQUEST) ||
+      (config->worker_policy != CNET_DESTINATION_ROUND_ROBIN &&
+       config->worker_policy != CNET_DESTINATION_WEIGHTED_RR &&
+       config->worker_policy != CNET_DESTINATION_LEAST_INFLIGHT) ||
+      config->connection_capacity > SIZE_MAX / sizeof(cnet_destination_hint)) {
     return NULL;
   }
   lb = (salts_lb_t *)calloc(1u, sizeof(*lb));
@@ -572,13 +602,17 @@ salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
   lb->config = *config;
   lb->slots = (salts_lb_slot_t *)calloc(config->connection_capacity, sizeof(*lb->slots));
   lb->slot_storage = (unsigned char *)malloc(config->connection_capacity * config->max_message_bytes);
-  if (!lb->slots || !lb->slot_storage) goto fail;
+  lb->worker_endpoints =
+      (cnet_destination_hint *)calloc(config->connection_capacity, sizeof(*lb->worker_endpoints));
+  if (!lb->slots || !lb->slot_storage || !lb->worker_endpoints) goto fail;
   for (index = 0u; index < config->connection_capacity; ++index) {
     lb->slots[index].lb = lb;
     lb->slots[index].index = index;
     lb->slots[index].peer_index = SIZE_MAX;
     lb->slots[index].rearm_index = SIZE_MAX;
     lb->slots[index].buffer = lb->slot_storage + index * config->max_message_bytes;
+    lb->worker_endpoints[index].endpoint_id = (uint64_t)index + 1u;
+    lb->worker_endpoints[index].weight = 1u;
   }
   memset(&client_config, 0, sizeof(client_config));
   client_config.backend = salts_lb_backend();
@@ -597,6 +631,7 @@ salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
   return lb;
 
 fail:
+  free(lb->worker_endpoints);
   free(lb->slot_storage);
   free(lb->slots);
   free(lb);
@@ -725,6 +760,7 @@ int salts_lb_destroy(salts_lb_t *lb) {
   if (!lb->stopped) return SALTS_EBUSY;
   status = cnet_client_destroy(&lb->client);
   if (status != SALTS_OK) return status;
+  free(lb->worker_endpoints);
   free(lb->slot_storage);
   free(lb->slots);
   free(lb);

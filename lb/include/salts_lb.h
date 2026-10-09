@@ -2,6 +2,7 @@
 #define SALTSNET_LB_H
 
 #include "salts_lb_api.h"
+#include <cnet/destination_policy.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -53,6 +54,10 @@ typedef struct salts_lb_config {
   uint32_t read_timeout_ms;
   uint32_t write_timeout_ms;
   uint32_t shutdown_timeout_ms;
+  /** CNet 2.3 worker destination policy. Only IDLE, group-compatible workers
+   * are eligible. RR, weighted RR and least-inflight are supported.
+   * STRICT_KEY requires an explicit application key and is rejected. */
+  cnet_destination_policy_kind worker_policy;
 } salts_lb_config_t;
 
 SALTSNET_LB_C_API salts_lb_config_t salts_lb_config_default(void);

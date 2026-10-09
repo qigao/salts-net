@@ -365,6 +365,72 @@ static void proxy_test_run(salts_tcp_proxy_config_t *config, proxy_test_kind_t k
   check_equal(client.status, 0);
 }
 
+
+/* Separate connections exercise a failed physical endpoint and a healthy
+ * endpoint under one immutable RR policy. A tunnel failure never retries
+ * application DATA or borrows another session's upstream stream. */
+static void proxy_test_run_upstream_isolation(void) {
+  salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
+  proxy_test_echo_t echo = {.listener = PROXY_TEST_INVALID_SOCKET};
+  cmeta_thread_t echo_thread = NULL;
+  cmeta_thread_t failed_thread = NULL;
+  cmeta_thread_t healthy_thread = NULL;
+  proxy_test_client_t failed = {.kind = PROXY_TEST_SOCKS_REJECT};
+  proxy_test_client_t healthy = {.kind = PROXY_TEST_SOCKS};
+  salts_tcp_proxy_t *proxy;
+  char healthy_uri[64];
+  salts_tcp_proxy_upstream_t endpoints[2];
+
+  atomic_init(&echo.done, 0);
+  atomic_init(&failed.done, 0);
+  atomic_init(&healthy.done, 0);
+  echo.listener = proxy_test_echo_listener(&echo.port);
+  check(echo.listener != PROXY_TEST_INVALID_SOCKET);
+  check_equal(cmeta_thread_create(&echo_thread, proxy_test_echo_run, &echo), SALTS_OK);
+  check(snprintf(healthy_uri, sizeof(healthy_uri), "tcp://127.0.0.1:%u",
+                 (unsigned int)echo.port) > 0);
+
+  endpoints[0] = (salts_tcp_proxy_upstream_t){
+      .endpoint_id = 101u, .uri = "tcp://127.0.0.1:1",
+      .weight = 1u, .eligible = true};
+  endpoints[1] = (salts_tcp_proxy_upstream_t){
+      .endpoint_id = 202u, .uri = healthy_uri,
+      .weight = 1u, .eligible = true};
+  config.protocol = SALTS_PROXY_PROTOCOL_SOCKS5;
+  config.upstreams = endpoints;
+  config.upstream_count = 2u;
+  config.upstream_policy = CNET_DESTINATION_ROUND_ROBIN;
+  proxy = salts_tcp_proxy_create(&config);
+  check_not_null(proxy);
+  check_equal(salts_tcp_proxy_listen(proxy, "127.0.0.1", 0u), SALTS_OK);
+  check_equal(salts_tcp_proxy_port(proxy, &failed.proxy_port), SALTS_OK);
+
+  /* First RR target deliberately refuses connect. CNet must surface a
+   * SOCKS failure; the healthy peer is not an implicit fallback. */
+  failed.backend_port = echo.port;
+  check_equal(cmeta_thread_create(&failed_thread, proxy_test_client_run, &failed), SALTS_OK);
+  check_equal(proxy_test_poll_until(proxy, &failed), 0);
+  check_equal(cmeta_thread_join(&failed_thread), SALTS_OK);
+  cmeta_thread_destroy(&failed_thread);
+  check_equal(failed.status, 0);
+
+  /* A separate, newly admitted logical tunnel can use the second endpoint
+   * without inheriting the first session's cancelled or retired context. */
+  healthy.proxy_port = failed.proxy_port;
+  healthy.backend_port = echo.port;
+  check_equal(cmeta_thread_create(&healthy_thread, proxy_test_client_run, &healthy), SALTS_OK);
+  check_equal(proxy_test_poll_until(proxy, &healthy), 0);
+  check_equal(cmeta_thread_join(&healthy_thread), SALTS_OK);
+  cmeta_thread_destroy(&healthy_thread);
+  check_equal(healthy.status, 0);
+
+  check_equal(salts_tcp_proxy_stop(proxy), SALTS_OK);
+  check_equal(salts_tcp_proxy_destroy(proxy), SALTS_OK);
+  check_equal(cmeta_thread_join(&echo_thread), SALTS_OK);
+  cmeta_thread_destroy(&echo_thread);
+  check_equal(echo.status, 0);
+}
+
 spec("Salts CNet TCP proxy") {
   before_all() {
 #if defined(_WIN32)
@@ -491,6 +557,11 @@ spec("Salts CNet TCP proxy") {
       salts_tcp_proxy_config_t config = salts_tcp_proxy_config_default();
       config.protocol = SALTS_PROXY_PROTOCOL_RAW;
       proxy_test_run(&config, PROXY_TEST_RAW, 1);
+    }
+
+
+    it("isolates failed upstream sessions without transparent failover") {
+      proxy_test_run_upstream_isolation();
     }
 
     it("applies access control before protocol or upstream work") {

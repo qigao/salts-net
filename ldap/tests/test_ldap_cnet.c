@@ -27,13 +27,12 @@ typedef int ldap_test_socket_t;
 enum {
   LDAP_TEST_SOCKET_TIMEOUT_MS = 2000,
   LDAP_TEST_CLIENT_TIMEOUT_MS = 1000,
-  LDAP_TEST_TLS_TIMEOUT_MS = 250,
   LDAP_TEST_URI_CAPACITY = 96
 };
 
 typedef enum ldap_test_server_behavior_e {
   LDAP_TEST_SEND_BIND_RESPONSE = 0,
-  LDAP_TEST_CLOSE_PLAINTEXT,
+  LDAP_TEST_INVALID_TLS,
   LDAP_TEST_REBIND
 } ldap_test_server_behavior_t;
 
@@ -41,6 +40,7 @@ typedef struct ldap_test_server_s {
   ldap_test_socket_t listener;
   ldap_test_server_behavior_t behavior;
   int status;
+  int saw_tls_client_hello;
 } ldap_test_server_t;
 
 static const uint8_t LDAP_TEST_BIND_RESPONSE[] = {0x30, 0x0c, 0x02, 0x01, 0x01, 0x61, 0x07,
@@ -142,8 +142,13 @@ static void ldap_test_server_run(void *user) {
     ldap_test_close_socket(peer);
     return;
   }
-  if (server->behavior == LDAP_TEST_CLOSE_PLAINTEXT) {
-    server->status = 0;
+  if (server->behavior == LDAP_TEST_INVALID_TLS) {
+    unsigned char record_header[5];
+    static const char plaintext[] = "not a TLS record\r\n";
+    received = recv(peer, (char *)record_header, (int)sizeof(record_header), MSG_WAITALL);
+    server->saw_tls_client_hello = received == (int)sizeof(record_header) && record_header[0] == 0x16;
+    server->status = server->saw_tls_client_hello &&
+        send(peer, plaintext, (int)sizeof(plaintext) - 1, 0) == (int)sizeof(plaintext) - 1 ? 0 : -1;
     ldap_test_close_socket(peer);
     return;
   }
@@ -260,8 +265,6 @@ spec("LDAP CNet transport") {
     if (client != NULL) client_status = ldap_client_simple_bind(client, "", "", &result);
 
     ldap_client_destroy(client);
-    ldap_test_close_socket(server.listener);
-    server.listener = LDAP_TEST_INVALID_SOCKET;
     check_equal(cmeta_thread_join(&thread), 0);
     cmeta_thread_destroy(&thread);
     ldap_test_server_close(&server);
@@ -272,7 +275,7 @@ spec("LDAP CNet transport") {
     ldap_result_free(&result);
   }
 
-  it("rejects plaintext when the URL requires LDAPS") {
+  it("rejects a plaintext LDAPS peer after sending a real TLS ClientHello") {
     ldap_test_server_t server;
     cmeta_thread_t thread = NULL;
     ldap_client_t *client = NULL;
@@ -281,23 +284,24 @@ spec("LDAP CNet transport") {
     int connect_status = 0;
 
     check_equal(ldap_test_server_open(&server, &port), 0);
-    server.behavior = LDAP_TEST_CLOSE_PLAINTEXT;
+    server.behavior = LDAP_TEST_INVALID_TLS;
     check_equal(ldap_test_make_url(url, sizeof(url), "ldaps", port), 0);
     check_equal(cmeta_thread_create(&thread, ldap_test_server_run, &server), 0);
 
-    const ldap_client_config_t config = {.url = url, .timeout_ms = LDAP_TEST_TLS_TIMEOUT_MS};
+    /* Include TLS context setup in the same operation budget as connection
+     * progress. This test requires protocol rejection, not a cold-start timeout. */
+    const ldap_client_config_t config = {.url = url, .timeout_ms = LDAP_TEST_CLIENT_TIMEOUT_MS};
     client = ldap_client_create(&config);
     check_not_null(client);
     if (client != NULL) connect_status = ldap_client_connect(client);
 
     ldap_client_destroy(client);
-    ldap_test_close_socket(server.listener);
-    server.listener = LDAP_TEST_INVALID_SOCKET;
     check_equal(cmeta_thread_join(&thread), 0);
     cmeta_thread_destroy(&thread);
     ldap_test_server_close(&server);
 
-    check_not_equal(connect_status, 0);
+    check_equal(connect_status, -7); /* LDAP_CLIENT_ERROR_TLS */
     check_equal(server.status, 0);
+    check_true(server.saw_tls_client_hello);
   }
 }

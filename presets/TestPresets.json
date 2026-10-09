@@ -81,6 +81,22 @@
       },
       "configurePreset": "release-mac-ninja",
       "hidden": true
+    },
+    {
+      "name": "base-benchmark",
+      "hidden": true,
+      "filter": {
+        "include": {
+          "label": "benchmark"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": false
+      },
+      "output": {
+        "outputOnFailure": true
+      }
     }
   ]
 }

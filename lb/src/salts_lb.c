@@ -1,7 +1,9 @@
 #include "salts_lb.h"
+#include "salts_lb_host.h"
 
 #include <cnet/cnet.h>
 #include <cnet/destination_policy.h>
+#include <cnet/manager.h>
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
 
@@ -83,6 +85,8 @@ typedef struct salts_lb_slot {
   size_t frame_size;
   int receive_armed;
   char group[SALTS_LB_GROUP_CAPACITY];
+  cnet_managed_connection managed;
+  cnet_handoff_ticket ticket;
 } salts_lb_slot_t;
 
 struct salts_lb_s {
@@ -98,8 +102,11 @@ struct salts_lb_s {
   int frontend_initialized;
   int workers_initialized;
   int fatal_status;
+  int progress_active; /* Owner-local guard, including callbacks during admission/drain. */
   int stopping;
   int stopped;
+  cnet_manager manager;
+  cnet_handoff *credits;
 };
 
 static native_io_backend_kind salts_lb_backend(void) {
@@ -364,6 +371,18 @@ process_next:
   }
 }
 
+static void salts_lb_reset_slot(salts_lb_slot_t *slot) {
+  slot->role = SALTS_LB_ROLE_FREE;
+  slot->phase = SALTS_LB_PHASE_ACCEPTED;
+  slot->send_action = SALTS_LB_SEND_NONE;
+  slot->buffered = 0u;
+  slot->frame_size = 0u;
+  slot->receive_armed = 0;
+  slot->group[0] = '\0';
+  salts_lb_unpair(slot);
+  memset(&slot->connection, 0, sizeof(slot->connection));
+}
+
 static void salts_lb_on_state(void *user, cnet_connection connection,
                               cnet_connection_state state, const cnet_error *error) {
   salts_lb_slot_t *slot = (salts_lb_slot_t *)user;
@@ -384,15 +403,14 @@ static void salts_lb_on_state(void *user, cnet_connection connection,
   if (state != CNET_CONNECTION_CLOSED && state != CNET_CONNECTION_FAILED) return;
 
   salts_lb_close_pair(slot);
-  slot->role = SALTS_LB_ROLE_FREE;
-  slot->phase = SALTS_LB_PHASE_ACCEPTED;
-  slot->send_action = SALTS_LB_SEND_NONE;
-  slot->buffered = 0u;
-  slot->frame_size = 0u;
-  slot->receive_armed = 0;
-  slot->group[0] = '\0';
-  salts_lb_unpair(slot);
-  memset(&slot->connection, 0, sizeof(slot->connection));
+  if (slot->managed.manager != 0u) {
+    /* Pair links are gone, but callback context remains occupied until the
+     * Manager retires the real terminal and invokes recycle outside callback. */
+    int status;
+    slot->phase = SALTS_LB_PHASE_CLOSING;
+    status = cnet_manager_release_context(&slot->lb->manager, slot->managed);
+    if (status != SALTS_OK) slot->lb->fatal_status = status;
+  } else salts_lb_reset_slot(slot);
 }
 
 static void salts_lb_forward_session(salts_lb_slot_t *source, const cnet_receive_view *view) {
@@ -580,10 +598,7 @@ salts_lb_config_t salts_lb_config_default(void) {
   return config;
 }
 
-salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
-  salts_lb_t *lb;
-  cnet_client_config client_config;
-  size_t index;
+int salts_lb_host_config_valid(const salts_lb_config_t *config) {
   if (!config || config->connection_capacity == 0u || config->max_message_bytes == 0u ||
       config->command_capacity == 0u || config->request_capacity == 0u ||
       config->event_capacity == 0u || config->completion_batch_capacity == 0u ||
@@ -595,8 +610,19 @@ salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
        config->worker_policy != CNET_DESTINATION_WEIGHTED_RR &&
        config->worker_policy != CNET_DESTINATION_LEAST_INFLIGHT) ||
       config->connection_capacity > SIZE_MAX / sizeof(cnet_destination_hint)) {
-    return NULL;
+    return 0;
   }
+  return 1;
+}
+
+static salts_lb_t *salts_lb_create_impl(const salts_lb_config_t *config,
+                                       native_io_backend *backend, int *out_status) {
+  salts_lb_t *lb;
+  cnet_client_config client_config;
+  size_t index;
+  *out_status = SALTS_EINVAL;
+  if (!salts_lb_host_config_valid(config)) return NULL;
+  *out_status = SALTS_ENOMEM;
   lb = (salts_lb_t *)calloc(1u, sizeof(*lb));
   if (!lb) return NULL;
   lb->config = *config;
@@ -626,7 +652,9 @@ salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
   client_config.connect_timeout_ms = config->connect_timeout_ms;
   client_config.read_timeout_ms = config->read_timeout_ms;
   client_config.write_timeout_ms = config->write_timeout_ms;
-  if (cnet_client_init(&lb->client, &client_config) != SALTS_OK) goto fail;
+  *out_status = backend ? cnet_client_init_external(&lb->client, &client_config, backend)
+                        : cnet_client_init(&lb->client, &client_config);
+  if (*out_status != SALTS_OK) goto fail;
   lb->client_initialized = 1;
   return lb;
 
@@ -638,10 +666,16 @@ fail:
   return NULL;
 }
 
+salts_lb_t *salts_lb_create(const salts_lb_config_t *config) {
+  int status;
+  return salts_lb_create_impl(config, NULL, &status);
+}
+
 static int salts_lb_open_listener(salts_lb_t *lb, cnet_listener *listener, int *initialized,
                                   const char *host, uint16_t port) {
   cnet_listener_config config;
   int status;
+  if (lb && lb->progress_active) return SALTS_EBUSY;
   if (!lb || !listener || !initialized || *initialized || !host || !host[0] || lb->stopping) {
     return SALTS_EINVAL;
   }
@@ -713,51 +747,65 @@ int salts_lb_poll(salts_lb_t *lb, uint32_t timeout_ms, size_t *out_events) {
   size_t accepted = 0u;
   size_t events = 0u;
   int status;
-  if (!lb || !out_events || !lb->client_initialized || lb->stopping) return SALTS_EINVAL;
+  if (!lb || !out_events || !lb->client_initialized) return SALTS_EINVAL;
+  if (lb->progress_active) return SALTS_EBUSY;
+  if (lb->stopping) return SALTS_EINVAL;
+  lb->progress_active = 1;
   if (lb->frontend_initialized) {
     status = salts_lb_accept_ready(lb, &lb->frontend, SALTS_LB_ROLE_FRONTEND, &accepted);
-    if (status != SALTS_OK && status != SALTS_ENOBUFS) return status;
+    if (status != SALTS_OK && status != SALTS_ENOBUFS) goto done;
   }
   if (lb->workers_initialized) {
     status = salts_lb_accept_ready(lb, &lb->workers, SALTS_LB_ROLE_WORKER, &accepted);
-    if (status != SALTS_OK && status != SALTS_ENOBUFS) return status;
+    if (status != SALTS_OK && status != SALTS_ENOBUFS) goto done;
   }
   status = cnet_client_poll(&lb->client, timeout_ms, &events);
-  if (status != SALTS_OK) return status;
-  if (lb->fatal_status != SALTS_OK) return lb->fatal_status;
+  if (status != SALTS_OK) goto done;
+  status = lb->fatal_status;
+  if (status != SALTS_OK) goto done;
   *out_events = accepted + events;
-  return SALTS_OK;
+done:
+  lb->progress_active = 0;
+  return status;
 }
 
 int salts_lb_stop(salts_lb_t *lb) {
   int status;
   if (!lb) return SALTS_EINVAL;
+  if (lb->progress_active) return SALTS_EBUSY;
   if (lb->stopped) return SALTS_OK;
+  lb->progress_active = 1;
   lb->stopping = 1;
   if (lb->frontend_initialized) {
     status = cnet_listener_close(&lb->frontend);
-    if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+    if (status != SALTS_OK && status != SALTS_EALREADY) goto done;
     status = cnet_listener_destroy(&lb->frontend);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK) goto done;
     lb->frontend_initialized = 0;
   }
   if (lb->workers_initialized) {
     status = cnet_listener_close(&lb->workers);
-    if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+    if (status != SALTS_OK && status != SALTS_EALREADY) goto done;
     status = cnet_listener_destroy(&lb->workers);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK) goto done;
     lb->workers_initialized = 0;
   }
   status = cnet_client_stop(&lb->client, lb->config.shutdown_timeout_ms);
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK) goto done;
   lb->stopped = 1;
-  return SALTS_OK;
+done:
+  lb->progress_active = 0;
+  return status;
 }
 
 int salts_lb_destroy(salts_lb_t *lb) {
   int status;
   if (!lb) return SALTS_EINVAL;
-  if (!lb->stopped) return SALTS_EBUSY;
+  if (lb->progress_active || !lb->stopped) return SALTS_EBUSY;
+  if (lb->manager.impl) {
+    status = cnet_manager_destroy(&lb->manager);
+    if (status != SALTS_OK) return status;
+  }
   status = cnet_client_destroy(&lb->client);
   if (status != SALTS_OK) return status;
   free(lb->worker_endpoints);
@@ -765,4 +813,104 @@ int salts_lb_destroy(salts_lb_t *lb) {
   free(lb->slots);
   free(lb);
   return SALTS_OK;
+}
+
+static void salts_lb_host_recycle(void *user) {
+  salts_lb_slot_t *slot = (salts_lb_slot_t *)user;
+  int status = cnet_handoff_release(slot->lb->credits, slot->ticket);
+  if (status != SALTS_OK) slot->lb->fatal_status = status;
+  slot->ticket = (cnet_handoff_ticket){0};
+  slot->managed = (cnet_managed_connection){0};
+  salts_lb_reset_slot(slot);
+}
+
+int salts_lb_host_create(const salts_lb_config_t *config, native_io_backend *backend,
+                         cnet_handoff *credits, salts_lb_t **out) {
+  salts_lb_t *lb;
+  cnet_manager_config manager;
+  int status;
+  if (!backend || !credits || !out) return SALTS_EINVAL;
+  *out = NULL;
+  lb = salts_lb_create_impl(config, backend, &status);
+  if (!lb) return status;
+  *out = lb;
+  lb->credits = credits;
+  manager = (cnet_manager_config){sizeof(manager), CNET_MANAGER_VERSION, &lb->client,
+      config->connection_capacity, config->connection_capacity};
+  return cnet_manager_init(&lb->manager, &manager);
+}
+
+int salts_lb_host_adopt(salts_lb_t *lb, cnet_accepted_stream *accepted,
+                        cnet_handoff_ticket ticket, bool worker) {
+  salts_lb_slot_t *slot = salts_lb_free_slot(lb);
+  cnet_manager_attachment attachment = {0};
+  int status;
+  if (!slot || lb->stopping) {
+    int cleanup = cnet_accepted_stream_close(accepted);
+    int release = cnet_handoff_release(lb->credits, ticket);
+    if (cleanup != SALTS_OK) return cleanup;
+    if (release != SALTS_OK) return release;
+    return lb->stopping ? SALTS_ESHUTDOWN : SALTS_ENOBUFS;
+  }
+  slot->role = worker ? SALTS_LB_ROLE_WORKER : SALTS_LB_ROLE_FRONTEND;
+  slot->ticket = ticket;
+  attachment.observer = (cnet_observer){salts_lb_on_state, salts_lb_on_receive, slot, salts_lb_on_send};
+  attachment.on_recycle = salts_lb_host_recycle;
+  attachment.hold_context = true;
+  status = cnet_manager_reserve(&lb->manager, &attachment, &slot->managed);
+  if (status != SALTS_OK) {
+    int cleanup = cnet_accepted_stream_close(accepted);
+    int release = cnet_handoff_release(lb->credits, ticket);
+    salts_lb_reset_slot(slot);
+    if (cleanup != SALTS_OK) return cleanup;
+    return release != SALTS_OK ? release : status;
+  }
+  status = cnet_manager_adopt(&lb->manager, slot->managed, accepted, NULL, &slot->connection);
+  if (status != SALTS_OK) {
+    int release;
+    slot->phase = SALTS_LB_PHASE_CLOSING;
+    release = cnet_manager_release_context(&lb->manager, slot->managed);
+    if (release != SALTS_OK) return release;
+  }
+  return status;
+}
+
+int salts_lb_host_progress(salts_lb_t *lb, cnet_listener *listener,
+                           const native_io_sharded_completion *batch, size_t count, size_t *out_work) {
+  cnet_client *clients[] = {&lb->client};
+  cnet_sg_host_routes routes = {sizeof(routes), CNET_SG_HOST_ROUTING_VERSION, listener, clients, 1u};
+  size_t accepts, sharded, events = 0u, work = 0u;
+  int first, status;
+  if (lb->progress_active) return SALTS_EBUSY;
+  lb->progress_active = 1;
+  first = cnet_sg_host_route_batch(batch, count, &routes, &accepts, &sharded);
+  status = cnet_client_advance_external(&lb->client, &events);
+  if (first == SALTS_OK) first = status;
+  status = cnet_manager_advance(&lb->manager, lb->config.connection_capacity, &work);
+  if (first == SALTS_OK) first = status;
+  if (first == SALTS_OK) first = lb->fatal_status;
+  *out_work = count + events + work;
+  lb->progress_active = 0;
+  return first;
+}
+
+int salts_lb_host_stop(salts_lb_t *lb) {
+  cnet_manager_snapshot snapshot;
+  int status;
+  if (lb->progress_active) return SALTS_EBUSY;
+  if (lb->stopped) return SALTS_OK;
+  lb->stopping = 1;
+  if (lb->manager.impl) {
+    status = cnet_manager_request_close(&lb->manager);
+    if (status != SALTS_OK) return status;
+    status = cnet_manager_get_snapshot(&lb->manager, &snapshot);
+    if (status != SALTS_OK) return status;
+    if (!snapshot.drained) return SALTS_EBUSY;
+  }
+  status = cnet_client_stop_external(&lb->client);
+  if (status == SALTS_OK || status == SALTS_EALREADY) {
+    lb->stopped = 1;
+    return SALTS_OK;
+  }
+  return status;
 }

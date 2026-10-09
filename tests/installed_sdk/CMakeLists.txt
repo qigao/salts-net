@@ -10,8 +10,13 @@ if(NOT DEFINED ENV{SALTSNET_ROOT} OR
    NOT IS_DIRECTORY "$ENV{SALTSNET_ROOT}")
   message(FATAL_ERROR "SALTSNET_ROOT must be an installed SaltsNet SDK prefix")
 endif()
+# vcpkg's find_package wrapper reparses arguments on Windows; normalize the
+# explicit package root before passing it through that boundary.
+file(TO_CMAKE_PATH "$ENV{SALTSNET_ROOT}" saltsnet_prefix)
+unset(SaltsNet_DIR CACHE)
+unset(SaltsNet_DIR)
 find_package(SaltsNet CONFIG REQUIRED
-  PATHS "$ENV{SALTSNET_ROOT}"
+  PATHS "${saltsnet_prefix}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
 foreach(component ICE LB TCPProxy)

@@ -1,7 +1,8 @@
 $ErrorActionPreference = 'Stop'
 
 foreach ($name in @('GITHUB_WORKSPACE', 'QIGAO_SDK_RID', 'QIGAO_TARGET_TRIPLET',
-                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT')) {
+                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT',
+                    'VCPKG_ROOT', 'VCPKG_CACHE_REPOSITORY_ROOT', 'VCPKG_BINARY_SOURCES')) {
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
     throw "Installed SDK verification requires $name"
   }
@@ -12,13 +13,11 @@ $config = Join-Path $prefix 'lib/cmake/SaltsNet/SaltsNetConfig.cmake'
 if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
   throw "Missing installed SaltsNet config: $config"
 }
-# An out-of-tree consumer of the public SDK must not need the source-tree
-# vcpkg toolchain. SaltsNet's manifest can be empty; absence of an installed
-# third-party dependency tree is a valid and important test case.
+# The formal consumer has its own empty manifest/build tree. Only the shared
+# external toolchain and installed packages are inputs; no source-tree targets.
 $env:SALTSNET_ROOT = $prefix
 $triplet = $env:QIGAO_TARGET_TRIPLET
 $dependencies = Join-Path $repositoryRoot "vcpkg_installed/$triplet"
-$binaryDir = Join-Path $repositoryRoot "build/ci-installed/$env:QIGAO_SDK_RID"
 $sourceDir = Join-Path $repositoryRoot 'tests/installed_sdk'
 # The optional resolved binary cache is only a runtime search location when
 # it actually exists; no project dependency shall be rebuilt as a fallback.
@@ -42,15 +41,15 @@ if (-not $IsWindows) {
   $env:LD_LIBRARY_PATH = "$runtimePrefix$separator$env:LD_LIBRARY_PATH"
   $env:DYLD_LIBRARY_PATH = "$runtimePrefix$separator$env:DYLD_LIBRARY_PATH"
 }
-$cmakeArgs = @(
-  '-S', $sourceDir, '-B', $binaryDir, '-G', 'Ninja',
-  '-DCMAKE_BUILD_TYPE=Release',
-  '-DCMAKE_FIND_USE_PACKAGE_REGISTRY=OFF',
-  '-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=OFF'
-)
-& cmake @cmakeArgs
-if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 configure failed" }
-& cmake --build $binaryDir --parallel 2
-if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 build failed" }
-& ctest --test-dir $binaryDir --no-tests=error --output-on-failure --timeout 90
-if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 runtime failed" }
+$preset = if ($IsWindows) { 'win-release-user' } elseif ($IsMacOS) { 'macos-release-user' } else { 'linux-release-user' }
+Push-Location $sourceDir
+try {
+  & cmake --preset $preset
+  if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 configure failed" }
+  & cmake --build --preset $preset --parallel 2
+  if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 build failed" }
+  & ctest --preset $preset
+  if ($LASTEXITCODE -ne 0) { throw "Installed SDK C11/C++17 runtime failed" }
+} finally {
+  Pop-Location
+}

@@ -90,11 +90,16 @@ SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_listen(salts_tcp_proxy_t *proxy, co
 SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_port(const salts_tcp_proxy_t *proxy,
                                                   uint16_t *out_port);
 
-/** Advance listener admission, handshakes, routing and stream I/O on one owner thread. */
+/**
+ * Advance listener admission, handshakes, routing and stream I/O on one owner thread.
+ * Lifecycle calls (listen/poll/stop/destroy) from this proxy's access/route
+ * callbacks return SALTS_EBUSY before changing state; defer them until poll returns.
+ * Port queries remain allowed. Calls from different threads must not overlap.
+ */
 SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_poll(salts_tcp_proxy_t *proxy, uint32_t timeout_ms,
                                                   size_t *out_events);
 
-/** Close admission and drain all CNet connections. Idempotent. */
+/** Close admission and drain all CNet connections. Idempotent outside callbacks. */
 SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_stop(salts_tcp_proxy_t *proxy);
 
 /** Requires a completed stop. */

@@ -44,6 +44,9 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")
 include(CTest)
 
 include(CMakeOptions.cmake)
+if(BUILD_BENCHMARKS)
+  enable_testing()
+endif()
 include(Sanitizers)
 include(CmakeUtils)
 
@@ -85,6 +88,7 @@ add_subdirectory(ice)
 add_subdirectory(snmp)
 add_subdirectory(ldap)
 add_subdirectory(email)
+add_subdirectory(internal)
 add_subdirectory(lb)
 add_subdirectory(tproxy)
 

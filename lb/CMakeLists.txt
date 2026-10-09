@@ -1,4 +1,4 @@
-add_library(SaltsLB SHARED src/salts_lb.c)
+add_library(SaltsLB SHARED src/salts_lb.c src/salts_lb_sg.c)
 cmake_config_api(SaltsLB SALTSNET_LB_C_API)
 cmake_config_target(
   SaltsLB
@@ -10,7 +10,7 @@ target_include_directories(
   SaltsLB
   PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
          $<INSTALL_INTERFACE:include>)
-target_link_libraries(SaltsLB PUBLIC Salts::CNet PRIVATE Salts::Core)
+target_link_libraries(SaltsLB PUBLIC Salts::CNet PRIVATE Salts::Core saltsnet_sg_host)
 
 install(
   TARGETS SaltsLB

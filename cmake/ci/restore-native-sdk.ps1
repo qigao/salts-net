@@ -52,13 +52,16 @@ function Get-OfficialNativeRc([string]$repository, [string]$tagPattern,
     Authorization = "Bearer $env:GITHUB_TOKEN"
     'User-Agent' = 'saltsnet-native-rc-qualification'
   }
-  $releases = @(Invoke-RestMethod -Method Get -Uri $url -Headers $headers)
+  # Invoke-RestMethod already returns the JSON list as an array. Wrapping
+  # it in @() can keep that array as one nested pipeline object.
+  $releasePayload = Invoke-RestMethod -Method Get -Uri $url -Headers $headers
   $candidates = @(
-    foreach ($release in $releases) {
+    foreach ($release in $releasePayload) {
       if ($release.draft -or -not $release.prerelease) { continue }
-      if ($release.tag_name -notmatch $tagPattern) { continue }
-      $ordinal = [int]$Matches[1]
-      [pscustomobject]@{ Ordinal = $ordinal; Version = $release.tag_name.Substring(1); Release = $release }
+      if ([string]$release.tag_name -match $tagPattern) {
+        $ordinal = [int]$Matches[1]
+        [pscustomobject]@{ Ordinal = $ordinal; Version = $release.tag_name.Substring(1); Release = $release }
+      }
     }
   )
   if ($candidates.Count -eq 0) {

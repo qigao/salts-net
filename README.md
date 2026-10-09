@@ -69,6 +69,34 @@ the remaining integration work is tracked in
 
 Use CFlow only when the application genuinely needs graph composition, demand propagation, structured scheduling, or another CFlow execution surface.
 
+### CNet 2.3 protocol clients
+
+Email (SMTP/POP3/IMAP) and LDAP keep one caller-driven TCP/TLS connection.
+Each connect episode owns a CNet 2.3 Manager with one record and one connection
+credit. The progress caller initializes it, reserves the observer attachment,
+and connects through `cnet_manager_connect`. Admission failure retires the
+reservation; a live connection retires only on its real CNet terminal. After
+poll returns, manager advance recycles the attachment and destroys the drained
+manager before a new episode can reuse protocol state. The client and callback
+storage outlive that sequence. Close/destroy failure retains them for cleanup.
+No extra thread, backend observe, connection pool or automatic replay is added.
+
+Transport CONNECTED still does not authorize application commands: Email owns
+greeting, STARTTLS and configured authentication; LDAP owns Bind results.
+SMTP DATA and LDAP mutations are not retried by the transport. SNMP retains its
+configured UDP request retransmission and response-ID/security validation; ICE
+retains its CNet 2.3 Datagram send tags, receive demand and protocol retry rules.
+CNet Manager only accepts TCP/TLS, so applying it to UDP would reject valid
+SNMP traffic. This uses the existing Salts::CNet dependency and preserves public
+client configuration and signatures. Rollback is internal to the transport;
+finish active connections before replacing the library.
+
+Formal regressions cover Email admission rollback and repeated connection-slot
+reuse, SMTP/POP3/IMAP exchanges and TLS rejection, LDAP rejected Bind followed
+by explicit Unbind/reconnect, and SNMP byte-identical bounded retransmission.
+The independent installed C11/C++17 consumers link Email, LDAP and SNMP and
+exercise their public lifecycles, including invalid Email authority rejection.
+
 ### Native SG TCP proxy
 
 [`salts_tcp_proxy_sg.h`](tproxy/include/salts_tcp_proxy_sg.h) adds opt-in

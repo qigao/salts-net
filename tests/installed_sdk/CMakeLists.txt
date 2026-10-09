@@ -19,7 +19,7 @@ find_package(SaltsNet CONFIG REQUIRED
   PATHS "${saltsnet_prefix}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
-foreach(component ICE LB TCPProxy)
+foreach(component ICE LB TCPProxy Email LDAP SNMP)
   if(NOT TARGET "SaltsNet::${component}")
     message(FATAL_ERROR "Missing installed public target: SaltsNet::${component}")
   endif()
@@ -27,10 +27,10 @@ endforeach()
 
 add_executable(installed_saltsnet_c11 c_client.c)
 target_link_libraries(installed_saltsnet_c11 PRIVATE
-  SaltsNet::ICE SaltsNet::LB SaltsNet::TCPProxy)
+  SaltsNet::ICE SaltsNet::LB SaltsNet::TCPProxy SaltsNet::Email SaltsNet::LDAP SaltsNet::SNMP)
 add_test(NAME installed_saltsnet_c11 COMMAND installed_saltsnet_c11)
 
 add_executable(installed_saltsnet_cpp17 cpp_client.cpp)
 target_link_libraries(installed_saltsnet_cpp17 PRIVATE
-  SaltsNet::ICE SaltsNet::LB SaltsNet::TCPProxy)
+  SaltsNet::ICE SaltsNet::LB SaltsNet::TCPProxy SaltsNet::Email SaltsNet::LDAP SaltsNet::SNMP)
 add_test(NAME installed_saltsnet_cpp17 COMMAND installed_saltsnet_cpp17)

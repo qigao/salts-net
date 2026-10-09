@@ -13,6 +13,7 @@
 #include <salts/error_codes.h>
 
 #include <string.h>
+#include "protocol_clients.h"
 
 static int installed_lb_sg(void) {
   salts_lb_config_t config = salts_lb_config_default();
@@ -64,6 +65,7 @@ int main(void) {
   WSADATA winsock;
   if (WSAStartup(MAKEWORD(2, 2), &winsock) != 0) return 1;
 #endif
+  if (installed_protocol_clients() != 0) return 13;
 
   if (lb_config.worker_policy != CNET_DESTINATION_ROUND_ROBIN)
     return 2;

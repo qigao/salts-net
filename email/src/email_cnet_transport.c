@@ -42,7 +42,8 @@ static void email_cnet_set_error(email_cnet_transport_t *transport, int status, 
 static void email_cnet_on_state(void *user, cnet_connection connection, cnet_connection_state state,
                                 const cnet_error *error) {
   email_cnet_transport_t *transport = (email_cnet_transport_t *)user;
-  (void)connection;
+  if (connection.slot != transport->connection.slot ||
+      connection.generation != transport->connection.generation) return;
 
   if (state == CNET_CONNECTION_TLS_HANDSHAKING) {
     transport->connected = 0;
@@ -60,7 +61,6 @@ static void email_cnet_on_state(void *user, cnet_connection connection, cnet_con
     transport->terminal = 1;
     transport->terminal_failed = state == CNET_CONNECTION_FAILED;
     transport->tls_handshaking = 0;
-    atomic_store_explicit(&transport->active, 0, memory_order_release);
     if (transport->status == SALTS_OK) {
       email_cnet_set_error(transport, error != NULL ? error->status : SALTS_ENOTCONN,
                            error != NULL && error->stage != NULL ? error->stage : "connection");
@@ -71,7 +71,8 @@ static void email_cnet_on_state(void *user, cnet_connection connection, cnet_con
 static void email_cnet_on_receive(void *user, cnet_connection connection,
                                   const cnet_receive_view *view) {
   email_cnet_transport_t *transport = (email_cnet_transport_t *)user;
-  (void)connection;
+  if (connection.slot != transport->connection.slot ||
+      connection.generation != transport->connection.generation) return;
   transport->receive_pending = 0;
   transport->receive_offset = 0u;
   transport->receive_size = 0u;
@@ -94,9 +95,37 @@ static void email_cnet_on_receive(void *user, cnet_connection connection,
 
 static void email_cnet_on_send(void *user, cnet_connection connection, size_t size) {
   email_cnet_transport_t *transport = (email_cnet_transport_t *)user;
-  (void)connection;
+  if (connection.slot != transport->connection.slot ||
+      connection.generation != transport->connection.generation) return;
   (void)size;
   transport->send_pending = 0;
+}
+
+static void email_cnet_recycle(void *user) {
+  email_cnet_transport_t *transport = (email_cnet_transport_t *)user;
+  transport->managed = (cnet_managed_connection){0};
+  atomic_store_explicit(&transport->active, 0, memory_order_release);
+}
+
+/* Recycle only outside callbacks. An idle transport has no thread-affine
+ * manager, allowing create and a later, non-overlapping progress owner. */
+static int email_cnet_collect(email_cnet_transport_t *transport) {
+  cnet_manager_snapshot snapshot;
+  size_t work = 0u;
+  int status;
+  if (!transport->manager.impl) return SALTS_OK;
+  status = cnet_manager_advance(&transport->manager, 1u, &work);
+  if (status != SALTS_OK) return status;
+  status = cnet_manager_get_snapshot(&transport->manager, &snapshot);
+  if (status != SALTS_OK) return status;
+  return snapshot.drained ? cnet_manager_destroy(&transport->manager) : SALTS_OK;
+}
+
+static int email_cnet_progress(email_cnet_transport_t *transport, uint32_t wait_ms) {
+  size_t events = 0u;
+  int status = cnet_client_poll(&transport->client, wait_ms, &events);
+  int cleanup = email_cnet_collect(transport);
+  return status != SALTS_OK ? status : cleanup;
 }
 
 static uint32_t email_cnet_remaining_ms(uint64_t deadline) {
@@ -127,7 +156,6 @@ static int email_cnet_cancel_if_interrupted(email_cnet_transport_t *transport) {
 }
 
 static int email_cnet_poll(email_cnet_transport_t *transport, uint64_t deadline) {
-  size_t events = 0u;
   uint32_t wait_ms;
   int status = email_cnet_cancel_if_interrupted(transport);
   if (status != SALTS_OK) return status;
@@ -143,7 +171,7 @@ static int email_cnet_poll(email_cnet_transport_t *transport, uint64_t deadline)
     return SALTS_ETIMEDOUT;
   }
 
-  status = cnet_client_poll(&transport->client, wait_ms, &events);
+  status = email_cnet_progress(transport, wait_ms);
   if (status != SALTS_OK) {
     email_cnet_set_error(transport, status, "poll");
     return status;
@@ -217,7 +245,15 @@ int email_cnet_transport_destroy(email_cnet_transport_t *transport) {
   if (!transport->initialized) return SALTS_OK;
 
   atomic_store_explicit(&transport->interrupt_status, SALTS_OK, memory_order_release);
-  (void)cnet_client_stop(&transport->client, EMAIL_CNET_STOP_TIMEOUT_MS);
+  if (transport->manager.impl) {
+    destroy_status = cnet_manager_request_close(&transport->manager);
+    if (destroy_status != SALTS_OK) return destroy_status;
+  }
+  destroy_status = cnet_client_stop(&transport->client, EMAIL_CNET_STOP_TIMEOUT_MS);
+  if (destroy_status != SALTS_OK) return destroy_status;
+  destroy_status = email_cnet_collect(transport);
+  if (destroy_status != SALTS_OK) return destroy_status;
+  if (transport->manager.impl) return SALTS_EBUSY;
   destroy_status = cnet_client_destroy(&transport->client);
   if (destroy_status == SALTS_OK) transport->initialized = 0;
   if (destroy_status != SALTS_OK) return destroy_status;
@@ -231,6 +267,9 @@ int email_cnet_transport_connect(email_cnet_transport_t *transport, const char *
   int status;
   if (transport == NULL || !transport->initialized) return SALTS_EINVAL;
   if (atomic_load_explicit(&transport->active, memory_order_acquire) != 0) return SALTS_EALREADY;
+  status = email_cnet_collect(transport);
+  if (status != SALTS_OK) return status;
+  if (transport->manager.impl) return SALTS_EBUSY;
 
   status = email_cnet_make_uri(uri, sizeof(uri), host, port, use_tls);
   if (status != SALTS_OK) {
@@ -260,8 +299,21 @@ int email_cnet_transport_connect(email_cnet_transport_t *transport, const char *
                                                 .on_send = email_cnet_on_send},
                                    .tls = NULL,
                                    .tls_client = NULL};
-  status = cnet_connect(&transport->client, &options, &transport->connection);
+  {
+    cnet_manager_config config = {sizeof(config), CNET_MANAGER_VERSION,
+                                  &transport->client, 1u, 1u};
+    cnet_manager_attachment attachment = {.observer = options.observer,
+                                           .on_recycle = email_cnet_recycle};
+    status = cnet_manager_init(&transport->manager, &config);
+    if (status == SALTS_OK)
+      status = cnet_manager_reserve(&transport->manager, &attachment, &transport->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_connect(&transport->manager, transport->managed,
+                                     &options, &transport->connection);
+  }
   if (status != SALTS_OK) {
+    int cleanup = email_cnet_collect(transport);
+    if (cleanup != SALTS_OK) status = cleanup;
     email_cnet_set_error(transport, status, "connect admission");
     return status;
   }
@@ -379,7 +431,8 @@ int email_cnet_transport_close(email_cnet_transport_t *transport) {
   uint64_t deadline;
   int status;
   if (transport == NULL || !transport->initialized) return SALTS_EINVAL;
-  if (atomic_load_explicit(&transport->active, memory_order_acquire) == 0) return SALTS_OK;
+  if (atomic_load_explicit(&transport->active, memory_order_acquire) == 0)
+    return email_cnet_collect(transport);
 
   atomic_store_explicit(&transport->interrupt_status, SALTS_OK, memory_order_release);
   if (!transport->terminal) {
@@ -391,14 +444,13 @@ int email_cnet_transport_close(email_cnet_transport_t *transport) {
   }
 
   deadline = cmeta_monotonic_ms() + transport->timeout_ms;
-  while (!transport->terminal) {
-    size_t events = 0u;
+  while (atomic_load_explicit(&transport->active, memory_order_acquire) != 0) {
     const uint32_t wait_ms = email_cnet_remaining_ms(deadline);
     if (wait_ms == 0u) {
       email_cnet_set_error(transport, SALTS_ETIMEDOUT, "close deadline");
       return SALTS_ETIMEDOUT;
     }
-    status = cnet_client_poll(&transport->client, wait_ms, &events);
+    status = email_cnet_progress(transport, wait_ms);
     if (status != SALTS_OK) {
       email_cnet_set_error(transport, status, "close poll");
       return status;

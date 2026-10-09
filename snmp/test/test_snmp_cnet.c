@@ -31,7 +31,9 @@ typedef enum snmp_test_agent_behavior_e {
   SNMP_TEST_AGENT_DROP_RESPONSE,
   SNMP_TEST_AGENT_MALFORMED_RESPONSE,
   SNMP_TEST_AGENT_END_OF_MIB,
-  SNMP_TEST_AGENT_WALK_SEQUENCE
+  SNMP_TEST_AGENT_WALK_SEQUENCE,
+  SNMP_TEST_AGENT_RETRY_THEN_RESPOND,
+  SNMP_TEST_AGENT_EXHAUST_RETRIES
 } snmp_test_agent_behavior_t;
 
 typedef struct snmp_test_agent_s {
@@ -39,6 +41,7 @@ typedef struct snmp_test_agent_s {
   int status;
   snmp_test_agent_behavior_t behavior;
   snmp_pdu_type_t expected_request_type;
+  size_t request_count;
 } snmp_test_agent_t;
 
 typedef struct snmp_test_exchange_s {
@@ -47,6 +50,7 @@ typedef struct snmp_test_exchange_s {
   int request_id;
   size_t varbind_count;
   char value[3];
+  size_t request_count;
 } snmp_test_exchange_t;
 
 typedef struct snmp_test_v3_agent_s {
@@ -110,6 +114,7 @@ static void snmp_test_agent_run(void *user) {
     agent->status = -1;
     return;
   }
+  ++agent->request_count;
   {
     snmp_message_t request = {0};
     if (snmp_parse(wire_request, (size_t)received, &request, NULL) <= 0 ||
@@ -119,6 +124,36 @@ static void snmp_test_agent_run(void *user) {
       return;
     }
     snmp_message_free(&request);
+  }
+  if (agent->behavior == SNMP_TEST_AGENT_RETRY_THEN_RESPOND ||
+      agent->behavior == SNMP_TEST_AGENT_EXHAUST_RETRIES) {
+    const size_t retries = agent->behavior == SNMP_TEST_AGENT_EXHAUST_RETRIES ? 2u : 1u;
+    for (size_t i = 0u; i < retries; ++i) {
+      uint8_t retransmitted[sizeof(wire_request)];
+      struct sockaddr_storage retry_peer;
+#if defined(_WIN32)
+      int retry_peer_size = (int)sizeof(retry_peer);
+#else
+      socklen_t retry_peer_size = (socklen_t)sizeof(retry_peer);
+#endif
+      int count = recvfrom(agent->socket, (char *)retransmitted, (int)sizeof(retransmitted), 0,
+                           (struct sockaddr *)&retry_peer, &retry_peer_size);
+      if (count != received || memcmp(retransmitted, wire_request, (size_t)received) != 0 ||
+          retry_peer_size != peer_size ||
+          retry_peer.ss_family != AF_INET ||
+          ((const struct sockaddr_in *)&retry_peer)->sin_port !=
+              ((const struct sockaddr_in *)&peer)->sin_port ||
+          ((const struct sockaddr_in *)&retry_peer)->sin_addr.s_addr !=
+              ((const struct sockaddr_in *)&peer)->sin_addr.s_addr) {
+        agent->status = -1;
+        return;
+      }
+      ++agent->request_count;
+    }
+    if (agent->behavior == SNMP_TEST_AGENT_EXHAUST_RETRIES) {
+      agent->status = 0;
+      return;
+    }
   }
   if (agent->behavior == SNMP_TEST_AGENT_DROP_RESPONSE) {
     agent->status = 0;
@@ -356,10 +391,13 @@ static snmp_test_exchange_t snmp_test_exchange(snmp_test_agent_behavior_t behavi
                                        .version = SNMP_VERSION_2C,
                                        .timeout_ms =
                                            behavior == SNMP_TEST_AGENT_DROP_RESPONSE ||
-                                                   behavior == SNMP_TEST_AGENT_MALFORMED_RESPONSE
+                                                   behavior == SNMP_TEST_AGENT_MALFORMED_RESPONSE ||
+                                                   behavior == SNMP_TEST_AGENT_EXHAUST_RETRIES ||
+                                                   behavior == SNMP_TEST_AGENT_RETRY_THEN_RESPOND
                                                ? 25u
                                                : 1000u,
-                                       .retries = 0u,
+                                       .retries = behavior == SNMP_TEST_AGENT_EXHAUST_RETRIES ? 2u :
+                                                  behavior == SNMP_TEST_AGENT_RETRY_THEN_RESPOND ? 1u : 0u,
                                        .recv_buffer_size = 1024u};
   client = snmp_client_create(&config);
   if (client != NULL && snmp_oid_from_string("1.3.6.1.2.1.1.1.0", &oid) == 0) {
@@ -387,6 +425,7 @@ static snmp_test_exchange_t snmp_test_exchange(snmp_test_agent_behavior_t behavi
     exchange.status = SNMP_CLIENT_ERROR_NETWORK;
   }
   exchange.agent_status = agent.status;
+  exchange.request_count = agent.request_count;
   cmeta_thread_destroy(&thread);
   snmp_test_agent_close(&agent);
   return exchange;
@@ -552,6 +591,24 @@ static int snmp_test_walk_to_end_of_mib(void) {
 }
 
 spec("SNMP CNet transport") {
+  it("retransmits the same owned UDP request only within the configured retry budget") {
+    const snmp_test_exchange_t exchange =
+        snmp_test_exchange(SNMP_TEST_AGENT_RETRY_THEN_RESPOND, SNMP_PDU_GET_REQUEST);
+    check_equal(exchange.status, SNMP_CLIENT_OK);
+    check_equal(exchange.agent_status, 0);
+    check_equal(exchange.request_count, 2u);
+    check_equal(exchange.request_id, 1);
+    check_equal(strcmp(exchange.value, "ok"), 0);
+  }
+
+  it("ends UDP retransmission at the configured budget without a transport reconnect") {
+    const snmp_test_exchange_t exchange =
+        snmp_test_exchange(SNMP_TEST_AGENT_EXHAUST_RETRIES, SNMP_PDU_GET_REQUEST);
+    check_equal(exchange.status, SNMP_CLIENT_ERROR_TIMEOUT);
+    check_equal(exchange.agent_status, 0);
+    check_equal(exchange.request_count, 3u);
+  }
+
   it("performs a loopback request without a coroutine context") {
     const snmp_test_exchange_t exchange =
         snmp_test_exchange(SNMP_TEST_AGENT_RESPOND, SNMP_PDU_GET_REQUEST);

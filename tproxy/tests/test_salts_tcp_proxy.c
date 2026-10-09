@@ -531,9 +531,14 @@ static void proxy_test_sg_mixed_failure(proxy_test_sg_fixture *f) {
   f->held[0] = proxy_test_connect(port);
   check(f->held[0] != PROXY_TEST_INVALID_SOCKET);
   check_equal(proxy_test_sg_wait_placements(f, 1u, &stats), SALTS_OK);
-  /* Bind without listening so another process cannot claim the refusal port. */
+  /* Release the temporary binding before connecting: Darwin silently drops
+   * SYNs for a bound TCPS_CLOSED socket instead of refusing the connection.
+   * https://github.com/apple-oss-distributions/xnu/blob/main/bsd/netinet/tcp_input.c
+   * If another process claims the port, the required SOCKS refusal must fail. */
   f->held[1] = proxy_test_bound_socket(&refused_port, false);
   check(f->held[1] != PROXY_TEST_INVALID_SOCKET);
+  proxy_test_close(f->held[1]);
+  f->held[1] = PROXY_TEST_INVALID_SOCKET;
   f->clients[0].kind = PROXY_TEST_SOCKS_REJECT;
   f->clients[0].proxy_port = port;
   f->clients[0].backend_port = refused_port;
@@ -552,11 +557,15 @@ static void proxy_test_sg_mixed_failure(proxy_test_sg_fixture *f) {
     size_t work;
     check_equal(salts_tcp_proxy_sg_poll(f->host, 1u, &work), SALTS_OK);
     check_equal(salts_tcp_proxy_sg_get_stats(f->host, &stats), SALTS_OK);
-    check(cmeta_monotonic_ms() - start < PROXY_TEST_TIMEOUT_MS);
+    if (cmeta_monotonic_ms() - start >= PROXY_TEST_TIMEOUT_MS) break;
   } while (!atomic_load_explicit(&f->clients[0].done, memory_order_acquire) ||
            !atomic_load_explicit(&f->clients[1].done, memory_order_acquire) ||
            !stats.owners[1].drained ||
            stats.owners[0].reserved + stats.owners[0].queued + stats.owners[0].taken != 1u);
+  check_true(atomic_load_explicit(&f->clients[0].done, memory_order_acquire));
+  check_true(atomic_load_explicit(&f->clients[1].done, memory_order_acquire));
+  check_true(stats.owners[1].drained);
+  check_equal(stats.owners[0].reserved + stats.owners[0].queued + stats.owners[0].taken, 1u);
   check_equal(f->clients[0].status, 0);
   check_equal(f->clients[1].status, 0);
   check_equal(stats.placement_calls, 3u);

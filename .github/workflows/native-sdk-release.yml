@@ -169,11 +169,15 @@ jobs:
         run: |
           set -euo pipefail
           dotnet restore packaging/nuget/SaltsNet.Native.csproj \
-            --configfile "$SALTSNET_PACK_NUGET_CONFIG" --no-cache --force-evaluate
+            --configfile "$SALTSNET_PACK_NUGET_CONFIG" --no-cache --force-evaluate \
+            -p:SaltsNativeQualifiedVersion="$SALTS_PACKAGE_VERSION" \
+            -p:SaltsUtilsNativeQualifiedVersion="$SALTS_UTILS_PACKAGE_VERSION"
           dotnet pack packaging/nuget/SaltsNet.Native.csproj --configuration Release --output dist --no-restore \
             -p:PackageVersion=${{ needs.metadata.outputs.version }} \
             -p:PackageRoot="$GITHUB_WORKSPACE/package" \
-            -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }}
+            -p:RepositoryCommit=${{ needs.metadata.outputs.source_commit }} \
+            -p:SaltsNativeQualifiedVersion="$SALTS_PACKAGE_VERSION" \
+            -p:SaltsUtilsNativeQualifiedVersion="$SALTS_UTILS_PACKAGE_VERSION"
           test -f "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg"
           unzip -p "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg" "SaltsNet.Native.nuspec" > "$RUNNER_TEMP/saltsnet.nuspec"
           if grep -E 'id="(Salts.Native|SaltsUtils.Native)"' "$RUNNER_TEMP/saltsnet.nuspec"; then

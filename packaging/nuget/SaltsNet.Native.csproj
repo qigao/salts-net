@@ -17,6 +17,12 @@
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="2.3.0-*" />
     <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+    <!-- The CI release qualification may select the newest published RC tag
+         (not unqualified Linux-only rc.sha snapshots in the same feed). -->
+    <PackageReference Update="Salts.Native" Version="$(SaltsNativeQualifiedVersion)"
+                      Condition="'$(SaltsNativeQualifiedVersion)' != ''" />
+    <PackageReference Update="SaltsUtils.Native" Version="$(SaltsUtilsNativeQualifiedVersion)"
+                      Condition="'$(SaltsUtilsNativeQualifiedVersion)' != ''" />
     <None Include="../../README.md" Link="README.md" Pack="true" PackagePath="\" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
   </ItemGroup>

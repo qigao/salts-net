@@ -29,12 +29,58 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
   <ItemGroup>
     <PackageReference Include="Salts.Native" Version="2.3.0-*" />
     <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+    <!-- The CI release qualification may select the newest published RC tag
+         (not unqualified Linux-only rc.sha snapshots in the same feed). -->
+    <PackageReference Update="Salts.Native" Version="$(SaltsNativeQualifiedVersion)"
+                      Condition="'$(SaltsNativeQualifiedVersion)' != ''" />
+    <PackageReference Update="SaltsUtils.Native" Version="$(SaltsUtilsNativeQualifiedVersion)"
+                      Condition="'$(SaltsUtilsNativeQualifiedVersion)' != ''" />
     <PackageReference Include="Qigao.Re2c.Binary" Version="*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project -Encoding utf8NoBOM
 
-dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
+# Choose the newest *officially released* prerelease, not arbitrary internal
+# rc.sha qualification snapshots which may contain Linux-only SDK payloads.
+# Both PackageReference declarations remain floating 2.3.0-*/4.3.0-*;
+# these MSBuild overrides are resolved afresh from the GitHub Release channel.
+function Get-OfficialNativeRc([string]$repository, [string]$tagPattern,
+                              [string]$packageName) {
+  $url = "https://api.github.com/repos/qigao/$repository/releases?per_page=100"
+  $headers = @{
+    Accept = 'application/vnd.github+json'
+    Authorization = "Bearer $env:GITHUB_TOKEN"
+    'User-Agent' = 'saltsnet-native-rc-qualification'
+  }
+  $releases = @(Invoke-RestMethod -Method Get -Uri $url -Headers $headers)
+  $candidates = @(
+    foreach ($release in $releases) {
+      if ($release.draft -or -not $release.prerelease) { continue }
+      if ($release.tag_name -notmatch $tagPattern) { continue }
+      $ordinal = [int]$Matches[1]
+      [pscustomobject]@{ Ordinal = $ordinal; Version = $release.tag_name.Substring(1); Release = $release }
+    }
+  )
+  if ($candidates.Count -eq 0) {
+    throw "No published prerelease tag matching $tagPattern in qigao/$repository"
+  }
+  $selected = $candidates | Sort-Object Ordinal -Descending | Select-Object -First 1
+  $asset = "$packageName.$($selected.Version).nupkg"
+  if (@($selected.Release.assets | Where-Object { $_.name -eq $asset }).Count -ne 1) {
+    throw "Latest published RC $($selected.Release.tag_name) is missing package asset $asset"
+  }
+  return $selected.Version
+}
+
+$saltsOfficialVersion = Get-OfficialNativeRc 'salts' '^v2\.3\.0-rc\.([0-9]+)$' 'Salts.Native'
+$saltsUtilsOfficialVersion = Get-OfficialNativeRc 'salts-utils' '^v4\.3\.0-rc\.([0-9]+)$' 'SaltsUtils.Native'
+$restoreProperties = @(
+  "-p:SaltsNativeQualifiedVersion=$saltsOfficialVersion",
+  "-p:SaltsUtilsNativeQualifiedVersion=$saltsUtilsOfficialVersion"
+)
+Write-Host "Qualifying published RCs: Salts.Native $saltsOfficialVersion + SaltsUtils.Native $saltsUtilsOfficialVersion"
+
+dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate @restoreProperties
 if ($LASTEXITCODE -ne 0) { throw 'Failed to restore Salts 2.3 / SaltsUtils 4.3 prereleases and re2c' }
 
 # NuGet's resolved graph is authoritative even when the payload cache holds older releases.
@@ -54,6 +100,9 @@ if ($saltsVersion -notmatch '^2\.3\.0-') {
 }
 if ($saltsUtilsVersion -notmatch '^4\.3\.0-') {
   throw "SaltsUtils.Native must resolve a 4.3.0 prerelease, got: $saltsUtilsVersion"
+}
+if ($saltsVersion -ne $saltsOfficialVersion -or $saltsUtilsVersion -ne $saltsUtilsOfficialVersion) {
+  throw "NuGet resolved a different prerelease than the latest published RCs: $saltsVersion / $saltsUtilsVersion"
 }
 $saltsRoot = Join-Path $saltsPackage "sdk/$SaltsRid"
 $saltsHostRoot = Join-Path $saltsPackage "sdk/$HostRid"

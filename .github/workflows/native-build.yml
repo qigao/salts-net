@@ -105,8 +105,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          brew install ninja nasm gcc@15 ccache
-          echo "$(brew --prefix gcc@15)/bin" >> "$GITHUB_PATH"
+          brew install ninja nasm ccache
       - name: Prepare Windows tools
         if: runner.os == 'Windows'
         shell: pwsh

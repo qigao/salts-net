@@ -332,6 +332,10 @@ and [SaltsUtils 4.3.0-rc.2](https://github.com/qigao/salts-utils/releases/tag/v4
 Upgrade or roll back both SDKs together: Unicode is now exported only by Salts,
 and SaltsUtils consumes that target. The floating restore policy above remains
 unchanged; historical benchmark results retain their actual SDK versions.
+macOS builds and installed SDK consumers use AppleClang, matching the rc.2
+SDK's native thread-local storage ABI; GCC's emulated TLS is incompatible with
+the published TinyTest runtime. Reconfigure an existing macOS CI build tree
+with `cmake --fresh --preset ci-macos-release-user` when changing compilers.
 Local Windows MSVC Release qualification of this pair passed all 36 project
 CTests and both installed SDK C11/C++17 consumer tests. This verifies existing
 SaltsNet paths against rc.2; it does not qualify new UDP/WS protocol adapters.

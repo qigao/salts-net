@@ -4,5 +4,6 @@ set(CMAKE_COLOR_DIAGNOSTICS ON)
 # Sanitizer switches are defined by cmake/Sanitizers.cmake.
 
 option(BUILD_EXAMPLES "Build example programs" ON)
+option(BUILD_BENCHMARKS "Build opt-in performance benchmarks registered with CTest" OFF)
 set(LEMON_EXECUTABLE "" CACHE FILEPATH
     "Host Lemon executable; required while cross-compiling")

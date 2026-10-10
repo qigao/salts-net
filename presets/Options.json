@@ -56,6 +56,15 @@
             "inherits": [
                 "default-options"
             ]
+        },
+        {
+            "name": "benchmark-options",
+            "hidden": true,
+            "cacheVariables": {
+                "BUILD_TESTING": false,
+                "BUILD_EXAMPLES": false,
+                "BUILD_BENCHMARKS": true
+            }
         }
     ]
 }

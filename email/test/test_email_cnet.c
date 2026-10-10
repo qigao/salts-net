@@ -16,6 +16,7 @@ typedef int email_test_socket_t;
 #include "email/email_imap.h"
 #include "email/email_pop3.h"
 #include "email/email_smtp.h"
+#include "../src/email_cnet_transport.h"
 #include "tinytest.h"
 
 #include <salts/error_codes.h>
@@ -275,6 +276,68 @@ static void email_test_server_close(email_test_server_t *server) {
 }
 
 spec("email CNet transport") {
+  group("CNet 2.3 managed connection episodes") {
+    static email_cnet_transport_t transport;
+    static email_test_server_t server;
+    static cmeta_thread_t thread;
+    static uint16_t port;
+    before_each() {
+      memset(&transport, 0, sizeof(transport));
+      thread = NULL;
+      check_equal(email_test_server_open(&server, &port), 0);
+      server.behavior = EMAIL_TEST_SMTP_STALL;
+      check_equal(email_cnet_transport_init(&transport, EMAIL_TEST_CLIENT_TIMEOUT_MS), SALTS_OK);
+    }
+    after_each() {
+      check_warn(email_cnet_transport_destroy(&transport) == SALTS_OK);
+      atomic_store_explicit(&server.release_peer, 1, memory_order_release);
+      if (thread) {
+        check_warn(cmeta_thread_join(&thread) == SALTS_OK);
+        cmeta_thread_destroy(&thread);
+      }
+      email_test_server_close(&server);
+    }
+
+    it("retires invalid connect admission before a later real connection") {
+      cnet_manager_snapshot snapshot;
+      /* Brackets require a numeric IPv6 address, not a DNS name. */
+      check_equal(email_cnet_transport_connect(&transport, "[localhost]", port, 0), SALTS_EINVAL);
+      check_null(transport.manager.impl);
+      check_equal(atomic_load(&transport.active), 0);
+      check_equal(cmeta_thread_create(&thread, email_test_server_run, &server), SALTS_OK);
+      check_equal(email_cnet_transport_connect(&transport, "127.0.0.1", port, 0), SALTS_OK);
+      check_equal(cnet_manager_get_snapshot(&transport.manager, &snapshot), SALTS_OK);
+      check_equal(snapshot.record_capacity, 1u);
+      check_equal(snapshot.bound, 1u);
+      check_equal(snapshot.reserved + snapshot.retired, 0u);
+      check_equal(email_cnet_transport_close(&transport), SALTS_OK);
+      check_null(transport.manager.impl);
+      check_equal(transport.managed.manager, (uintptr_t)0u);
+      check_equal(atomic_load(&transport.active), 0);
+    }
+
+    it("reuses the one connection slot only after terminal and manager recycle") {
+      cnet_connection previous = {0};
+      for (size_t episode = 0u; episode < 3u; ++episode) {
+        atomic_store(&server.release_peer, 0);
+        check_equal(cmeta_thread_create(&thread, email_test_server_run, &server), SALTS_OK);
+        check_equal(email_cnet_transport_connect(&transport, "127.0.0.1", port, 0), SALTS_OK);
+        check(transport.connection.slot != previous.slot ||
+              transport.connection.generation != previous.generation);
+        previous = transport.connection;
+        check_equal(email_cnet_transport_connect(&transport, "127.0.0.1", port, 0), SALTS_EALREADY);
+        check_equal(email_cnet_transport_close(&transport), SALTS_OK);
+        check_null(transport.manager.impl);
+        check_equal(atomic_load(&transport.active), 0);
+        atomic_store_explicit(&server.release_peer, 1, memory_order_release);
+        check_equal(cmeta_thread_join(&thread), SALTS_OK);
+        cmeta_thread_destroy(&thread);
+        thread = NULL;
+        check_equal(server.status, 0);
+      }
+    }
+  }
+
   it("runs an SMTP transaction without a coroutine context") {
     static const char message[] = "Subject: loopback\r\n\r\n.first\r\n..second\r\n";
     static const char *recipients[] = {"receiver@example.test"};

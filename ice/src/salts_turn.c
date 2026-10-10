@@ -901,15 +901,28 @@ salts_turn_client_t *turn_client_create(const turn_client_config_t *config) {
     return tc;
 }
 
-void turn_client_destroy(salts_turn_client_t *tc) {
-    if (!tc) return;
+int turn_client_destroy_checked(salts_turn_client_t **client, uint32_t timeout_ms) {
+    salts_turn_client_t *tc;
+    int status;
+    if (!client) return SALTS_EINVAL;
+    tc = *client;
+    if (!tc) return SALTS_OK;
+    if (tc->transport_initialized) {
+        status = ice_cnet_datagram_destroy_budget(&tc->transport, timeout_ms);
+        if (status != SALTS_OK) return status;
+    }
     if (tc->pending_buf) {
         free(tc->pending_buf);
         tc->pending_buf = NULL;
         tc->pending_len = 0;
     }
-    if (tc->transport_initialized && ice_cnet_datagram_destroy(&tc->transport) != SALTS_OK) return;
     free(tc);
+    *client = NULL;
+    return SALTS_OK;
+}
+
+void turn_client_destroy(salts_turn_client_t *tc) {
+    (void)turn_client_destroy_checked(&tc, ICE_CNET_STOP_TIMEOUT_MS);
 }
 
 int turn_client_allocate(salts_turn_client_t *tc, turn_allocation_t *allocation_out) {

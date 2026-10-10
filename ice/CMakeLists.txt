@@ -7,7 +7,7 @@
 # SaltsNet::ICE - ICE/STUN/TURN library
 # ============================================================================
 
-add_library(SaltsICE SHARED src/ice_cnet_datagram.c src/salts_stun.c src/salts_ice.c
+add_library(SaltsICE SHARED src/ice_cnet_datagram.c src/salts_stun.c src/stun_request.c src/salts_ice.c
                             src/salts_turn.c)
 cmake_config_api(SaltsICE SALTSNET_ICE_C_API)
 cmake_config_target(
@@ -42,6 +42,46 @@ cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ice)
 # ============================================================================
 
 if(BUILD_TESTING)
+  add_executable(test_stun_request tests/test_stun_request.c)
+  target_link_libraries(test_stun_request PRIVATE SaltsNet::ICE Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_stun_request PRIVATE ws2_32)
+  endif()
+  add_test(NAME stun_request COMMAND test_stun_request)
+  set_target_properties(test_stun_request PROPERTIES FOLDER ice/tests)
+
+  add_executable(test_ice_stun_gather tests/test_ice_stun_gather.c)
+  target_link_libraries(test_ice_stun_gather PRIVATE SaltsNet::ICE Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_ice_stun_gather PRIVATE ws2_32)
+  endif()
+  add_test(NAME ice_stun_gather COMMAND test_ice_stun_gather)
+  set_target_properties(test_ice_stun_gather PROPERTIES FOLDER ice/tests)
+
+  add_executable(test_ice_cnet_sg tests/test_ice_cnet_sg.c
+    src/ice_cnet_datagram.c src/salts_stun.c)
+  target_include_directories(test_ice_cnet_sg PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(test_ice_cnet_sg PRIVATE
+    SaltsNet::ICE Salts::CNet Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_ice_cnet_sg PRIVATE ws2_32)
+  endif()
+  add_test(NAME ice_cnet_sg COMMAND test_ice_cnet_sg)
+  set_target_properties(test_ice_cnet_sg PROPERTIES FOLDER ice/tests)
+
+  # Real CNet 2.3 datagram/owner lifetime and generation-tag conformance.
+  add_executable(test_ice_cnet_23 tests/test_ice_cnet_23.c src/ice_cnet_datagram.c)
+  target_include_directories(test_ice_cnet_23 PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(test_ice_cnet_23 PRIVATE
+    Salts::CNet Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_ice_cnet_23 PRIVATE ws2_32)
+  endif()
+  add_test(NAME ice_cnet_23 COMMAND test_ice_cnet_23)
+  set_target_properties(test_ice_cnet_23 PROPERTIES FOLDER ice/tests)
+
   add_executable(test_stun_cnet tests/test_stun_cnet.c src/ice_cnet_datagram.c src/salts_stun.c)
   target_include_directories(test_stun_cnet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                                                     ${CMAKE_CURRENT_SOURCE_DIR}/src)

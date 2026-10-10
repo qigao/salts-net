@@ -14,6 +14,7 @@
 #endif
 #include "ice/salts_stun.h"
 #include "ice_cnet_datagram.h"
+#include "stun_binding_transaction.h"
 #include <platform.h>
 
 #include <salts/clock.h>
@@ -273,11 +274,102 @@ int stun_parse_binding_response(const uint8_t *data, size_t len,
 }
 
 /* ============================================================================
- * Caller-driven CNet STUN binding request
+ * Caller-driven CNet STUN binding transaction
  * ============================================================================ */
+
+static int stun_binding_finish(stun_binding_transaction *transaction, int result) {
+  transaction->result = result;
+  transaction->phase = STUN_BINDING_DONE;
+  return result;
+}
+
+static int stun_binding_attempt(stun_binding_transaction *transaction, uint64_t now_ms) {
+  uint8_t request[STUN_HEADER_SIZE];
+  int status;
+  if (UINT64_MAX - now_ms < transaction->timeout_ms)
+    return stun_binding_finish(transaction, SALTS_ERANGE);
+  if (stun_generate_transaction_id(&transaction->id) != 0)
+    return stun_binding_finish(transaction, -5);
+  stun_build_binding_request(request, &transaction->id);
+  status = ice_cnet_datagram_send_begin(transaction->transport, &transaction->peer,
+                                       request, sizeof(request), &transaction->send_tag);
+  if (status != SALTS_OK) return stun_binding_finish(transaction, status);
+  ++transaction->attempt;
+  transaction->deadline_ms = now_ms + transaction->timeout_ms;
+  transaction->phase = STUN_BINDING_SENDING;
+  transaction->result = SALTS_EBUSY;
+  return SALTS_OK;
+}
+
+int stun_binding_transaction_start(stun_binding_transaction *transaction,
+    ice_cnet_datagram_t *transport, const cnet_datagram_peer *peer,
+    uint32_t timeout_ms, unsigned int attempts, uint64_t now_ms) {
+  if (!transaction || !transport || !transport->initialized || !peer ||
+      timeout_ms == 0u || attempts == 0u) return SALTS_EINVAL;
+  if (transaction->phase != STUN_BINDING_IDLE) return SALTS_EALREADY;
+  if (transport->send_pending || transport->receive_armed || transport->receive_ready)
+    return SALTS_EBUSY;
+  transaction->transport = transport;
+  transaction->peer = *peer;
+  transaction->timeout_ms = timeout_ms;
+  transaction->attempts = attempts;
+  return stun_binding_attempt(transaction, now_ms);
+}
+
+int stun_binding_transaction_advance(stun_binding_transaction *transaction, uint64_t now_ms) {
+  cnet_datagram_peer peer;
+  stun_mapped_address_t mapped = {0};
+  uint8_t response[STUN_MAX_MESSAGE_SIZE];
+  size_t size = 0u;
+  int status;
+  if (!transaction || transaction->phase == STUN_BINDING_IDLE) return SALTS_EINVAL;
+  if (transaction->phase == STUN_BINDING_DONE) return transaction->result;
+  if (transaction->phase == STUN_BINDING_SENDING) {
+    status = ice_cnet_datagram_send_result(transaction->transport, transaction->send_tag);
+    if (status == SALTS_EBUSY) {
+      if (now_ms >= transaction->deadline_ms)
+        return stun_binding_finish(transaction, SALTS_ETIMEDOUT);
+      return SALTS_EBUSY;
+    }
+    if (status != SALTS_OK) return stun_binding_finish(transaction, status);
+    transaction->phase = STUN_BINDING_WAITING;
+  }
+  if (now_ms >= transaction->deadline_ms) {
+    if (transaction->attempt >= transaction->attempts)
+      return stun_binding_finish(transaction, SALTS_ETIMEDOUT);
+    status = stun_binding_attempt(transaction, now_ms);
+    return status == SALTS_OK ? SALTS_EBUSY : status;
+  }
+  status = ice_cnet_datagram_receive_begin(transaction->transport);
+  if (status != SALTS_OK) return stun_binding_finish(transaction, status);
+  status = ice_cnet_datagram_receive_take(transaction->transport, &peer,
+                                         response, sizeof(response), &size);
+  if (status == SALTS_EBUSY) return status;
+  if (status != SALTS_OK) return stun_binding_finish(transaction, status);
+  if (peer.family == transaction->peer.family && peer.port == transaction->peer.port &&
+      peer.scope_id == transaction->peer.scope_id &&
+      memcmp(peer.address, transaction->peer.address,
+             peer.family == CNET_DATAGRAM_ADDRESS_IPV4 ? 4u : 16u) == 0 &&
+      stun_is_stun_message(response, size) &&
+      stun_parse_binding_response(response, size, &transaction->id, &mapped) == 0) {
+    transaction->mapped = mapped;
+    return stun_binding_finish(transaction, SALTS_OK);
+  }
+  /* Invalid/unrelated traffic neither extends the deadline nor consumes another
+   * packet this turn. Rearm once so the next host observe can make progress. */
+  status = ice_cnet_datagram_receive_begin(transaction->transport);
+  return status == SALTS_OK ? SALTS_EBUSY : stun_binding_finish(transaction, status);
+}
+
+int stun_binding_transaction_cancel(stun_binding_transaction *transaction) {
+  if (!transaction || transaction->phase == STUN_BINDING_IDLE) return SALTS_EINVAL;
+  if (transaction->phase == STUN_BINDING_DONE) return transaction->result;
+  return stun_binding_finish(transaction, SALTS_ECANCELED);
+}
 
 int stun_binding_request(const stun_client_config_t *config, stun_mapped_address_t *mapped) {
   ice_cnet_datagram_t transport;
+  stun_binding_transaction transaction = {0};
   cnet_datagram_peer server_peer;
   const uint16_t port = config != NULL && config->server_port != 0u
                             ? config->server_port
@@ -297,44 +389,16 @@ int stun_binding_request(const stun_client_config_t *config, stun_mapped_address
   result = ice_cnet_datagram_resolve(config->server_host, port, &server_peer);
   if (result != SALTS_OK) goto cleanup;
 
-  result = -4;
-  for (int attempt = 0; attempt < retries; attempt++) {
-    stun_transaction_id_t transaction_id;
-    uint8_t request[STUN_HEADER_SIZE];
-    const uint64_t deadline = cmeta_monotonic_ms() + (uint32_t)timeout_ms;
-    size_t request_size;
-
-    if (stun_generate_transaction_id(&transaction_id) != 0) {
-      result = -5;
-      break;
-    }
-    request_size = stun_build_binding_request(request, &transaction_id);
-    result = ice_cnet_datagram_send(&transport, &server_peer, request, request_size,
-                                    (uint32_t)timeout_ms);
-    if (result != SALTS_OK) break;
-
-    while (cmeta_monotonic_ms() < deadline) {
-      cnet_datagram_peer response_peer;
-      uint8_t response[STUN_MAX_MESSAGE_SIZE];
-      size_t response_size = 0u;
-      const uint64_t now = cmeta_monotonic_ms();
-      const uint32_t remaining_ms = now < deadline ? (uint32_t)(deadline - now) : 0u;
-      if (remaining_ms == 0u) break;
-      result = ice_cnet_datagram_receive(&transport, &response_peer, response, sizeof(response),
-                                         &response_size, remaining_ms);
-      if (result == SALTS_ETIMEDOUT) break;
-      if (result != SALTS_OK) goto cleanup;
-      if (response_peer.family != server_peer.family || response_peer.port != server_peer.port ||
-          memcmp(response_peer.address, server_peer.address,
-                 server_peer.family == CNET_DATAGRAM_ADDRESS_IPV4 ? 4u : 16u) != 0 ||
-          !stun_is_stun_message(response, response_size)) {
-        continue;
-      }
-      result = stun_parse_binding_response(response, response_size, &transaction_id, mapped);
-      if (result == 0) goto cleanup;
-    }
-    result = SALTS_ETIMEDOUT;
+  result = stun_binding_transaction_start(&transaction, &transport, &server_peer,
+      (uint32_t)timeout_ms, (unsigned int)retries, cmeta_monotonic_ms());
+  if (result != SALTS_OK) goto cleanup;
+  while (transaction.phase != STUN_BINDING_DONE) {
+    result = stun_binding_transaction_advance(&transaction, cmeta_monotonic_ms());
+    if (transaction.phase == STUN_BINDING_DONE) break;
+    result = ice_cnet_datagram_poll_until(&transport, transaction.deadline_ms);
+    if (result != SALTS_OK && result != SALTS_ETIMEDOUT) goto cleanup;
   }
+  if (result == SALTS_OK) *mapped = transaction.mapped;
 
 cleanup:
   destroy_status = ice_cnet_datagram_destroy(&transport);

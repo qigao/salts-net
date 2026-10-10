@@ -27,14 +27,70 @@ New-Item -ItemType Directory -Path $restoreRoot -Force | Out-Null
     <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Salts.Native" Version="*" />
+    <PackageReference Include="Salts.Native" Version="2.3.0-*" />
+    <PackageReference Include="SaltsUtils.Native" Version="4.3.0-*" />
+    <!-- CI dynamically chooses the newest tagged stable or numeric RC,
+         excluding Linux-only rc.sha snapshots in the same public feed. -->
+    <PackageReference Update="Salts.Native" Version="$(SaltsNativeQualifiedVersion)"
+                      Condition="'$(SaltsNativeQualifiedVersion)' != ''" />
+    <PackageReference Update="SaltsUtils.Native" Version="$(SaltsUtilsNativeQualifiedVersion)"
+                      Condition="'$(SaltsUtilsNativeQualifiedVersion)' != ''" />
     <PackageReference Include="Qigao.Re2c.Binary" Version="*" />
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath $project -Encoding utf8NoBOM
 
-dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate
-if ($LASTEXITCODE -ne 0) { throw 'Failed to restore the latest Salts and re2c packages' }
+# Choose the newest officially tagged release in the requested native SDK
+# line: stable 2.3.0/4.3.0 if published, otherwise highest numeric rc.N.
+# Never choose arbitrary internal Linux-only rc.sha snapshots in NuGet.
+# The PackageReference declarations remain floating 2.3.0-*/4.3.0-*;
+# these MSBuild overrides are determined afresh on every qualification run.
+function Get-OfficialNativeVersion([string]$repository, [string]$line,
+                                   [string]$packageName) {
+  $url = "https://api.github.com/repos/qigao/$repository/releases?per_page=100"
+  $headers = @{
+    Accept = 'application/vnd.github+json'
+    Authorization = "Bearer $env:GITHUB_TOKEN"
+    'User-Agent' = 'saltsnet-native-sdk-qualification'
+  }
+  # Do not wrap Invoke-RestMethod in @(): on pwsh it may become a nested array.
+  $releasePayload = Invoke-RestMethod -Method Get -Uri $url -Headers $headers
+  $rcPattern = '^v' + [regex]::Escape($line) + '-rc\.([0-9]+)$'
+  $candidates = @(
+    foreach ($release in $releasePayload) {
+      if ($release.draft) { continue }
+      $tag = [string]$release.tag_name
+      if ($tag -eq "v$line" -and -not $release.prerelease) {
+        $priority = [int]::MaxValue
+      } elseif ($release.prerelease -and $tag -match $rcPattern) {
+        $priority = [int]$Matches[1]
+      } else {
+        continue
+      }
+      [pscustomobject]@{ Priority = $priority; Version = $tag.Substring(1); Release = $release }
+    }
+  )
+  if ($candidates.Count -eq 0) {
+    throw "No published stable or numeric RC native release for $line in qigao/$repository"
+  }
+  $selected = $candidates | Sort-Object Priority -Descending | Select-Object -First 1
+  $asset = "$packageName.$($selected.Version).nupkg"
+  if (@($selected.Release.assets | Where-Object { $_.name -eq $asset }).Count -ne 1) {
+    throw "Latest published release $($selected.Release.tag_name) lacks asset $asset"
+  }
+  return $selected.Version
+}
+
+$saltsOfficialVersion = Get-OfficialNativeVersion 'salts' '2.3.0' 'Salts.Native'
+$saltsUtilsOfficialVersion = Get-OfficialNativeVersion 'salts-utils' '4.3.0' 'SaltsUtils.Native'
+$restoreProperties = @(
+  "-p:SaltsNativeQualifiedVersion=$saltsOfficialVersion",
+  "-p:SaltsUtilsNativeQualifiedVersion=$saltsUtilsOfficialVersion"
+)
+Write-Host "Qualifying published native SDK releases: Salts.Native $saltsOfficialVersion + SaltsUtils.Native $saltsUtilsOfficialVersion"
+
+dotnet restore $project --packages $packages --configfile $config --no-cache --force-evaluate @restoreProperties
+if ($LASTEXITCODE -ne 0) { throw 'Failed to restore Salts 2.3 / SaltsUtils 4.3 prereleases and re2c' }
 
 # NuGet's resolved graph is authoritative even when the payload cache holds older releases.
 $assets = Get-Content -LiteralPath (Join-Path $restoreRoot 'obj/project.assets.json') -Raw | ConvertFrom-Json -AsHashtable
@@ -45,8 +101,22 @@ function Get-RestoredPackage([string]$name) {
 }
 
 $saltsPackage = Get-RestoredPackage 'Salts.Native'
+$saltsUtilsPackage = Get-RestoredPackage 'SaltsUtils.Native'
+$saltsVersion = Split-Path $saltsPackage -Leaf
+$saltsUtilsVersion = Split-Path $saltsUtilsPackage -Leaf
+if ($saltsVersion -notmatch '^2\.3\.0(-rc\.[0-9]+)?$') {
+  throw "Salts.Native must resolve a tagged 2.3.0 release (stable or numeric RC), got: $saltsVersion"
+}
+if ($saltsUtilsVersion -notmatch '^4\.3\.0(-rc\.[0-9]+)?$') {
+  throw "SaltsUtils.Native must resolve a tagged 4.3.0 release (stable or numeric RC), got: $saltsUtilsVersion"
+}
+if ($saltsVersion -ne $saltsOfficialVersion -or $saltsUtilsVersion -ne $saltsUtilsOfficialVersion) {
+  throw "NuGet resolved a different version than the selected tagged release: $saltsVersion / $saltsUtilsVersion"
+}
 $saltsRoot = Join-Path $saltsPackage "sdk/$SaltsRid"
 $saltsHostRoot = Join-Path $saltsPackage "sdk/$HostRid"
+$saltsUtilsRoot = Join-Path $saltsUtilsPackage "sdk/$SaltsRid"
+$saltsUtilsHostRoot = Join-Path $saltsUtilsPackage "sdk/$HostRid"
 $re2cPackage = Get-RestoredPackage 'Qigao.Re2c.Binary'
 $re2cRoot = Join-Path $re2cPackage "tools/$HostRid"
 $re2cName = if ($IsWindows) { 're2c.exe' } else { 're2c' }
@@ -54,6 +124,8 @@ $re2cExecutable = Join-Path $re2cRoot "bin/$re2cName"
 foreach ($path in @(
   (Join-Path $saltsRoot 'lib/cmake/Salts/SaltsConfig.cmake'),
   (Join-Path $saltsHostRoot 'lib/cmake/Salts/SaltsConfig.cmake'),
+  (Join-Path $saltsUtilsRoot 'lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake'),
+  (Join-Path $saltsUtilsHostRoot 'lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake'),
   $re2cExecutable
 )) {
   if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Missing restored SDK file: $path" }
@@ -66,7 +138,10 @@ if (-not $IsWindows) {
 $resolvedEnvironment = [ordered]@{
   SALTS_ROOT = $saltsRoot
   SALTS_HOST_ROOT = $saltsHostRoot
-  SALTS_VERSION = (Split-Path $saltsPackage -Leaf)
+  SALTS_VERSION = $saltsVersion
+  SALTS_UTILS_ROOT = $saltsUtilsRoot
+  SALTS_UTILS_HOST_ROOT = $saltsUtilsHostRoot
+  SALTS_UTILS_VERSION = $saltsUtilsVersion
   RE2C_ROOT = $re2cRoot
   RE2C_VERSION = (Split-Path $re2cPackage -Leaf)
 }
@@ -75,4 +150,4 @@ foreach ($entry in $resolvedEnvironment.GetEnumerator()) {
   if (-not $Local) { "$($entry.Key)=$($entry.Value)" >> $env:GITHUB_ENV }
 }
 if (-not $Local) { (Join-Path $re2cRoot 'bin') >> $env:GITHUB_PATH }
-Write-Host "Restored Salts.Native $env:SALTS_VERSION for $SaltsRid and Qigao.Re2c.Binary $env:RE2C_VERSION for $HostRid"
+Write-Host "Resolved Salts.Native $saltsVersion and SaltsUtils.Native $saltsUtilsVersion for $SaltsRid, plus Qigao.Re2c.Binary $env:RE2C_VERSION for $HostRid"

@@ -2,6 +2,7 @@
 #define SALTSNET_LB_H
 
 #include "salts_lb_api.h"
+#include <cnet/destination_policy.h>
 
 #include <stddef.h>
 #include <stdint.h>
@@ -53,6 +54,10 @@ typedef struct salts_lb_config {
   uint32_t read_timeout_ms;
   uint32_t write_timeout_ms;
   uint32_t shutdown_timeout_ms;
+  /** CNet 2.3 worker destination policy. Only IDLE, group-compatible workers
+   * are eligible. RR, weighted RR and least-inflight are supported.
+   * STRICT_KEY requires an explicit application key and is rejected. */
+  cnet_destination_policy_kind worker_policy;
 } salts_lb_config_t;
 
 SALTSNET_LB_C_API salts_lb_config_t salts_lb_config_default(void);
@@ -66,10 +71,16 @@ SALTSNET_LB_C_API int salts_lb_accept_workers(salts_lb_t *lb, const char *host, 
 SALTSNET_LB_C_API int salts_lb_frontend_port(const salts_lb_t *lb, uint16_t *out_port);
 SALTSNET_LB_C_API int salts_lb_worker_port(const salts_lb_t *lb, uint16_t *out_port);
 
-/** Advance listener admission, stream I/O, routing, and callbacks on one owner thread. */
+/**
+ * Advance listener admission, stream I/O, routing, and callbacks on one owner thread.
+ * Lifecycle calls (listen/accept_workers/poll/stop/destroy) from this LB's
+ * route/filter/frame callbacks return SALTS_EBUSY before changing state;
+ * defer them until poll returns. Port queries remain allowed.
+ * Calls from different threads must not overlap.
+ */
 SALTSNET_LB_C_API int salts_lb_poll(salts_lb_t *lb, uint32_t timeout_ms, size_t *out_events);
 
-/** Close listener admission and drain every CNet connection. Idempotent. */
+/** Close listener admission and drain every CNet connection. Idempotent outside callbacks. */
 SALTSNET_LB_C_API int salts_lb_stop(salts_lb_t *lb);
 
 /** Requires a completed stop. Returns an error instead of leaking partial ownership. */

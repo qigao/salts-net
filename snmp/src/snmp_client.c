@@ -121,10 +121,12 @@ static void snmp_client_set_transport_error(snmp_client_t *client, const char *o
 static void snmp_client_on_state(void *user, cnet_connection connection,
                                  cnet_connection_state state, const cnet_error *error) {
     snmp_client_t *client = (snmp_client_t *)user;
-    (void)connection;
+    if (connection.slot != client->connection.slot ||
+        connection.generation != client->connection.generation) return;
     if (state == CNET_CONNECTION_CONNECTED) {
         client->connected = 1;
     } else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
+        client->connected = 0;
         client->terminal = 1;
         client->transport_status = error != NULL ? error->status : SALTS_EIO;
     }
@@ -133,7 +135,8 @@ static void snmp_client_on_state(void *user, cnet_connection connection,
 static void snmp_client_on_receive(void *user, cnet_connection connection,
                                    const cnet_receive_view *view) {
     snmp_client_t *client = (snmp_client_t *)user;
-    (void)connection;
+    if (connection.slot != client->connection.slot ||
+        connection.generation != client->connection.generation) return;
     client->receive_armed = 0;
     if (view == NULL || view->kind != CNET_MESSAGE_DATAGRAM ||
         view->size > client->recv_buffer_size) {
@@ -148,7 +151,8 @@ static void snmp_client_on_receive(void *user, cnet_connection connection,
 
 static void snmp_client_on_send(void *user, cnet_connection connection, size_t size) {
     snmp_client_t *client = (snmp_client_t *)user;
-    (void)connection;
+    if (connection.slot != client->connection.slot ||
+        connection.generation != client->connection.generation) return;
     (void)size;
     client->send_pending = 0;
 }
@@ -187,8 +191,9 @@ static void snmp_client_release(snmp_client_t *client) {
     if (!client) return;
     snmp_client_release_response(client);
     if (client->net_initialized) {
-        (void)cnet_client_stop(&client->net, SNMP_CLIENT_DEFAULT_STOP_TIMEOUT_MS);
-        (void)cnet_client_destroy(&client->net);
+        /* CNet may still borrow callbacks/buffers after a failed stop. */
+        if (cnet_client_stop(&client->net, SNMP_CLIENT_DEFAULT_STOP_TIMEOUT_MS) != SALTS_OK) return;
+        if (cnet_client_destroy(&client->net) != SALTS_OK) return;
     }
     free(client->v3_user.user_name);
     free(client->security_name);
@@ -380,7 +385,7 @@ static int send_request_and_wait(
 
     snmp_client_release_response(client);
 
-    while (attempt <= client->retries) {
+    for (;;) {
         const uint32_t timeout_ms = snmp_client_effective_timeout(client);
         const uint64_t deadline = cmeta_monotonic_ms() + timeout_ms;
         int status;
@@ -485,7 +490,9 @@ static int send_request_and_wait(
             }
             client->receive_armed = 1;
         }
-        attempt++;
+        /* retries is uint32_t; never wrap the last attempt back to zero. */
+        if (attempt == client->retries) break;
+        ++attempt;
     }
 
     (void)snprintf(client->error_msg, sizeof(client->error_msg),

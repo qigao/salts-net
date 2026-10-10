@@ -1,0 +1,38 @@
+{
+  "version": 6,
+  "include": ["CMakePresets.json"],
+  "configurePresets": [
+    {
+      "name": "consumer-paths",
+      "hidden": true,
+      "inherits": "consumer-release",
+      "binaryDir": "$env{GITHUB_WORKSPACE}/build/ci-installed/$env{QIGAO_SDK_RID}",
+      "toolchainFile": "$env{VCPKG_CACHE_REPOSITORY_ROOT}/cmake/QigaoVcpkgToolchain.cmake",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "$env{QIGAO_TARGET_TRIPLET}",
+        "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
+        "VCPKG_INSTALLED_DIR": "$env{GITHUB_WORKSPACE}/build/ci-installed/$env{QIGAO_SDK_RID}/vcpkg_installed"
+      },
+      "environment": {
+        "SALTSNET_ROOT": "$penv{SALTSNET_ROOT}",
+        "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
+        "PATH": "$penv{PATH}"
+      }
+    },
+    {"name": "win-release-user", "inherits": ["consumer-paths", "Msvc"]},
+    {"name": "linux-release-user", "inherits": ["consumer-paths", "Gcc"]},
+    {"name": "macos-release-user", "inherits": ["consumer-paths", "AppleClang"]}
+  ],
+  "buildPresets": [
+    {"name": "win-release-user", "configurePreset": "win-release-user"},
+    {"name": "linux-release-user", "configurePreset": "linux-release-user"},
+    {"name": "macos-release-user", "configurePreset": "macos-release-user"}
+  ],
+  "testPresets": [
+    {"name": "win-release-user", "configurePreset": "win-release-user", "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error", "timeout": 90}},
+    {"name": "linux-release-user", "configurePreset": "linux-release-user", "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error", "timeout": 90}},
+    {"name": "macos-release-user", "configurePreset": "macos-release-user", "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error", "timeout": 90}}
+  ]
+}

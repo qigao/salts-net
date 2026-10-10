@@ -7,6 +7,7 @@
 #include "ldap_builder.h"
 #include "ldap_parser.h"
 #include <cnet/cnet.h>
+#include <cnet/manager.h>
 #include <salts/clock.h>
 #include <salts/error_codes.h>
 #include <cmeta_buffer.h>
@@ -67,6 +68,8 @@ struct ldap_client_s {
 
   /* The synchronous caller is the sole CNet poll owner. */
   cnet_client net;
+  cnet_manager manager;
+  cnet_managed_connection managed;
   cnet_connection connection;
   int net_initialized;
   int connected;
@@ -233,7 +236,8 @@ static void ldap_client_set_transport_error(ldap_client_t *client, const char *o
 static void ldap_client_on_state(void *user, cnet_connection connection,
                                  cnet_connection_state state, const cnet_error *error) {
   ldap_client_t *client = (ldap_client_t *)user;
-  (void)connection;
+  if (connection.slot != client->connection.slot ||
+      connection.generation != client->connection.generation) return;
   if (state == CNET_CONNECTION_CONNECTED) {
     client->connected = 1;
   } else if (state == CNET_CONNECTION_CLOSED || state == CNET_CONNECTION_FAILED) {
@@ -258,7 +262,8 @@ static void ldap_client_on_receive(void *user, cnet_connection connection,
                                    const cnet_receive_view *view) {
   ldap_client_t *client = (ldap_client_t *)user;
   int status;
-  (void)connection;
+  if (connection.slot != client->connection.slot ||
+      connection.generation != client->connection.generation) return;
   client->receive_armed = 0;
   if (view == NULL || view->kind != CNET_MESSAGE_BYTES ||
       (view->size != 0u && view->data == NULL)) {
@@ -277,9 +282,36 @@ static void ldap_client_on_receive(void *user, cnet_connection connection,
 
 static void ldap_client_on_send(void *user, cnet_connection connection, size_t size) {
   ldap_client_t *client = (ldap_client_t *)user;
-  (void)connection;
+  if (connection.slot != client->connection.slot ||
+      connection.generation != client->connection.generation) return;
   (void)size;
   client->send_pending = 0;
+}
+
+static void ldap_client_recycle(void *user) {
+  ldap_client_t *client = (ldap_client_t *)user;
+  client->managed = (cnet_managed_connection){0};
+}
+
+/* The attachment borrows client through terminal and post-callback recycle.
+ * Keep protocol result storage independent; it may outlive the TCP stream. */
+static int ldap_client_collect(ldap_client_t *client) {
+  cnet_manager_snapshot snapshot;
+  size_t work = 0u;
+  int status;
+  if (!client->manager.impl) return SALTS_OK;
+  status = cnet_manager_advance(&client->manager, 1u, &work);
+  if (status != SALTS_OK) return status;
+  status = cnet_manager_get_snapshot(&client->manager, &snapshot);
+  if (status != SALTS_OK) return status;
+  return snapshot.drained ? cnet_manager_destroy(&client->manager) : SALTS_OK;
+}
+
+static int ldap_client_progress(ldap_client_t *client, uint32_t wait_ms) {
+  size_t events = 0u;
+  int status = cnet_client_poll(&client->net, wait_ms, &events);
+  int cleanup = ldap_client_collect(client);
+  return status != SALTS_OK ? status : cleanup;
 }
 
 static void ldap_client_consume_recv(ldap_client_t *client, size_t consumed) {
@@ -375,7 +407,6 @@ static uint32_t ldap_client_remaining_ms(uint64_t deadline) {
 static int ldap_client_recv_until_response(ldap_client_t *client, uint64_t deadline) {
   while (client != NULL && !client->response_received) {
     int status;
-    size_t events = 0u;
     uint32_t wait_ms;
 
     if (client->receive_error != LDAP_CLIENT_OK) return client->receive_error;
@@ -406,7 +437,7 @@ static int ldap_client_recv_until_response(ldap_client_t *client, uint64_t deadl
       (void)snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
       return LDAP_CLIENT_ERROR_TIMEOUT;
     }
-    status = cnet_client_poll(&client->net, wait_ms, &events);
+    status = ldap_client_progress(client, wait_ms);
     if (status != SALTS_OK) {
       ldap_client_set_transport_error(client, "request poll", status);
       return status == SALTS_ETIMEDOUT ? LDAP_CLIENT_ERROR_TIMEOUT : LDAP_CLIENT_ERROR_NETWORK;
@@ -470,6 +501,24 @@ static int ldap_client_connect_impl(ldap_client_t *client) {
   if (client == NULL || !client->net_initialized) return LDAP_CLIENT_ERROR_INVALID;
   if (client->connected) return LDAP_CLIENT_OK;
 
+  /* A timed-out connect may still owe a real terminal. Finish that episode
+   * before resetting callback storage or attempting another connection. */
+  deadline = cmeta_monotonic_ms() + client->timeout_ms;
+  status = ldap_client_collect(client);
+  if (status == SALTS_OK && client->manager.impl) {
+    status = cnet_close(&client->net, client->connection);
+    if (status == SALTS_EALREADY || status == SALTS_ENOENT) status = SALTS_OK;
+    while (status == SALTS_OK && client->manager.impl) {
+      uint32_t wait_ms = ldap_client_remaining_ms(deadline);
+      if (wait_ms == 0u) { status = SALTS_ETIMEDOUT; break; }
+      status = ldap_client_progress(client, wait_ms);
+    }
+  }
+  if (status != SALTS_OK) {
+    ldap_client_set_transport_error(client, "previous connect drain", status);
+    return status == SALTS_ETIMEDOUT ? LDAP_CLIENT_ERROR_TIMEOUT : LDAP_CLIENT_ERROR_NETWORK;
+  }
+
   format = strchr(client->host, ':') != NULL ? (client->use_tls ? "tls://[%s]:%u" : "tcp://[%s]:%u")
                                              : (client->use_tls ? "tls://%s:%u" : "tcp://%s:%u");
   uri_size = snprintf(uri, sizeof(uri), format, client->host, (unsigned int)client->port);
@@ -493,22 +542,31 @@ static int ldap_client_connect_impl(ldap_client_t *client) {
                                                 .on_receive = ldap_client_on_receive,
                                                 .user = client,
                                                 .on_send = ldap_client_on_send}};
-  status = cnet_connect(&client->net, &options, &client->connection);
+  {
+    cnet_manager_config config = {sizeof(config), CNET_MANAGER_VERSION, &client->net, 1u, 1u};
+    cnet_manager_attachment attachment = {.observer = options.observer,
+                                           .on_recycle = ldap_client_recycle};
+    status = cnet_manager_init(&client->manager, &config);
+    if (status == SALTS_OK)
+      status = cnet_manager_reserve(&client->manager, &attachment, &client->managed);
+    if (status == SALTS_OK)
+      status = cnet_manager_connect(&client->manager, client->managed, &options, &client->connection);
+  }
   if (status != SALTS_OK) {
+    int cleanup = ldap_client_collect(client);
+    if (cleanup != SALTS_OK) status = cleanup;
     ldap_client_set_transport_error(client, "connect admission", status);
     return client->use_tls ? LDAP_CLIENT_ERROR_TLS : LDAP_CLIENT_ERROR_NETWORK;
   }
 
-  deadline = cmeta_monotonic_ms() + client->timeout_ms;
   while (!client->connected && !client->terminal) {
-    size_t events = 0u;
     const uint32_t wait_ms = ldap_client_remaining_ms(deadline);
     if (wait_ms == 0u) {
       (void)cnet_close(&client->net, client->connection);
       (void)snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
       return LDAP_CLIENT_ERROR_TIMEOUT;
     }
-    status = cnet_client_poll(&client->net, wait_ms, &events);
+    status = ldap_client_progress(client, wait_ms);
     if (status != SALTS_OK) {
       ldap_client_set_transport_error(client, "connect poll", status);
       return status == SALTS_ETIMEDOUT
@@ -790,13 +848,12 @@ static int ldap_client_unbind_impl(ldap_client_t *client) {
 
   deadline = cmeta_monotonic_ms() + client->timeout_ms;
   while (!client->terminal) {
-    size_t events = 0u;
     const uint32_t wait_ms = ldap_client_remaining_ms(deadline);
     if (wait_ms == 0u) {
       (void)snprintf(client->error_msg, sizeof(client->error_msg), "Operation timeout");
       return LDAP_CLIENT_ERROR_TIMEOUT;
     }
-    status = cnet_client_poll(&client->net, wait_ms, &events);
+    status = ldap_client_progress(client, wait_ms);
     if (status != SALTS_OK) {
       ldap_client_set_transport_error(client, "unbind poll", status);
       return status == SALTS_ETIMEDOUT ? LDAP_CLIENT_ERROR_TIMEOUT : LDAP_CLIENT_ERROR_NETWORK;
@@ -867,7 +924,9 @@ void ldap_client_destroy(ldap_client_t *client) {
   if (!client) return;
 
   if (client->net_initialized) {
-    (void)cnet_client_stop(&client->net, LDAP_CNET_STOP_TIMEOUT_MS);
+    if (client->manager.impl && cnet_manager_request_close(&client->manager) != SALTS_OK) return;
+    if (cnet_client_stop(&client->net, LDAP_CNET_STOP_TIMEOUT_MS) != SALTS_OK) return;
+    if (ldap_client_collect(client) != SALTS_OK || client->manager.impl) return;
     if (cnet_client_destroy(&client->net) != SALTS_OK) return;
   }
   if (client->pending_response) {

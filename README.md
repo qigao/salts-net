@@ -58,25 +58,433 @@ SaltsNet keeps CNet's explicit caller-driven ownership model:
 - no secondary event loop is created behind the caller's back;
 - protocol metadata reuses CMeta instead of defining a parallel reflection/type system.
 
+LB and TCP proxy callbacks run inside their owner's progress operation. Recursive
+poll, stop, destroy, or listener mutation returns `SALTS_EBUSY` before changing
+admission or shutdown state. Read-only port queries remain available; defer
+lifecycle work until the outer call returns. This is an owner-local reentrancy
+guard, not synchronization for concurrent callers. The callback regressions
+exercise real TCP forwarding. SG hosting has its own explicit API below;
+the remaining integration work is tracked in
+[#49](https://github.com/qigao/salts-net/issues/49).
+
 Use CFlow only when the application genuinely needs graph composition, demand propagation, structured scheduling, or another CFlow execution surface.
+
+### CNet 2.3 protocol clients
+
+Email (SMTP/POP3/IMAP) and LDAP keep one caller-driven TCP/TLS connection.
+Each connect episode owns a CNet 2.3 Manager with one record and one connection
+credit. The progress caller initializes it, reserves the observer attachment,
+and connects through `cnet_manager_connect`. Admission failure retires the
+reservation; a live connection retires only on its real CNet terminal. After
+poll returns, manager advance recycles the attachment and destroys the drained
+manager before a new episode can reuse protocol state. The client and callback
+storage outlive that sequence. Close/destroy failure retains them for cleanup.
+No extra thread, backend observe, connection pool or automatic replay is added.
+
+Transport CONNECTED still does not authorize application commands: Email owns
+greeting, STARTTLS and configured authentication; LDAP owns Bind results.
+SMTP DATA and LDAP mutations are not retried by the transport. SNMP retains its
+configured UDP request retransmission and response-ID/security validation; ICE
+retains its CNet 2.3 Datagram send tags, receive demand and protocol retry rules.
+CNet Manager only accepts TCP/TLS, so applying it to UDP would reject valid
+SNMP traffic. This uses the existing Salts::CNet dependency and preserves public
+client configuration and signatures. Rollback is internal to the transport;
+finish active connections before replacing the library.
+
+Formal regressions cover Email admission rollback and repeated connection-slot
+reuse, SMTP/POP3/IMAP exchanges and TLS rejection, LDAP rejected Bind followed
+by explicit Unbind/reconnect, and SNMP byte-identical bounded retransmission.
+The independent installed C11/C++17 consumers link Email, LDAP and SNMP and
+exercise their public lifecycles, including invalid Email authority rejection.
+
+### Native SG TCP proxy
+
+[`salts_tcp_proxy_sg.h`](tproxy/include/salts_tcp_proxy_sg.h) adds opt-in
+1/2/4 Owner hosting to `SaltsNet::TCPProxy`. Existing `salts_tcp_proxy_*`
+objects remain caller-thread-owned. The SG host owns one Salts
+`native_io_sharded` and one external CNet client/manager per Owner; it reuses
+the existing SOCKS5, HTTP CONNECT, authentication and forwarding implementation.
+
+The controller calls `salts_tcp_proxy_sg_poll`. Each round dispatches a short
+task to every SG Owner and joins all admitted tasks. Each task observes its
+leased backend exactly once, routes the entire batch with
+`cnet_sg_host_route_batch`, then advances CNet and manager retirement. Idle
+polls wait in 1 ms controller intervals up to the requested timeout. This is
+explicit caller-driven progress on NativeIO's existing Owner threads; it adds
+no Actor, scheduler, backend, or independent progress thread.
+
+Owner 0 owns the ingress listener. A detached accept is placed exactly once
+using the CNet owner-placement policy. ROUND_ROBIN and LOWEST_PRESSURE consume
+bounded credit snapshots. EXPLICIT and STRICT_KEY do not move a child to a
+different Owner when the selected Owner is full. STRICT_KEY's callback runs on
+ingress before protocol I/O, so its application key must already be known from
+the accepted peer/application context. Selection/reservation errors reject that
+child and are returned by poll; all dispatched Owners still finish their round.
+
+Every accepted child reserves a credit in the destination's `cnet_handoff`.
+Same-Owner admission directly reserves/adopts a manager attachment and never
+enters the handoff queue. Remote admission publishes the detached stream and
+ticket; only its final Owner takes/adopts them and begins protocol processing.
+The controller always schedules all Owners again, so publication requires no
+separate wake task. Successful publish transfers the accepted stream; failure
+closes it and releases its reservation. A manager context hold covers both
+tunnel sides. Only manager recycle, after real terminals and context retirement,
+returns the credit and frees the session slot. A successful send does not retire
+a tunnel, and connection failure does not replay DATA or choose another upstream.
+
+Capacities in `salts_tcp_proxy_config_t` apply **per Owner**. Each Owner allocates
+`session_capacity` protocol sessions, twice that many physical CNet connections,
+and `4 * session_capacity + 1` NativeIO endpoint slots (CNet reserves two endpoint
+slots per connection, plus ingress listener space). Its backend request budget
+is `request_capacity + 1`; handoff queue capacity is positive and cannot exceed
+session capacity. The SG task queue must be a positive power of two. Endpoint
+selection counters are local to the final Owner; least-inflight is not a global
+cross-Owner balancing metric. No new library dependency is introduced.
+
+For example, initialize an SG host with per-Owner limits:
+
+```c
+#include <salts_tcp_proxy_sg.h>
+
+salts_tcp_proxy_config_t proxy = salts_tcp_proxy_config_default();
+salts_tcp_proxy_sg_config_t sg = salts_tcp_proxy_sg_config_default();
+proxy.protocol = SALTS_PROXY_PROTOCOL_SOCKS5;
+proxy.session_capacity = 64;
+sg.owner_count = 4;
+sg.handoff_queue_capacity = 16;
+sg.placement = CNET_OWNER_PLACE_LOWEST_PRESSURE;
+salts_tcp_proxy_sg_t *host = NULL;
+int status = salts_tcp_proxy_sg_create(&proxy, &sg, &host);
+```
+
+On success, call `salts_tcp_proxy_sg_listen(host, address, port)` and drive poll
+from one controller. Check every return value; `SALTS_ENOBUFS` admission rejects
+one child while retaining the host. Configuration strings/endpoint entries are
+copied. Callback user data is borrowed until destroy. Access/route callbacks run
+on final Owners and may overlap across Owners: shared mutable callback state
+needs application synchronization. `salts_tcp_proxy_sg_current_owner` is the
+callback-safe ownership query; other host APIs reject callback reentry with
+`SALTS_EBUSY`. Control calls must never overlap, including port/stat queries.
+
+Stop seals admission after the previous round has joined, drains queued
+streams, closes sessions/listener, routes cancellation terminals, retires
+contexts, releases host leases and shuts down SG. The configured shutdown
+timeout is one budget for the whole drain. A failed stop keeps ownership for
+retry; it may report an earlier progress error even when the `stopped` snapshot
+is true. Destroy requires completed stop. Normally create failure leaves a null
+handle; if rollback fails, its nonnull cleanup handle still requires stop/destroy.
+Never discard a retained handle or reclaim callback data after failed teardown.
+
+The design chooses explicit short SG rounds over a separate SaltsNet worker loop
+to preserve one observe authority and bounded publish/drain ownership. Its cost
+is per-round dispatch/join and per-Owner memory replication; no throughput or
+latency improvement is claimed without benchmarks. Migration is opt-in through
+the new header/API; applications can keep the existing single-Owner API or
+return to it after fully draining/destroying an SG host. Rebuild consumers with
+matching headers/libraries; live sessions cannot move between these models.
+
+Formal proxy tests cover real 1/2/4 Owner forwarding, callback affinity and
+reentry, fragmented/authenticated handshakes, pinned-Owner exhaustion/reuse,
+lowest-pressure placement, mixed slow/refused/healthy sessions and drain credits.
+The installed C11/C++17 consumers also exercise SG creation and teardown using
+only installed public targets. Cross-platform SG execution and broader
+protocol/dependency and performance qualification remain open.
+
+### Native SG LB ownership
+
+[`salts_lb_sg.h`](lb/include/salts_lb_sg.h) adds opt-in 1/2/4 Owner LB hosting.
+LB SG uses one frontend ingress on Owner 0 and an explicit worker-listener
+port per Owner. Applications register workers for each Owner/group they serve;
+worker placement is fixed by that port, while detached frontend accepts use the
+configured CNet Owner policy once. Workers remain remote business destinations,
+not Owner identifiers. Group routing and SESSION/REQUEST pairing stay local to
+the final Owner. Missing compatible workers retain the existing bounded wait;
+there is no cross-Owner worker borrowing, request replay or automatic relocation.
+This is an additive deployment choice; existing single-Owner LB ports and APIs
+retain their behavior. Reverting requires draining the SG host and reconnecting
+peers to the original single-Owner endpoints.
+
+For example, configure a two-Owner LB with room for both peer roles:
+
+```c
+#include <salts_lb_sg.h>
+
+salts_lb_config_t lb = salts_lb_config_default();
+salts_lb_sg_config_t sg = salts_lb_sg_config_default();
+lb.connection_capacity = 64; /* Combined workers + frontends, per Owner. */
+sg.owner_count = 2;
+sg.handoff_queue_capacity = 16;
+salts_lb_sg_t *host = NULL;
+int status = salts_lb_sg_create(&lb, &sg, &host);
+```
+
+Check creation, then open `salts_lb_sg_listen` once and
+`salts_lb_sg_accept_workers(host, owner, address, port)` for each Owner. Query
+the bound frontend/worker ports, connect workers to their intended Owner's port,
+and drive `salts_lb_sg_poll` from one controller. All control calls, including
+port/stats reads, must not overlap; callback reentry returns `SALTS_EBUSY`.
+Use `salts_lb_sg_current_owner` inside route/filter/frame callbacks, and make
+shared callback data safe for concurrent final Owners. Worker destination
+selection (`worker_policy`) remains separate from frontend Owner placement.
+The backend budget is `2 * connection_capacity + 2` endpoints and
+`request_capacity + 2` requests per Owner, including both listener allowances.
+Check stop/destroy errors and retain the handle for retry until teardown succeeds.
+
+LB and TCP proxy share a private SG host implementation linked into their own
+components. It owns NativeIO leases, bounded frontend handoff and controller
+rounds; protocol adapters own their existing state machines and CNet managers.
+One LB connection, frontend or worker, reserves one destination credit until
+manager terminal/context retirement. Worker and frontend credits share the
+per-Owner connection bound. Successful handoff transfers the detached stream;
+failure closes it and returns its reservation. Stop joins admission producers,
+seals queues, drains connections/listeners and releases leases before backend
+shutdown. Callback users remain borrowed through completed destruction.
+
+The current SDK batch router accepts one listener. Owner 0 can have both LB
+listeners, so the host identifies worker-accept completions by the submitted
+generation-safe request identity and routes those through the SDK worker
+listener route first. It routes the remaining batch once with the frontend
+listener and protocol client, preserving remaining batch order and never observing twice or
+rerouting SG-owned completions. Other Owners use the same path with no frontend
+listener. Tests must cover concurrent accept completions and cancellation of
+both listeners. Sharing this internal host avoids separate proxy/LB shutdown
+implementations; it introduces no public generic runtime or new dependency.
+
+LB regression tests cover 1/2 Owner SESSION forwarding, 4 Owner REQUEST reuse
+with fragmented registration/responses, callback affinity/reentry, shared
+worker/frontend capacity, pinned-Owner rejection/reuse, initialization rollback,
+dual-listener cancellation and slow-registration/worker-disconnect isolation.
+The formal [`sg_pipeline_test.c`](tests/sg_pipeline_test.c) additionally drives
+two independent two-Owner hosts in a SOCKS5 Proxy -> LB -> Worker chain. It
+checks healthy forwarding while another worker stalls then disconnects, distinct
+runtime Owner identities, no replay and exact terminal/context credit drain.
+This does not qualify TLS or every other SaltsNet protocol dependency.
+
+### SG performance baseline
+
+[`benchmark_salts_tcp_proxy_sg.c`](tproxy/tests/benchmark_salts_tcp_proxy_sg.c)
+measures four persistent loopback SOCKS5 tunnels on 1/2/4 Owners. Each of 64
+samples completes 16 sequential 256-byte echo roundtrips per client (64
+operations and 16,384 payload bytes per sample). Payload counts once per
+roundtrip, not both wire directions. Creation, handshakes, a verified warm-up
+exchange and teardown are outside the timed block. Controller/fixture wake,
+SG dispatch/join and payload verification remain inside it. Every received
+payload is checked, and terminal credits must drain after the run.
+
+Run through CTest using the same restored SDK/cache environment as the native
+CI Release profile, with `QIGAO_SDK_RID`, target/host triplets and
+`VCPKG_CACHE_REPOSITORY_ROOT` set. Windows additionally uses `VsDevCmd.bat`
+and `QIGAO_VCPKG_ROOT`:
+
+```powershell
+cmake --preset ci-win-benchmark-user
+cmake --build --preset ci-win-benchmark-user --parallel
+ctest --preset ci-win-benchmark-user -V
+```
+
+Linux/macOS use `ci-linux-benchmark-user` / `ci-macos-benchmark-user` with
+their existing native CI toolchain environment. These profiles select
+`BUILD_TESTING=OFF`, `BUILD_BENCHMARKS=ON` and a separate
+`build/ci-benchmark/<RID>` tree. Regular tests keep benchmarks disabled;
+CTest registers the benchmark under the `benchmark` label. No elapsed-time
+threshold gates correctness or ordinary CI.
+
+Local result after sharing the SG host, 2026-10-10: AMD Ryzen 9 7940HX (16 cores / 32 logical
+processors), Windows 11 build 26200, MSVC 19.44.35217 Release
+(`/O2 /Ob2 /DNDEBUG`), Salts 2.3.0-rc.1 and SaltsUtils 4.3.0-rc.1:
+
+| Owners | Roundtrips/s | Payload MiB/s | Batch min–max (ms) |
+| --- | ---: | ---: | ---: |
+| 1 | 3,930 | 0.96 | 6.41–32.39 |
+| 2 | 4,133 | 1.01 | 10.21–18.00 |
+| 4 | 4,229 | 1.03 | 8.45–18.48 |
+
+This is one uncontrolled workstation run with fixed concurrency and per-Owner
+session capacity 4. It establishes a reproducible workload, not a demonstrated
+scaling improvement. Batch extrema and amortized time per operation are not
+individual RTT percentiles. Admission throughput, TLS, saturated queues,
+allocation/RSS, P95/P99 and cross-platform results still need separate workloads
+and measurement before broader performance claims.
 
 ## Build and test
 
-Restore the latest stable released **Salts** SDK before configuring. The restore
-step uses `Version="*"` with `--no-cache --force-evaluate`, and selects package
-paths from NuGet's resolved assets. Salts 2.1.0 is the upgrade target; it is not
-pinned in the build or package metadata. Salts 2.0 is the minimum supported
-version because the buffer, SIMD scan, clock, thread, and random APIs now use
-their `cmeta_*` names.
+The native build and packaging qualification declare floating **prerelease**
+ranges using `Salts.Native Version="2.3.0-*"` and
+`SaltsUtils.Native Version="4.3.0-*"`. Because the NuGet feed also contains
+SHA-qualified Linux-only verification snapshots (which can sort *above*
+`rc.1` or `rc.2`), the CI restore dynamically selects the newest **official numeric RC tag**, or
+the **stable release** when available, from GitHub Releases. It
+passes these selected identities into the floating MSBuild projects only for
+qualification, so no fixed RC number is committed. The restore uses
+`--no-cache --force-evaluate`, selects SDK roots from NuGet's actual
+`project.assets.json`, verifies the chosen release identities, and
+**fails fast** if the requested prerelease
+or target/host SDK is unavailable. It does not fall back to Salts 2.2 or
+SaltsUtils 4.2. Rebuild all linked native dependencies against the same
+ABI-qualified candidate; do not mix prerelease and old stable binaries.
 
-SaltsNet intentionally does **not** depend on SaltsUtils; keeping `SaltsNet -> Salts` one-way avoids an unnecessary utility-layer dependency.
+SaltsNet currently links directly to Salts/CNet, while SaltsUtils is
+resolved and validated as an explicit prerequisite for the shared 2.3/4.3
+SDK qualification. Protocol-layer business logic remains in SaltsNet.
+
+The release candidate qualification pair is [Salts 2.3.0-rc.4](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.4)
+and [SaltsUtils 4.3.0-rc.2](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2).
+Upgrade or roll back both SDKs together: Unicode is now exported only by Salts,
+and SaltsUtils consumes that target. The floating restore policy above remains
+unchanged; historical benchmark results retain their actual SDK versions.
+macOS builds and installed SDK consumers use AppleClang, matching the rc.2
+SDK's native thread-local storage ABI; GCC's emulated TLS is incompatible with
+the published TinyTest runtime. Reconfigure an existing macOS CI build tree
+with `cmake --fresh --preset ci-macos-release-user` when changing compilers.
+Earlier local Windows MSVC Release qualification of the rc.2 pair passed all 36 project
+CTests and both installed SDK C11/C++17 consumer tests. This verifies existing
+SaltsNet paths against rc.2; it does not qualify new UDP/WS protocol adapters.
+The 1.1.0-rc.1 release preparation requalifies the full current graph and installed
+consumers against rc.4. This includes rc.3's opt-in IDNA DNS profile and rc.4's
+ManagedDial close-admission retry fix. Neither resolves the legacy STUN cleanup
+limitation documented below.
+
+CNet rc.2 adds `cnet_sg_host_route_batch_with_datagrams` for routing UDP and
+TCP completions through the same SG Owner, a dedicated TCP/TLS WebSocket
+write/terminal bridge, and per-attempt ManagedDial admission hooks. These are
+opt-in composition APIs: `cnet_manager_connect` still accepts only TCP/TLS,
+while UDP uses the datagram lifecycle. SNMP transaction retries and ICE/STUN/TURN
+selection, pacing and readiness remain protocol-owned. Upgrading the SDK alone
+does not enable mixed SG hosting in those consumers or implement HTTP/WS
+handshakes. Integration and protocol acceptance remain tracked in
+[SaltsNet #50](https://github.com/qigao/salts-net/issues/50) and
+[Salts #1095](https://github.com/qigao/salts/issues/1095).
+
+The first internal ICE transport slice now separates bounded send/receive
+admission and result consumption from waiting. The existing synchronous path
+uses the same state; an explicit external initializer borrows the host backend.
+The host exclusively observes and routes completions with the rc.2 mixed
+router. Each endpoint owns one copied receive slot and at most one in-flight
+send; short output buffers retain the received packet. Send results use the
+admitted tag and mean local transport completion, never protocol success.
+Stop closes admission and retains the endpoint, tag and callback storage until
+all actual terminals have been routed. External destroy returns busy while
+draining, and synchronous send/receive reject external mode before admission.
+
+The private STUN Binding transaction now separates send settlement, response
+matching and attempt deadlines from transport progress. Its Owner lends one
+idle datagram exclusively, pins a copied peer, and supplies monotonic time;
+each advance consumes at most one packet without observing or waiting. The
+synchronous `stun_binding_request` drives the same state through owned polling.
+Compatibility is preserved: `retries` counts total attempts, each with a fresh
+transaction ID and a fixed timeout. This is not an implementation of RFC
+exponential retransmission backoff. Invalid or late responses do not extend the
+deadline, mapped output is committed only on success, and protocol timeout or
+cancel does not release in-flight transport storage or receive demand. The
+host must still route and stop the datagram before reuse or destruction.
+
+The formal `ice_cnet_sg` test uses this internal adapter and transaction on
+1/2/4 real SG Owners with a TCP neighbor on each backend. It covers a dropped
+first response, deterministic deadline advancement, retry success and exhaustion,
+late-ID/malformed response rejection, and a TCP exchange while STUN awaits a
+response. It also checks copied payload ownership, bounded admission, retained
+receive data, cancel before send settlement, and continued TCP/UDP progress
+after one UDP endpoint stops. The synchronous regression uses real polling and
+a server that drops the initial request. Pending-send timeout and deadline
+overflow have separate regressions.
+
+These private headers are not installed. Public ICE/STUN/TURN and SNMP calls
+retain their synchronous mode. TURN/ICE/SNMP nonblocking protocol state,
+consent/pacing, shared application hosting, public async APIs, WS composition
+and installed-consumer coverage for those APIs remain open in #50. Reusing
+the transaction avoids a second protocol loop or blocking a shared Owner;
+rollback drains external borrowers before selecting the existing owned mode.
+The existing installed SDK consumers verify unchanged public APIs, not the
+private external adapter.
+Local Windows MSVC Release validation of this transaction slice passed all
+37 project CTests, ten consecutive runs each of `ice_cnet_sg` and `stun_cnet`,
+and both independent installed SDK C11/C++17 consumer tests.
+
+ICE server-reflexive gathering now drives the same private Binding transaction,
+including response matching within one attempt and the existing cross-thread
+close/wake boundary. Successful gathering transfers the actual bound socket to
+the candidate; it does not replace the NAT mapping with another endpoint. One
+Agent-owned unpublished socket slot covers initialization and rejected candidate
+cleanup. A failed cleanup retains that slot and prevents another allocation.
+Agent destruction retains failed candidate sockets (including aliases) and TURN
+clients and consumes only successfully destroyed children. Checked
+TURN cleanup supplies the result needed by that enclosing Owner. The legacy
+void destruction APIs still cannot report incomplete cleanup to callers.
+
+The `ice_stun_gather` CTest exercises real public gathering against a local STUN
+server: a wrong ID followed by a valid response, the related bound port, close
+from the candidate callback, and cross-thread close while awaiting a response.
+`ice_cnet_sg` additionally verifies that an Agent retains both an unpublished
+socket and aliased candidate sockets after external stop returns busy, then
+releases them only after the host routes actual terminals and retries destroy.
+
+Local Windows MSVC Release validation of this gathering/cleanup slice passed
+all 38 project CTests, ten consecutive runs each of `ice_stun_gather` and
+`ice_cnet_sg`, and both independent installed SDK C11/C++17 consumer tests.
+
+### Explicit request and checked cleanup APIs (#50)
+
+The additive API design was approved on 2026-10-10 and is implemented as follows:
+`stun_request_create` allocates one opaque Owner without I/O; `start` accepts a
+numeric IPv4/IPv6 address and copies all inputs during the call. It is single-use
+once valid input reaches initialization, including failed initialization. The
+Owner holds one bounded datagram and one Binding transaction (one send and one
+copied receive slot, 548 bytes each). `progress` polls only its owned backend with
+a caller-specified maximum wait, capped by the protocol deadline. `result`
+distinguishes pending from a terminal protocol status and commits mapped output
+only on success. All operations are non-overlapping on one thread; no public
+callbacks, borrowed backend, DNS or cross-thread cancellation are added.
+
+`stun_request_stop` cancels an unfinished transaction and drains with one total
+budget, retaining the Owner on failure. A zero budget initiates stop without
+waiting. `stun_request_destroy` requires successful stop, returns busy otherwise,
+and clears the caller's pointer only on success. ICE/TURN checked destroy uses
+the same pointer-to-pointer convention and a total cleanup budget across child
+resources. Failed cleanup leaves the object closed/stopping and retryable; only
+cleanup/query operations are then valid. Null owner values are idempotent; null
+pointer-to-pointer arguments are invalid. No failed cleanup is silently retired.
+ICE callbacks must not destroy; checked destruction rejects an active Owner.
+
+Review found that the legacy synchronous `stun_binding_request` has a stack
+transport and no way to return a retained cleanup Owner. Its stop-timeout path
+therefore remains unresolved. Email/LDAP/SNMP/TURN/ICE void destruction also
+cannot tell callers whether the object was released. New consumers can now use
+the explicit STUN Owner and `ice_agent_destroy_checked` /
+`turn_client_destroy_checked`; Email/LDAP/SNMP checked cleanup remains open.
+Existing signatures and layouts are preserved. No generic protocol Manager is
+introduced. Transport settlement and protocol result remain separate.
+
+The legacy signatures cannot express bounded cleanup failure with returned
+ownership. Merely returning an error or allocating the wrapper on the heap does
+not solve that gap. An unbounded cleanup loop would change latency guarantees;
+a process-global retirement queue would introduce a hidden lifetime owner. The
+new surface instead gives consumers explicit ownership and keeps the legacy
+STUN limitation visible pending a separately agreed compatibility/deprecation
+decision. The legacy synchronous STUN function has not been rewritten.
+
+Migration is opt-in, preserving existing ABI while callers switch to
+checked stop/destroy and keep handles on failure. Reverting requires draining
+all live Owners before replacing headers/libraries. `stun_request` tests cover
+copied inputs, response matching/retry, timeout, cancellation, zero-budget stop,
+retained destroy rejection and invalid/unstarted cleanup. `ice_cnet_sg` verifies
+checked destroy retains shared child aliases until real external terminals;
+gathering tests also reject checked destruction from a callback. Allocation and
+backend initialization fault injection remains a follow-up validation gap.
+The independent installed C11/C++17 consumers now execute a real loopback STUN
+request/response using only public installed APIs, then exercise ICE/TURN checked
+cleanup. They do not qualify public mixed-protocol hosting or performance.
+DNS remains a separate open boundary: synchronous UDP `getaddrinfo` currently
+precedes the transaction deadline and cannot be woken by the ICE close target.
+
+Local Windows MSVC Release: all 39 source CTests and both installed consumers
+passed after adding the public API and runtime exchange coverage.
 
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
-[SaltsUtils 4.2](https://github.com/qigao/salts-utils/releases/tag/v4.2.0), vcpkg runs in manifest mode
+[SaltsUtils 4.3 prerelease](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2), vcpkg runs in manifest mode
 through the shared `qigao/vcpkg-cache` toolchain, with a read-only GitHub feed
 and a writable local cache. The existing vcpkg baseline is retained. SaltsNet
-uses the [GmSSL-backed crypto provider in Salts 2.1](https://github.com/qigao/salts/blob/v2.1.0/utils/CMakeLists.txt)
+uses the [GmSSL-backed crypto provider in Salts](https://github.com/qigao/salts)
 through its public CMeta APIs; it has no direct OpenSSL/BoringSSL dependency.
 Runtime libraries are resolved through the selected preset's environment.
 
@@ -98,7 +506,8 @@ ctest --preset win-release-user
 
 The restore command obtains `Qigao.Re2c.Binary` from the GitHub Packages feed
 in [cmake/vcpkg-cache.nuget.config](cmake/vcpkg-cache.nuget.config), also using
-`Version="*"`. It sets `SALTS_ROOT`, `RE2C_ROOT`, and `RE2C_VERSION` in the current
+`Version="*"`. It sets `SALTS_ROOT`, `SALTS_UTILS_ROOT`, their resolved versions and host
+SDK roots, plus `RE2C_ROOT` and `RE2C_VERSION`, in the current
 PowerShell session. `RE2C_ROOT` selects `tools/<host RID>` from the restored
 package, including when cross-compiling Android. CMake resolves re2c only from
 that root, and lexer generation depends on that executable. The Docker build
@@ -108,7 +517,8 @@ provide the restored package root as well.
 Linux uses the same script with `linux-x64` for both RIDs, then
 `linux-release-user` for configure, build, and test. Debug/ASan builds use
 `win-dev-user` or `linux-dev-user` and require a matching Debug Salts SDK supplied
-through `SALTS_ROOT`; the published Release SDK is not a Debug SDK.
+through `SALTS_ROOT` and `SALTS_UTILS_ROOT`; the prerelease Release SDKs
+are not Debug SDKs.
 
 Install SaltsNet:
 
@@ -120,22 +530,35 @@ CI uses `ci-linux-release-user`, `ci-macos-release-user`, and
 `ci-win-release-user`. Each inherits the corresponding shared compiler profile:
 GCC on Linux, Homebrew GCC 15 on macOS, and MSVC with UTF-8 on Windows.
 The vcpkg setup action uses the same pinned tool bootstrap as current Salts and
-SaltsUtils; native package restoration still resolves the latest release each run.
+SaltsUtils; native package restoration re-evaluates the two official release channels
+(RC or stable) on every run. CI uses platform-separated ccache objects (including
+MSVC), read-only shared vcpkg binary caching, and cached NuGet package payloads.
 Android arm64 uses `ci-android-sdk-release-user` after building host
 tools. Its `LEMON_EXECUTABLE` must point to that completed host build; the
 target toolchain never produces or searches for an executable to run on the host.
-The iOS device and simulator builds use `ci-ios-sdk-release-user` after the
-macOS host build. Host jobs run the formal CTest suites directly. Android and
-iOS are compiled and linked only; device execution is separate. SDK staging remains
+The iOS device build uses `ci-ios-sdk-release-user` after the macOS host
+build. Native Linux arm64 executes `ci-linux-arm64-release-user` and host
+CTest on an ARM64 runner. Both Salts 2.3 and SaltsUtils 4.3 published
+prereleases ship `linux-arm64`, but **not** `ios-simulator-arm64`; the
+six-RID matrix follows the actual published SDK set. Host jobs execute
+CTest; Android and iOS are compiled and linked only. SDK staging remains
 `stage/sdk/<RID>`, and master releases retain CI-owned immutable tags and package publication.
 
 `BUILD_TESTING` controls all test targets, and `BUILD_EXAMPLES` controls all
 examples, including the email clients. Email and MIME test directories own their
 explicit test target names and sources. The old package consumer harness and
-the unused `BUILD_BENCHMARKS` option have been removed; SDK installation is a
-normal build/install step.
+the old unused benchmark switch were removed during migration; the current
+`BUILD_BENCHMARKS` option now controls the SG benchmark above. SDK installation
+is a normal build/install step. The current formal installed consumers live in
+`tests/installed_sdk`: CI installs into `stage/sdk/<RID>`, then
+`cmake/ci/verify-installed-sdk.ps1` uses their versioned user presets and empty
+vcpkg manifest to configure/build/run C11 and C++17 tests in a separate tree.
+It inherits the shared cache toolchain and package roots; it imports SaltsNet
+strictly from that fresh install, without source-tree targets or build-tree DLLs.
 
-The upgrade changes build inputs and orchestration, not SaltsNet's public API.
+The prerequisite bump changes build inputs and orchestration. The native SG
+proxy and LB integrations above add opt-in public APIs; further CNet 2.3
+integration in other protocol consumers remains a separate milestone.
 Reconfigure and rebuild consumers together with the selected SDK to avoid
 mixing headers and runtime versions. Local restoration stays under ignored
 `stage/nuget` and does not overwrite installed SDKs. To undo the build migration,
@@ -196,3 +619,11 @@ There is no silent fallback to the old naming or runtime model. Residual legacy 
 
 
 GitHub Packages policy: consumers must restore `Salts.Native` explicitly as latest; `SaltsNet.Native` does not embed versioned dependency metadata.
+
+Release: [1.1.0-rc.1 notes, compatibility and known limitations](docs/releases/1.1.0-rc.1.md).
+The full package SemVer is in `vcpkg.json`; CMake uses its numeric core (1.1.0).
+After merging, dispatch the native SDK workflow with `prepare_release=true`
+on the exact merged commit to build the candidate without publication.
+A separately authorized RC publication consumes
+that successful run via `publish_from_run` on the matching immutable tag; it
+does not rebuild the package. RC branches/tags do not publish automatically.

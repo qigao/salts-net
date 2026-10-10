@@ -2,6 +2,7 @@
 #define EMAIL_CNET_TRANSPORT_H
 
 #include <cnet/cnet.h>
+#include <cnet/manager.h>
 
 #include <stdatomic.h>
 #include <stddef.h>
@@ -18,6 +19,8 @@ enum {
 
 typedef struct email_cnet_transport_s {
   cnet_client client;
+  cnet_manager manager;
+  cnet_managed_connection managed;
   cnet_connection connection;
   uint32_t timeout_ms;
   int initialized;

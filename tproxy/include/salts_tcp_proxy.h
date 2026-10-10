@@ -5,6 +5,7 @@
 
 #include <cmeta/meta.h>
 #include <cnet/cnet.h>
+#include <cnet/destination_policy.h>
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -39,6 +40,15 @@ typedef bool (*salts_tcp_proxy_access_fn)(const cnet_stream_peer *peer, void *us
 typedef const char *(*salts_tcp_proxy_route_fn)(const salts_tcp_proxy_route_request_t *request,
                                                 void *user);
 
+/** An immutable authorized upstream URI. Each endpoint ID is nonzero and
+ * strictly ascending. The proxy copies every URI before accepting traffic. */
+typedef struct salts_tcp_proxy_upstream {
+  uint64_t endpoint_id;
+  const char *uri; /* tcp://host:port; TLS profiles are not implicit. */
+  uint32_t weight;
+  bool eligible;
+} salts_tcp_proxy_upstream_t;
+
 typedef struct salts_tcp_proxy_config {
   /** AUTO detects SOCKS5 or HTTP CONNECT. RAW requires raw_backend_uri. */
   salts_proxy_protocol protocol;
@@ -62,6 +72,14 @@ typedef struct salts_tcp_proxy_config {
   uint32_t read_timeout_ms;
   uint32_t write_timeout_ms;
   uint32_t shutdown_timeout_ms;
+  /** Optional preauthorized static backend set. When present, it replaces
+   * route/raw_backend_uri; conflicting policies are rejected at create.
+   * CNet chooses at new upstream admission. Never fail over or replay
+   * data after a connection failure. No transparent socket pooling. */
+  const salts_tcp_proxy_upstream_t *upstreams;
+  size_t upstream_count;
+  cnet_destination_policy_kind upstream_policy;
+  uint64_t explicit_upstream_id; /* Required only for EXPLICIT. */
 } salts_tcp_proxy_config_t;
 
 SALTSNET_TCP_PROXY_C_API salts_tcp_proxy_config_t salts_tcp_proxy_config_default(void);
@@ -72,11 +90,16 @@ SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_listen(salts_tcp_proxy_t *proxy, co
 SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_port(const salts_tcp_proxy_t *proxy,
                                                   uint16_t *out_port);
 
-/** Advance listener admission, handshakes, routing and stream I/O on one owner thread. */
+/**
+ * Advance listener admission, handshakes, routing and stream I/O on one owner thread.
+ * Lifecycle calls (listen/poll/stop/destroy) from this proxy's access/route
+ * callbacks return SALTS_EBUSY before changing state; defer them until poll returns.
+ * Port queries remain allowed. Calls from different threads must not overlap.
+ */
 SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_poll(salts_tcp_proxy_t *proxy, uint32_t timeout_ms,
                                                   size_t *out_events);
 
-/** Close admission and drain all CNet connections. Idempotent. */
+/** Close admission and drain all CNet connections. Idempotent outside callbacks. */
 SALTSNET_TCP_PROXY_C_API int salts_tcp_proxy_stop(salts_tcp_proxy_t *proxy);
 
 /** Requires a completed stop. */

@@ -1,7 +1,10 @@
 #include "salts_tcp_proxy.h"
+#include "salts_tcp_proxy_host.h"
+#include <cnet/manager.h>
 
 #include <base64_utils.h>
 #include <salts/error_codes.h>
+#include <cnet/destination_policy.h>
 #include <cmeta_buffer.h>
 
 #include <limits.h>
@@ -105,6 +108,10 @@ typedef struct salts_proxy_session {
   size_t handshake_size;
   char target_host[SALTS_PROXY_HOST_CAPACITY];
   uint16_t target_port;
+  size_t upstream_index; /* SIZE_MAX means no static-policy reservation. */
+  cnet_managed_connection managed;
+  cnet_handoff_ticket ticket;
+  int context_held;
 } salts_proxy_session_t;
 
 struct salts_tcp_proxy_s {
@@ -117,11 +124,17 @@ struct salts_tcp_proxy_s {
   char *username;
   char *password;
   char *http_authorization;
+  salts_tcp_proxy_upstream_t *upstreams; /* URI ownership retained to destroy. */
+  cnet_destination_hint *upstream_hints;
+  uint64_t next_upstream_sequence;
   int client_initialized;
   int listener_initialized;
   int fatal_status;
+  int progress_active; /* Owner-local guard, including callbacks during admission/drain. */
   int stopping;
   int stopped;
+  cnet_manager manager;
+  cnet_handoff *credits; /* Borrowed through final context recycle. */
 };
 
 static native_io_backend_kind salts_proxy_backend(void) {
@@ -152,8 +165,34 @@ static char *salts_proxy_copy_string(const char *value) {
   return copy;
 }
 
+/* The physical stream is a dedicated TCP tunnel, so an upstream becomes
+ * available only after a true CNet terminal, never after send completion. */
+static void salts_proxy_release_upstream(salts_proxy_session_t *session) {
+  size_t index = session->upstream_index;
+  if (index == SIZE_MAX) return;
+  session->upstream_index = SIZE_MAX;
+  if (index < session->proxy->config.upstream_count &&
+      session->proxy->upstream_hints[index].inflight != 0u) {
+    --session->proxy->upstream_hints[index].inflight;
+  } else {
+    session->proxy->fatal_status = SALTS_EPROTO;
+  }
+}
+
 static void salts_proxy_release_session(salts_proxy_session_t *session) {
   if (session->downstream.live || session->upstream.live) return;
+  if (session->managed.manager != 0u) {
+    /* Keep the slot and cross-owner credit until Manager leaves its callback
+     * and both tunnel sides have reached their physical terminals. */
+    session->phase = SALTS_PROXY_PHASE_CLOSING;
+    if (session->context_held) {
+      int status = cnet_manager_release_context(&session->proxy->manager, session->managed);
+      if (status != SALTS_OK) session->proxy->fatal_status = status;
+      else session->context_held = 0;
+    }
+    return;
+  }
+  salts_proxy_release_upstream(session);
   session->phase = SALTS_PROXY_PHASE_FREE;
   session->protocol = SALTS_PROXY_PROTOCOL_AUTO;
   session->handshake_size = 0u;
@@ -427,6 +466,40 @@ static cnet_observer salts_proxy_observer(salts_proxy_side_t *side) {
   return (cnet_observer){salts_proxy_on_state, salts_proxy_on_receive, side, salts_proxy_on_send};
 }
 
+static void salts_proxy_upstream_failed(salts_proxy_session_t *session);
+
+/* Evaluate the immutable, fully authorized CNet endpoint snapshot on the
+ * owner. Health/inflight observations are advisory, but the session reservation
+ * is real and terminal-settled. No silent retry/fallback or cross-owner lease. */
+static int salts_proxy_choose_upstream(salts_proxy_session_t *session, const char **out_uri) {
+  salts_tcp_proxy_t *proxy = session->proxy;
+  cnet_destination_selection selection;
+  cnet_destination_result result;
+  int status;
+  if (!out_uri || !proxy->config.upstream_count) return SALTS_EINVAL;
+  selection = (cnet_destination_selection){
+      .size = sizeof(selection),
+      .version = CNET_DESTINATION_POLICY_VERSION,
+      .kind = proxy->config.upstream_policy,
+      .endpoints = proxy->upstream_hints,
+      .endpoint_count = proxy->config.upstream_count,
+      .snapshot_generation = 1u,
+      .expires_at_ms = UINT64_MAX,
+      .sequence = proxy->next_upstream_sequence,
+      .explicit_endpoint_id = proxy->config.explicit_upstream_id};
+  status = cnet_destination_choose(&selection, &result);
+  if (status != SALTS_OK) return status;
+  if (result.index >= proxy->config.upstream_count ||
+      proxy->upstream_hints[result.index].inflight == UINT64_MAX) {
+    return SALTS_ENOBUFS;
+  }
+  ++proxy->next_upstream_sequence;
+  ++proxy->upstream_hints[result.index].inflight;
+  session->upstream_index = result.index;
+  *out_uri = proxy->upstreams[result.index].uri;
+  return SALTS_OK;
+}
+
 static void salts_proxy_connect_upstream_ready(salts_proxy_session_t *session) {
   salts_tcp_proxy_t *proxy = session->proxy;
   salts_tcp_proxy_route_request_t request;
@@ -439,19 +512,28 @@ static void salts_proxy_connect_upstream_ready(salts_proxy_session_t *session) {
   request = (salts_tcp_proxy_route_request_t){session->protocol,
                                                session->target_host[0] ? session->target_host : NULL,
                                                session->target_port, &session->peer};
-  uri = proxy->config.route ? proxy->config.route(&request, proxy->config.route_user) : NULL;
-  if (!uri) {
-    if (session->protocol == SALTS_PROXY_PROTOCOL_RAW) {
-      uri = proxy->raw_backend_uri;
-    } else if (!salts_proxy_format_uri(session->target_host, session->target_port, direct_uri,
-                                       sizeof(direct_uri))) {
-      salts_proxy_fail_protocol(session);
+  if (proxy->config.upstream_count != 0u) {
+    status = salts_proxy_choose_upstream(session, &uri);
+    if (status != SALTS_OK) {
+      salts_proxy_upstream_failed(session);
       return;
-    } else {
-      uri = direct_uri;
+    }
+  } else {
+    uri = proxy->config.route ? proxy->config.route(&request, proxy->config.route_user) : NULL;
+    if (!uri) {
+      if (session->protocol == SALTS_PROXY_PROTOCOL_RAW) {
+        uri = proxy->raw_backend_uri;
+      } else if (!salts_proxy_format_uri(session->target_host, session->target_port, direct_uri,
+                                         sizeof(direct_uri))) {
+        salts_proxy_fail_protocol(session);
+        return;
+      } else {
+        uri = direct_uri;
+      }
     }
   }
   if (!uri || !uri[0]) {
+    salts_proxy_release_upstream(session);
     salts_proxy_fail_protocol(session);
     return;
   }
@@ -460,7 +542,8 @@ static void salts_proxy_connect_upstream_ready(salts_proxy_session_t *session) {
   session->phase = SALTS_PROXY_PHASE_CONNECTING;
   status = cnet_connect(&proxy->client, &options, &session->upstream.connection);
   if (status != SALTS_OK) {
-    salts_proxy_fail_protocol(session);
+    salts_proxy_release_upstream(session);
+    salts_proxy_upstream_failed(session);
     return;
   }
   session->upstream.live = 1;
@@ -730,6 +813,7 @@ static void salts_proxy_on_state(void *user, cnet_connection connection,
   }
   if (state != CNET_CONNECTION_CLOSED && state != CNET_CONNECTION_FAILED) return;
   side->live = 0;
+  if (side->role == SALTS_PROXY_SIDE_UPSTREAM) salts_proxy_release_upstream(session);
   side->connected = 0;
   side->receive_armed = 0;
   side->send_action = SALTS_PROXY_SEND_NONE;
@@ -806,7 +890,35 @@ salts_tcp_proxy_config_t salts_tcp_proxy_config_default(void) {
   config.read_timeout_ms = SALTS_PROXY_DEFAULT_IO_TIMEOUT_MS;
   config.write_timeout_ms = SALTS_PROXY_DEFAULT_IO_TIMEOUT_MS;
   config.shutdown_timeout_ms = SALTS_PROXY_DEFAULT_SHUTDOWN_TIMEOUT_MS;
+  config.upstream_policy = CNET_DESTINATION_ROUND_ROBIN;
   return config;
+}
+
+/* Configuration is copied once. Do not admit request-dependent URI escapes
+ * around the static endpoint eligibility and caller authorization boundary. */
+static int salts_proxy_upstreams_valid(const salts_tcp_proxy_config_t *config) {
+  size_t i;
+  uint64_t previous = 0u;
+  int explicit_found = 0;
+  if (config->upstream_policy != CNET_DESTINATION_ROUND_ROBIN &&
+      config->upstream_policy != CNET_DESTINATION_WEIGHTED_RR &&
+      config->upstream_policy != CNET_DESTINATION_LEAST_INFLIGHT &&
+      config->upstream_policy != CNET_DESTINATION_EXPLICIT) return 0;
+  if (config->upstream_count == 0u)
+    return config->upstreams == NULL && config->explicit_upstream_id == 0u;
+  if (!config->upstreams || config->route || config->raw_backend_uri ||
+      config->upstream_count > 1024u ||
+      config->upstream_count > SIZE_MAX / sizeof(salts_tcp_proxy_upstream_t) ||
+      config->upstream_count > SIZE_MAX / sizeof(cnet_destination_hint)) return 0;
+  for (i = 0u; i < config->upstream_count; ++i) {
+    const salts_tcp_proxy_upstream_t *up = &config->upstreams[i];
+    if (up->endpoint_id <= previous || up->weight == 0u ||
+        up->uri == NULL || strncmp(up->uri, "tcp://", 6u) != 0 || up->uri[6] == '\0') return 0;
+    previous = up->endpoint_id;
+    if (up->endpoint_id == config->explicit_upstream_id) explicit_found = 1;
+  }
+  return config->upstream_policy != CNET_DESTINATION_EXPLICIT ||
+         (config->explicit_upstream_id != 0u && explicit_found);
 }
 
 static int salts_proxy_config_valid(const salts_tcp_proxy_config_t *config) {
@@ -830,7 +942,9 @@ static int salts_proxy_config_valid(const salts_tcp_proxy_config_t *config) {
                                 strlen(config->username) > 0u && strlen(config->username) <= 255u &&
                                 strlen(config->password) > 0u && strlen(config->password) <= 255u)) &&
          (config->protocol != SALTS_PROXY_PROTOCOL_RAW ||
-          (config->raw_backend_uri && config->raw_backend_uri[0]));
+          ((config->raw_backend_uri && config->raw_backend_uri[0]) ||
+            config->upstream_count != 0u)) &&
+          salts_proxy_upstreams_valid(config);
 }
 
 static int salts_proxy_prepare_auth(salts_tcp_proxy_t *proxy) {
@@ -858,14 +972,35 @@ static int salts_proxy_prepare_auth(salts_tcp_proxy_t *proxy) {
                                  encoded_size + 1u) == TN_BASE64_OK;
 }
 
-salts_tcp_proxy_t *salts_tcp_proxy_create(const salts_tcp_proxy_config_t *config) {
+static salts_tcp_proxy_t *salts_proxy_create(const salts_tcp_proxy_config_t *config,
+                                            native_io_backend *backend, int *out_status) {
   salts_tcp_proxy_t *proxy;
   cnet_client_config client_config;
   size_t index;
+  *out_status = SALTS_EINVAL;
   if (!salts_proxy_config_valid(config)) return NULL;
+  *out_status = SALTS_ENOMEM;
   proxy = (salts_tcp_proxy_t *)calloc(1u, sizeof(*proxy));
   if (!proxy) return NULL;
   proxy->config = *config;
+  if (config->upstream_count != 0u) {
+    proxy->upstreams = (salts_tcp_proxy_upstream_t *)calloc(
+        config->upstream_count, sizeof(*proxy->upstreams));
+    proxy->upstream_hints = (cnet_destination_hint *)calloc(
+        config->upstream_count, sizeof(*proxy->upstream_hints));
+    if (!proxy->upstreams || !proxy->upstream_hints) goto fail;
+    for (index = 0u; index < config->upstream_count; ++index) {
+      const salts_tcp_proxy_upstream_t *endpoint = &config->upstreams[index];
+      proxy->upstreams[index] = *endpoint;
+      proxy->upstreams[index].uri = salts_proxy_copy_string(endpoint->uri);
+      if (!proxy->upstreams[index].uri) goto fail;
+      proxy->upstream_hints[index] = (cnet_destination_hint){
+          .endpoint_id = endpoint->endpoint_id,
+          .weight = endpoint->weight,
+          .eligible = endpoint->eligible};
+    }
+    proxy->config.upstreams = proxy->upstreams;
+  }
   if (config->raw_backend_uri) {
     proxy->raw_backend_uri = salts_proxy_copy_string(config->raw_backend_uri);
     if (!proxy->raw_backend_uri) goto fail;
@@ -884,6 +1019,7 @@ salts_tcp_proxy_t *salts_tcp_proxy_create(const salts_tcp_proxy_config_t *config
     session->proxy = proxy;
     session->index = index;
     session->phase = SALTS_PROXY_PHASE_FREE;
+    session->upstream_index = SIZE_MAX;
     session->handshake = proxy->handshake_storage + index * config->handshake_capacity;
     session->downstream.session = session;
     session->downstream.role = SALTS_PROXY_SIDE_DOWNSTREAM;
@@ -902,11 +1038,19 @@ salts_tcp_proxy_t *salts_tcp_proxy_create(const salts_tcp_proxy_config_t *config
   client_config.connect_timeout_ms = config->connect_timeout_ms;
   client_config.read_timeout_ms = config->read_timeout_ms;
   client_config.write_timeout_ms = config->write_timeout_ms;
-  if (cnet_client_init(&proxy->client, &client_config) != SALTS_OK) goto fail;
+  *out_status = backend ? cnet_client_init_external(&proxy->client, &client_config, backend)
+                        : cnet_client_init(&proxy->client, &client_config);
+  if (*out_status != SALTS_OK) goto fail;
   proxy->client_initialized = 1;
   return proxy;
 
 fail:
+  if (proxy->upstreams) {
+    for (index = 0u; index < config->upstream_count; ++index)
+      free((void *)proxy->upstreams[index].uri);
+  }
+  free(proxy->upstreams);
+  free(proxy->upstream_hints);
   free(proxy->http_authorization);
   free(proxy->password);
   free(proxy->username);
@@ -917,9 +1061,15 @@ fail:
   return NULL;
 }
 
+salts_tcp_proxy_t *salts_tcp_proxy_create(const salts_tcp_proxy_config_t *config) {
+  int status;
+  return salts_proxy_create(config, NULL, &status);
+}
+
 int salts_tcp_proxy_listen(salts_tcp_proxy_t *proxy, const char *host, uint16_t port) {
   cnet_listener_config config;
   int status;
+  if (proxy && proxy->progress_active) return SALTS_EBUSY;
   if (!proxy || !host || !host[0] || proxy->listener_initialized || proxy->stopping) {
     return SALTS_EINVAL;
   }
@@ -957,6 +1107,7 @@ static int salts_proxy_accept_ready(salts_tcp_proxy_t *proxy, size_t *accepted) 
     session->handshake_size = 0u;
     session->target_host[0] = '\0';
     session->target_port = 0u;
+    session->upstream_index = SIZE_MAX;
     session->downstream.live = 1;
     session->downstream.connected = 0;
     session->downstream.receive_armed = 0;
@@ -984,42 +1135,63 @@ int salts_tcp_proxy_poll(salts_tcp_proxy_t *proxy, uint32_t timeout_ms, size_t *
   size_t accepted = 0u;
   size_t events = 0u;
   int status;
-  if (!proxy || !out_events || !proxy->client_initialized || proxy->stopping) return SALTS_EINVAL;
+  if (!proxy || !out_events || !proxy->client_initialized) return SALTS_EINVAL;
+  if (proxy->progress_active) return SALTS_EBUSY;
+  if (proxy->stopping) return SALTS_EINVAL;
+  proxy->progress_active = 1;
   if (proxy->listener_initialized) {
     status = salts_proxy_accept_ready(proxy, &accepted);
-    if (status != SALTS_OK && status != SALTS_ENOBUFS) return status;
+    if (status != SALTS_OK && status != SALTS_ENOBUFS) goto done;
   }
   status = cnet_client_poll(&proxy->client, timeout_ms, &events);
-  if (status != SALTS_OK) return status;
-  if (proxy->fatal_status != SALTS_OK) return proxy->fatal_status;
+  if (status != SALTS_OK) goto done;
+  status = proxy->fatal_status;
+  if (status != SALTS_OK) goto done;
   *out_events = accepted + events;
-  return SALTS_OK;
+done:
+  proxy->progress_active = 0;
+  return status;
 }
 
 int salts_tcp_proxy_stop(salts_tcp_proxy_t *proxy) {
   int status;
   if (!proxy) return SALTS_EINVAL;
+  if (proxy->progress_active) return SALTS_EBUSY;
   if (proxy->stopped) return SALTS_OK;
+  proxy->progress_active = 1;
   proxy->stopping = 1;
   if (proxy->listener_initialized) {
     status = cnet_listener_close(&proxy->listener);
-    if (status != SALTS_OK && status != SALTS_EALREADY) return status;
+    if (status != SALTS_OK && status != SALTS_EALREADY) goto done;
     status = cnet_listener_destroy(&proxy->listener);
-    if (status != SALTS_OK) return status;
+    if (status != SALTS_OK) goto done;
     proxy->listener_initialized = 0;
   }
   status = cnet_client_stop(&proxy->client, proxy->config.shutdown_timeout_ms);
-  if (status != SALTS_OK) return status;
+  if (status != SALTS_OK) goto done;
   proxy->stopped = 1;
-  return SALTS_OK;
+done:
+  proxy->progress_active = 0;
+  return status;
 }
 
 int salts_tcp_proxy_destroy(salts_tcp_proxy_t *proxy) {
   int status;
   if (!proxy) return SALTS_EINVAL;
-  if (!proxy->stopped) return SALTS_EBUSY;
+  if (proxy->progress_active || !proxy->stopped) return SALTS_EBUSY;
+  if (proxy->manager.impl) {
+    status = cnet_manager_destroy(&proxy->manager);
+    if (status != SALTS_OK) return status;
+  }
   status = cnet_client_destroy(&proxy->client);
   if (status != SALTS_OK) return status;
+  if (proxy->upstreams) {
+    size_t index;
+    for (index = 0u; index < proxy->config.upstream_count; ++index)
+      free((void *)proxy->upstreams[index].uri);
+  }
+  free(proxy->upstreams);
+  free(proxy->upstream_hints);
   free(proxy->http_authorization);
   free(proxy->password);
   free(proxy->username);
@@ -1028,4 +1200,123 @@ int salts_tcp_proxy_destroy(salts_tcp_proxy_t *proxy) {
   free(proxy->sessions);
   free(proxy);
   return SALTS_OK;
+}
+
+static void salts_proxy_host_recycle(void *user) {
+  salts_proxy_session_t *session = ((salts_proxy_side_t *)user)->session;
+  int status = cnet_handoff_release(session->proxy->credits, session->ticket);
+  if (status != SALTS_OK) session->proxy->fatal_status = status;
+  session->ticket = (cnet_handoff_ticket){0};
+  session->managed = (cnet_managed_connection){0};
+  salts_proxy_release_session(session);
+}
+
+int salts_proxy_host_config_valid(const salts_tcp_proxy_config_t *config) {
+  return salts_proxy_config_valid(config);
+}
+
+int salts_proxy_host_create(const salts_tcp_proxy_config_t *config,
+                            native_io_backend *backend, cnet_handoff *credits,
+                            salts_tcp_proxy_t **out_proxy) {
+  salts_tcp_proxy_t *proxy;
+  cnet_manager_config manager_config;
+  int status;
+  if (!backend || !credits || !out_proxy) return SALTS_EINVAL;
+  *out_proxy = NULL;
+  proxy = salts_proxy_create(config, backend, &status);
+  if (!proxy) return status;
+  *out_proxy = proxy;
+  proxy->credits = credits;
+  manager_config = (cnet_manager_config){sizeof(manager_config), CNET_MANAGER_VERSION,
+      &proxy->client, config->session_capacity, config->session_capacity};
+  return cnet_manager_init(&proxy->manager, &manager_config);
+}
+
+int salts_proxy_host_adopt(salts_tcp_proxy_t *proxy, cnet_accepted_stream *accepted,
+                           cnet_handoff_ticket ticket) {
+  salts_proxy_session_t *session = salts_proxy_free_session(proxy);
+  cnet_manager_attachment attachment = {0};
+  int status;
+  if (!session || proxy->stopping) {
+    status = cnet_accepted_stream_close(accepted);
+    if (status != SALTS_OK) proxy->fatal_status = status;
+    status = cnet_handoff_release(proxy->credits, ticket);
+    if (status != SALTS_OK) return status;
+    return proxy->stopping ? SALTS_ESHUTDOWN : SALTS_ENOBUFS;
+  }
+  session->phase = SALTS_PROXY_PHASE_ACCEPTED;
+  session->protocol = proxy->config.protocol;
+  session->peer = accepted->peer;
+  session->ticket = ticket;
+  attachment.observer = salts_proxy_observer(&session->downstream);
+  attachment.on_recycle = salts_proxy_host_recycle;
+  attachment.hold_context = true;
+  status = cnet_manager_reserve(&proxy->manager, &attachment, &session->managed);
+  if (status != SALTS_OK) {
+    int cleanup = cnet_accepted_stream_close(accepted);
+    int release = cnet_handoff_release(proxy->credits, ticket);
+    if (cleanup == SALTS_OK) cleanup = release;
+    salts_proxy_release_session(session);
+    return cleanup != SALTS_OK ? cleanup : status;
+  }
+  session->context_held = 1;
+  session->downstream.live = 1;
+  status = cnet_manager_adopt(&proxy->manager, session->managed, accepted, NULL,
+                              &session->downstream.connection);
+  if (status != SALTS_OK) {
+    session->downstream.live = 0;
+    salts_proxy_release_session(session);
+    return status;
+  }
+  proxy->progress_active = 1;
+  if (proxy->config.access && !proxy->config.access(&session->peer, proxy->config.access_user))
+    session->phase = SALTS_PROXY_PHASE_DENIED;
+  proxy->progress_active = 0;
+  return SALTS_OK;
+}
+
+int salts_proxy_host_progress(salts_tcp_proxy_t *proxy, cnet_listener *listener,
+                              const native_io_sharded_completion *batch, size_t count,
+                              size_t *out_work) {
+  cnet_client *clients[] = {&proxy->client};
+  cnet_sg_host_routes routes = {sizeof(routes), CNET_SG_HOST_ROUTING_VERSION,
+                               listener, clients, 1u};
+  size_t accepts = 0u, sharded = 0u, events = 0u, work = 0u;
+  int first, status;
+  if (proxy->progress_active) return SALTS_EBUSY;
+  proxy->progress_active = 1;
+  first = cnet_sg_host_route_batch(batch, count, &routes, &accepts, &sharded);
+  status = cnet_client_advance_external(&proxy->client, &events);
+  if (first == SALTS_OK) first = status;
+  status = cnet_manager_advance(&proxy->manager, proxy->config.session_capacity, &work);
+  if (first == SALTS_OK) first = status;
+  if (first == SALTS_OK) first = proxy->fatal_status;
+  *out_work = count + events + work;
+  proxy->progress_active = 0;
+  return first;
+}
+
+int salts_proxy_host_stop(salts_tcp_proxy_t *proxy) {
+  cnet_manager_snapshot snapshot;
+  int status;
+  if (proxy->progress_active) return SALTS_EBUSY;
+  if (proxy->stopped) return SALTS_OK;
+  proxy->stopping = 1;
+  if (proxy->manager.impl) {
+    status = cnet_manager_request_close(&proxy->manager);
+    if (status != SALTS_OK) return status;
+  }
+  for (size_t i = 0u; i < proxy->config.session_capacity; ++i)
+    salts_proxy_close_session(&proxy->sessions[i]);
+  if (proxy->manager.impl) {
+    status = cnet_manager_get_snapshot(&proxy->manager, &snapshot);
+    if (status != SALTS_OK) return status;
+    if (!snapshot.drained) return SALTS_EBUSY;
+  }
+  status = cnet_client_stop_external(&proxy->client);
+  if (status == SALTS_OK || status == SALTS_EALREADY) {
+    proxy->stopped = 1;
+    return SALTS_OK;
+  }
+  return status;
 }

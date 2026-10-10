@@ -615,3 +615,10 @@ There is no silent fallback to the old naming or runtime model. Residual legacy 
 
 
 GitHub Packages policy: consumers must restore `Salts.Native` explicitly as latest; `SaltsNet.Native` does not embed versioned dependency metadata.
+
+Release preparation: [1.1.0-rc.1 notes, compatibility and known limitations](docs/releases/1.1.0-rc.1.md).
+The full package SemVer is in `vcpkg.json`; CMake uses its numeric core (1.1.0).
+Dispatch the native SDK workflow with `prepare_release=true` to build the exact
+candidate without publication. A separately authorized RC publication consumes
+that successful run via `publish_from_run` on the matching immutable tag; it
+does not rebuild the package. RC branches/tags do not publish automatically.

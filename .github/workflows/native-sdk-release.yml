@@ -34,14 +34,24 @@ on:
       - "CMakeUserPresets.json"
       - "tests/**"
   workflow_dispatch:
+    inputs:
+      prepare_release:
+        description: Build the exact release version without publishing or creating a tag
+        type: boolean
+        default: false
+      publish_from_run:
+        description: Successful preparation run ID to publish unchanged (dispatch on its matching tag)
+        type: string
+        default: ""
 
 permissions:
   contents: read
   packages: read
+  actions: read
 
 concurrency:
-  group: saltsnet-native-sdk-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: saltsnet-native-sdk-${{ github.event.pull_request.number || github.ref }}-${{ inputs.publish_from_run && 'publish' || inputs.prepare_release && 'prepare' || 'qualify' }}
+  cancel-in-progress: ${{ !inputs.publish_from_run }}
 
 jobs:
   metadata:
@@ -54,6 +64,7 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       publish: ${{ steps.meta.outputs.publish }}
       qualify: ${{ steps.meta.outputs.qualify }}
+      artifact_run_id: ${{ steps.meta.outputs.artifact_run_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,16 +72,47 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PREPARE_RELEASE: ${{ inputs.prepare_release }}
+          PUBLISH_FROM_RUN: ${{ inputs.publish_from_run }}
         run: |
           set -euo pipefail
-          source_version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
-          manifest_version="$(python3 -c 'import json; print(json.load(open("vcpkg.json", encoding="utf-8"))["version-semver"])')"
-          test "$source_version" = "$manifest_version"
+          cmake_version="$(awk '/^[[:space:]]*VERSION[[:space:]]+[0-9]/{print $2; exit}' CMakeLists.txt)"
+          source_version="$(python3 -c 'import json; print(json.load(open("vcpkg.json", encoding="utf-8"))["version-semver"])')"
+          # CMake project VERSION is numeric; vcpkg owns the full release SemVer.
+          [[ "$source_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]
+          test "$cmake_version" = "${source_version%%-*}"
           tag="v$source_version"
           source_commit="$(git rev-parse HEAD)"
           publish=false
           qualify=true
-          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+          artifact_run_id="$GITHUB_RUN_ID"
+          if [[ -n "$PUBLISH_FROM_RUN" ]]; then
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            test "$PREPARE_RELEASE" != true
+            [[ "$PUBLISH_FROM_RUN" =~ ^[1-9][0-9]*$ ]]
+            test "$GITHUB_REF_TYPE" = tag
+            test "$GITHUB_REF_NAME" = "$tag"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PUBLISH_FROM_RUN" > "$RUNNER_TEMP/prepared-run.json"
+            jq -e --arg sha "$source_commit" --arg repo "$GITHUB_REPOSITORY" '
+              .head_sha == $sha and .repository.full_name == $repo and
+              .event == "workflow_dispatch" and .status == "completed" and
+              .conclusion == "success" and
+              .path == ".github/workflows/native-sdk-release.yml"
+            ' "$RUNNER_TEMP/prepared-run.json" >/dev/null
+            version="$source_version"
+            artifact_run_id="$PUBLISH_FROM_RUN"
+            qualify=false
+            publish=true
+          elif [[ "$PREPARE_RELEASE" == true ]]; then
+            test "$GITHUB_EVENT_NAME" = workflow_dispatch
+            version="$source_version"
+          elif [[ "$source_version" == *-rc.* && "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            # RC publication is explicit and consumes a successful preparation.
+            version="$source_version"
+            if [[ "$GITHUB_REF_TYPE" == tag ]]; then test "$GITHUB_REF_NAME" = "$tag"; fi
+          elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             test "$GITHUB_REF_NAME" = "$tag"
             version="$source_version"
             publish=true
@@ -102,6 +144,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "qualify=$qualify" >> "$GITHUB_OUTPUT"
+          echo "artifact_run_id=$artifact_run_id" >> "$GITHUB_OUTPUT"
 
   native:
     needs: metadata
@@ -114,6 +157,7 @@ jobs:
   pack:
     name: Pack SaltsNet.Native
     needs: [metadata, native]
+    if: needs.metadata.outputs.qualify == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -185,6 +229,9 @@ jobs:
             echo "SaltsNet.Native must not embed GitHub package dependency metadata" >&2
             exit 1
           fi
+          python3 cmake/ci/verify-release-package.py \
+            "dist/SaltsNet.Native.${{ needs.metadata.outputs.version }}.nupkg" \
+            "${{ needs.metadata.outputs.version }}" "${{ needs.metadata.outputs.source_commit }}"
       - uses: actions/upload-artifact@v4
         with:
           name: saltsnet-native-nuget
@@ -194,16 +241,32 @@ jobs:
   publish:
     name: Publish package and GitHub Release
     needs: [metadata, pack]
-    if: needs.metadata.outputs.publish == 'true'
+    if: >-
+      always() && !cancelled() && needs.metadata.result == 'success' &&
+      needs.metadata.outputs.publish == 'true' &&
+      (needs.pack.result == 'success' ||
+       (needs.metadata.outputs.qualify == 'false' && needs.pack.result == 'skipped'))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
       packages: write
+      actions: read
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.metadata.outputs.source_commit }}
       - uses: actions/download-artifact@v4
         with:
           name: saltsnet-native-nuget
           path: dist
+          run-id: ${{ needs.metadata.outputs.artifact_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify prepared package provenance
+        env:
+          PACKAGE_VERSION: ${{ needs.metadata.outputs.source_version }}
+          SOURCE_COMMIT: ${{ needs.metadata.outputs.source_commit }}
+        shell: bash
+        run: python3 cmake/ci/verify-release-package.py "dist/SaltsNet.Native.$PACKAGE_VERSION.nupkg" "$PACKAGE_VERSION" "$SOURCE_COMMIT"
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
@@ -216,7 +279,9 @@ jobs:
         run: |
           set -euo pipefail
           if existing="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq .object.sha 2>/dev/null)"; then
-            test "$existing" = "$SOURCE_COMMIT"
+            test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+            remote_commit="$(git ls-remote origin "refs/tags/$TAG^{}" | awk '{print $1}')"
+            test "${remote_commit:-$existing}" = "$SOURCE_COMMIT"
           else
             gh api -X POST "repos/$GITHUB_REPOSITORY/git/refs" \
               -f ref="refs/tags/$TAG" \
@@ -239,8 +304,17 @@ jobs:
         run: |
           set -euo pipefail
           pkg="dist/SaltsNet.Native.$VERSION.nupkg"
+          flags=()
+          if [[ "$VERSION" == *-rc.* ]]; then flags+=(--prerelease --latest=false); fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --clobber
+            digest="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | select(.name == "SaltsNet.Native.'"$VERSION"'.nupkg") | .digest')"
+            if [[ -n "$digest" ]]; then
+              test "$digest" = "sha256:$(sha256sum "$pkg" | cut -d ' ' -f 1)"
+            else
+              gh release upload "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY"
+            fi
           else
-            gh release create "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --verify-tag --title "SaltsNet $VERSION" --generate-notes
+            notes="docs/releases/$VERSION.md"
+            if [[ -f "$notes" ]]; then flags+=(--notes-file "$notes"); else flags+=(--generate-notes); fi
+            gh release create "$TAG" "$pkg" --repo "$GITHUB_REPOSITORY" --verify-tag --title "SaltsNet $VERSION" "${flags[@]}"
           fi

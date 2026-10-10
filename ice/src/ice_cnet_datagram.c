@@ -73,10 +73,12 @@ static void ice_cnet_on_send(void *user, cnet_datagram *datagram,
   }
 }
 
-static int ice_cnet_poll(ice_cnet_datagram_t *transport, uint64_t deadline) {
+int ice_cnet_datagram_poll_until(ice_cnet_datagram_t *transport, uint64_t deadline) {
   const uint32_t remaining_ms = ice_cnet_remaining_ms(deadline);
   size_t events = 0u;
   int status;
+  if (transport == NULL || !transport->initialized) return SALTS_EINVAL;
+  if (transport->external) return SALTS_ENOTSUP;
   if (remaining_ms == 0u) return SALTS_ETIMEDOUT;
   status = cnet_datagram_poll(&transport->datagram, remaining_ms, &events);
   if (atomic_exchange_explicit(&transport->wake_requested, 0,
@@ -288,7 +290,7 @@ int ice_cnet_datagram_send(ice_cnet_datagram_t *transport, const cnet_datagram_p
   if (status != SALTS_OK) return status;
   deadline = cmeta_monotonic_ms() + timeout_ms;
   while (transport->send_pending) {
-    status = ice_cnet_poll(transport, deadline);
+    status = ice_cnet_datagram_poll_until(transport, deadline);
     if (status != SALTS_OK) return status;
   }
   return ice_cnet_datagram_send_result(transport, tag);
@@ -342,7 +344,7 @@ int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer
   if (status != SALTS_OK) return status;
   deadline = cmeta_monotonic_ms() + timeout_ms;
   while (transport->receive_ready == 0) {
-    status = ice_cnet_poll(transport, deadline);
+    status = ice_cnet_datagram_poll_until(transport, deadline);
     if (status != SALTS_OK) return status;
   }
   return ice_cnet_datagram_receive_take(transport, out_peer, data, capacity, out_size);

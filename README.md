@@ -362,21 +362,39 @@ Stop closes admission and retains the endpoint, tag and callback storage until
 all actual terminals have been routed. External destroy returns busy while
 draining, and synchronous send/receive reject external mode before admission.
 
-The formal `ice_cnet_sg` test uses this internal adapter on 1/2/4 real SG Owners
-with a TCP neighbor on each backend. It exercises a fixed-peer STUN exchange,
-transaction-ID rejection, copied payload ownership, full send admission,
-retained receive data, cancellation and continued TCP/UDP progress after one
-UDP endpoint stops. This is a transport composition slice: public ICE/STUN/TURN
-and SNMP calls still use their existing synchronous mode. Nonblocking protocol
-timers/retransmissions, shared application hosting, public async APIs and
-installed-consumer coverage for those APIs remain open in #50. The adapter is
-private and is not installed. This keeps one transport state machine instead
-of duplicating it or blocking the shared Owner inside a synchronous facade;
+The private STUN Binding transaction now separates send settlement, response
+matching and attempt deadlines from transport progress. Its Owner lends one
+idle datagram exclusively, pins a copied peer, and supplies monotonic time;
+each advance consumes at most one packet without observing or waiting. The
+synchronous `stun_binding_request` drives the same state through owned polling.
+Compatibility is preserved: `retries` counts total attempts, each with a fresh
+transaction ID and a fixed timeout. This is not an implementation of RFC
+exponential retransmission backoff. Invalid or late responses do not extend the
+deadline, mapped output is committed only on success, and protocol timeout or
+cancel does not release in-flight transport storage or receive demand. The
+host must still route and stop the datagram before reuse or destruction.
+
+The formal `ice_cnet_sg` test uses this internal adapter and transaction on
+1/2/4 real SG Owners with a TCP neighbor on each backend. It covers a dropped
+first response, deterministic deadline advancement, retry success and exhaustion,
+late-ID/malformed response rejection, and a TCP exchange while STUN awaits a
+response. It also checks copied payload ownership, bounded admission, retained
+receive data, cancel before send settlement, and continued TCP/UDP progress
+after one UDP endpoint stops. The synchronous regression uses real polling and
+a server that drops the initial request. Pending-send timeout and deadline
+overflow have separate regressions.
+
+These private headers are not installed. Public ICE/STUN/TURN and SNMP calls
+retain their synchronous mode. TURN/ICE/SNMP nonblocking protocol state,
+consent/pacing, shared application hosting, public async APIs, WS composition
+and installed-consumer coverage for those APIs remain open in #50. Reusing
+the transaction avoids a second protocol loop or blocking a shared Owner;
 rollback drains external borrowers before selecting the existing owned mode.
-Local Windows Release validation of this slice passed all 37 CTests, ten
-consecutive `ice_cnet_sg` runs (each covering 1/2/4 Owners), and the two existing
-installed SDK consumer tests. The latter verify the unchanged public APIs,
-not the private external adapter.
+The existing installed SDK consumers verify unchanged public APIs, not the
+private external adapter.
+Local Windows MSVC Release validation of this transaction slice passed all
+37 project CTests, ten consecutive runs each of `ice_cnet_sg` and `stun_cnet`,
+and both independent installed SDK C11/C++17 consumer tests.
 
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following

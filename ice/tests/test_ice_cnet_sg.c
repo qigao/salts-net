@@ -1,5 +1,6 @@
 #include "ice_cnet_datagram.h"
 #include "ice/salts_stun.h"
+#include "stun_binding_transaction.h"
 #include <cnet/destination_policy.h>
 #include <cnet/sg_host.h>
 #include <cmeta_buffer.h>
@@ -10,6 +11,7 @@
 
 enum { SG_OWNERS = 4, SG_BATCH = 16, SG_TIMEOUT_MS = 5000, SG_PACKET = 512 };
 static const char tcp_payload[] = "tcp-neighbor-after-udp-stop";
+static const char tcp_during_stun[] = "tcp-neighbor-during-stun-timeout";
 
 typedef struct udp_lane {
   native_io_sharded *runtime;
@@ -21,6 +23,8 @@ typedef struct udp_lane {
   cnet_listener listener;
   cnet_connection outbound, inbound;
   size_t connected, received, observes;
+  const char *expected_tcp;
+  size_t expected_tcp_size;
   int status;
   int failed_line;
   bool closing, drained;
@@ -82,8 +86,8 @@ static void sg_receive(void *user, cnet_connection connection,
       connection.generation == lane->inbound.generation) {
     sg_record(lane, sg_send(lane, connection, view->data, view->size));
   } else {
-    if (view->size > sizeof(tcp_payload) - lane->received ||
-        memcmp(view->data, tcp_payload + lane->received, view->size) != 0) {
+    if (view->size > lane->expected_tcp_size - lane->received ||
+        memcmp(view->data, lane->expected_tcp + lane->received, view->size) != 0) {
       sg_record(lane, SALTS_EPROTO);
       return;
     }
@@ -127,6 +131,81 @@ static int sg_pump(native_io_sharded_context *context, udp_lane *lane) {
   if (cmeta_monotonic_ms() >= deadline) { sg_record(lane, SALTS_ETIMEDOUT); goto cleanup; } \
   SG_OK(sg_pump(context, lane)); } } while (0)
 
+static int sg_binding(native_io_sharded_context *context, udp_lane *lane,
+                       const cnet_datagram_peer *destination, bool respond) {
+  const uint64_t deadline = cmeta_monotonic_ms() + SG_TIMEOUT_MS;
+  uint64_t now = cmeta_monotonic_ms(), tag = 0u;
+  stun_binding_transaction binding = {0};
+  stun_transaction_id_t first_id;
+  cnet_datagram_peer actual;
+  unsigned char bytes[SG_PACKET];
+  size_t size = 0u;
+  SG_OK(ice_cnet_datagram_receive_begin(&lane->udp[1]));
+  SG_OK(stun_binding_transaction_start(&binding, &lane->udp[0], destination,
+                                        1000u, 2u, now));
+  SG_REQUIRE(stun_binding_transaction_start(&binding, &lane->udp[0], destination,
+                                             1000u, 2u, now) == SALTS_EALREADY);
+  SG_REQUIRE(ice_cnet_datagram_poll_until(&lane->udp[0], deadline) == SALTS_ENOTSUP);
+  SG_UNTIL(lane->udp[1].receive_ready && !lane->udp[0].send_pending);
+  SG_OK(ice_cnet_datagram_receive_take(&lane->udp[1], &actual, bytes, sizeof(bytes), &size));
+  SG_REQUIRE(size == STUN_HEADER_SIZE && stun_is_stun_message(bytes, size));
+  memcpy(first_id.id, bytes + 8u, sizeof(first_id.id));
+  SG_REQUIRE(stun_binding_transaction_advance(&binding, now) == SALTS_EBUSY);
+
+  /* Deliberately drop attempt one. A real TCP exchange must complete while its
+   * STUN response is outstanding; the protocol clock advances deterministically. */
+  lane->expected_tcp = tcp_during_stun;
+  lane->expected_tcp_size = sizeof(tcp_during_stun);
+  lane->received = 0u;
+  SG_OK(sg_send(lane, lane->outbound, tcp_during_stun, sizeof(tcp_during_stun)));
+  while (lane->received != sizeof(tcp_during_stun)) {
+    SG_REQUIRE(cmeta_monotonic_ms() < deadline);
+    SG_OK(sg_pump(context, lane));
+    SG_REQUIRE(stun_binding_transaction_advance(&binding, now) == SALTS_EBUSY);
+    SG_REQUIRE(binding.attempt == 1u);
+  }
+  now = binding.deadline_ms;
+  SG_REQUIRE(stun_binding_transaction_advance(&binding, now) == SALTS_EBUSY);
+  SG_REQUIRE(binding.attempt == 2u);
+  SG_OK(ice_cnet_datagram_receive_begin(&lane->udp[1]));
+  SG_UNTIL(lane->udp[1].receive_ready && !lane->udp[0].send_pending);
+  SG_OK(ice_cnet_datagram_receive_take(&lane->udp[1], &actual, bytes, sizeof(bytes), &size));
+  SG_REQUIRE(size == STUN_HEADER_SIZE && stun_is_stun_message(bytes, size));
+  SG_REQUIRE(memcmp(bytes + 8u, first_id.id, sizeof(first_id.id)) != 0);
+  SG_REQUIRE(memcmp(bytes + 8u, binding.id.id, sizeof(binding.id.id)) == 0);
+
+  /* A late response to the expired attempt cannot settle the new attempt. */
+  size = stun_build_binding_response(bytes, &first_id, "203.0.113.17", 45678u);
+  SG_OK(ice_cnet_datagram_send_begin(&lane->udp[1], &actual, bytes, size, &tag));
+  SG_UNTIL(lane->udp[0].receive_ready && !lane->udp[1].send_pending);
+  SG_REQUIRE(stun_binding_transaction_advance(&binding, now) == SALTS_EBUSY);
+  SG_REQUIRE(binding.phase == STUN_BINDING_WAITING && binding.mapped.port == 0u);
+  SG_REQUIRE(binding.deadline_ms == now + 1000u);
+  SG_OK(ice_cnet_datagram_send_begin(&lane->udp[1], &actual, "?", 1u, &tag));
+  SG_UNTIL(lane->udp[0].receive_ready && !lane->udp[1].send_pending);
+  SG_REQUIRE(stun_binding_transaction_advance(&binding, now) == SALTS_EBUSY);
+  SG_REQUIRE(binding.deadline_ms == now + 1000u);
+
+  if (!respond) {
+    SG_REQUIRE(stun_binding_transaction_advance(&binding, binding.deadline_ms) == SALTS_ETIMEDOUT);
+    SG_REQUIRE(binding.phase == STUN_BINDING_DONE && binding.attempt == 2u);
+    SG_REQUIRE(binding.mapped.port == 0u && lane->udp[0].receive_armed);
+    SG_REQUIRE(stun_binding_transaction_advance(&binding, UINT64_MAX) == SALTS_ETIMEDOUT);
+    SG_REQUIRE(stun_binding_transaction_cancel(&binding) == SALTS_ETIMEDOUT);
+    goto cleanup;
+  }
+  size = stun_build_binding_response(bytes, &binding.id, "203.0.113.17", 45678u);
+  SG_OK(ice_cnet_datagram_send_begin(&lane->udp[1], &actual, bytes, size, &tag));
+  SG_UNTIL(lane->udp[0].receive_ready && !lane->udp[1].send_pending);
+  SG_OK(stun_binding_transaction_advance(&binding, now));
+  SG_REQUIRE(binding.phase == STUN_BINDING_DONE && binding.mapped.port == 45678u);
+  SG_REQUIRE(strcmp(binding.mapped.ip_str, "203.0.113.17") == 0);
+  SG_OK(stun_binding_transaction_advance(&binding, UINT64_MAX));
+  SG_OK(stun_binding_transaction_cancel(&binding));
+cleanup:
+  return lane->status;
+}
+
 static void sg_run(native_io_sharded_context *context, void *user) {
   udp_lane *lane = (udp_lane *)user;
   const uint64_t deadline = cmeta_monotonic_ms() + SG_TIMEOUT_MS;
@@ -142,6 +221,7 @@ static void sg_run(native_io_sharded_context *context, void *user) {
   cnet_destination_result chosen = {0};
   stun_transaction_id_t transaction = {{0}};
   stun_mapped_address_t mapped = {0};
+  stun_binding_transaction canceled = {0};
   unsigned char bytes[SG_PACKET], small[1];
   size_t size = 0u;
   uint64_t tag = 0u, rejected = 0u;
@@ -212,10 +292,42 @@ static void sg_run(native_io_sharded_context *context, void *user) {
   SG_REQUIRE(stun_parse_binding_response(bytes, size, &transaction, &mapped) == 0);
   SG_REQUIRE(mapped.port == 45678u && strcmp(mapped.ip_str, "203.0.113.17") == 0);
 
+  do {
+    status = cnet_listener_accept(&lane->listener, &lane->tcp, &observer, &lane->inbound);
+    if (status == SALTS_OK) break;
+    SG_REQUIRE(status == SALTS_ETIMEDOUT && cmeta_monotonic_ms() < deadline);
+    SG_OK(sg_pump(context, lane));
+  } while (true);
+  SG_UNTIL(lane->connected == 2u);
+  SG_OK(sg_binding(context, lane, &destination, true));
+  SG_OK(ice_cnet_datagram_destroy(&lane->udp[0]));
+  SG_OK(ice_cnet_datagram_init_external(&lane->udp[0], "127.0.0.1", 0u,
+                                        SG_PACKET, lane->backend));
+  SG_OK(sg_binding(context, lane, &destination, false));
+  /* Protocol timeout leaves receive demand owned by the transport. */
+  while (!stopped) {
+    status = ice_cnet_datagram_stop_external(&lane->udp[0], &stopped);
+    SG_REQUIRE(status == SALTS_OK || status == SALTS_EBUSY);
+    if (stopped) break;
+    SG_REQUIRE(cmeta_monotonic_ms() < deadline);
+    SG_OK(sg_pump(context, lane));
+  }
+  stopped = false;
+
+  /* A fresh transport episode owns the next single-use transaction. */
+  SG_OK(ice_cnet_datagram_destroy(&lane->udp[0]));
+  SG_OK(ice_cnet_datagram_init_external(&lane->udp[0], "127.0.0.1", 0u,
+                                        SG_PACKET, lane->backend));
+  SG_OK(stun_binding_transaction_start(&canceled, &lane->udp[0], &destination,
+                                        1000u, 2u, cmeta_monotonic_ms()));
+  tag = canceled.send_tag;
+  SG_REQUIRE(stun_binding_transaction_cancel(&canceled) == SALTS_ECANCELED);
+  SG_REQUIRE(canceled.phase == STUN_BINDING_DONE && lane->udp[0].send_pending);
+  SG_REQUIRE(stun_binding_transaction_advance(&canceled, UINT64_MAX) == SALTS_ECANCELED);
+
   /* Close one UDP endpoint with both a send and receive awaiting real terminal.
    * The retained application buffer and tag must survive until host routing. */
   SG_OK(ice_cnet_datagram_receive_begin(&lane->udp[0]));
-  SG_OK(ice_cnet_datagram_send_begin(&lane->udp[0], &destination, "x", 1u, &tag));
   SG_REQUIRE(ice_cnet_datagram_stop_external(&lane->udp[0], &stopped) == SALTS_EBUSY);
   SG_REQUIRE(!stopped && lane->udp[0].send_pending);
   SG_REQUIRE(ice_cnet_datagram_destroy(&lane->udp[0]) == SALTS_EBUSY);
@@ -243,17 +355,13 @@ static void sg_run(native_io_sharded_context *context, void *user) {
     SG_UNTIL(lane->udp[1].receive_ready);
     SG_OK(ice_cnet_datagram_receive_take(&lane->udp[1], &actual, bytes, sizeof(bytes), &size));
     if (size == 8u && memcmp(bytes, "neighbor", 8u) == 0) break;
-    SG_REQUIRE(size == 1u && bytes[0] == 'x');
+    SG_REQUIRE(size == STUN_HEADER_SIZE && stun_is_stun_message(bytes, size));
     SG_OK(ice_cnet_datagram_receive_begin(&lane->udp[1]));
   } while (true);
 
-  do {
-    status = cnet_listener_accept(&lane->listener, &lane->tcp, &observer, &lane->inbound);
-    if (status == SALTS_OK) break;
-    SG_REQUIRE(status == SALTS_ETIMEDOUT && cmeta_monotonic_ms() < deadline);
-    SG_OK(sg_pump(context, lane));
-  } while (true);
-  SG_UNTIL(lane->connected == 2u);
+  lane->expected_tcp = tcp_payload;
+  lane->expected_tcp_size = sizeof(tcp_payload);
+  lane->received = 0u;
   SG_OK(sg_send(lane, lane->outbound, tcp_payload, sizeof(tcp_payload)));
   SG_UNTIL(lane->received == sizeof(tcp_payload));
 

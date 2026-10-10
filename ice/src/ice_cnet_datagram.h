@@ -58,6 +58,9 @@ int ice_cnet_datagram_receive_take(ice_cnet_datagram_t *transport,
                                    cnet_datagram_peer *out_peer, void *data,
                                    size_t capacity, size_t *out_size);
 int ice_cnet_datagram_advance_external(ice_cnet_datagram_t *transport, size_t *out_events);
+/* One owned-backend poll, bounded by an absolute monotonic deadline. External
+ * transports reject this before observe; their host is the sole poll owner. */
+int ice_cnet_datagram_poll_until(ice_cnet_datagram_t *transport, uint64_t deadline);
 /* Closes admission without observing/waiting. out_stopped is authoritative
  * even on error; keep transport/storage/backend alive until true. Destroy on
  * an external instance makes one stop attempt and returns EBUSY until drained.

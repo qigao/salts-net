@@ -17,6 +17,8 @@
 #include "ice/salts_turn.h"
 #include "ice_cnet_datagram.h"
 #include "salts_ice_internal.h"
+#include "salts_turn_internal.h"
+#include "stun_binding_transaction.h"
 #include <platform.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
@@ -196,7 +198,7 @@ static int initialize_candidate_identity(salts_ice_agent_t *agent, ice_candidate
 
 static void rebuild_candidate_pairs(salts_ice_agent_t *agent);
 static int ice_candidates_equivalent(const ice_candidate_t *a, const ice_candidate_t *b);
-static void ice_agent_quiesce_transports(salts_ice_agent_t *agent);
+static int ice_agent_quiesce_transports(salts_ice_agent_t *agent);
 static void ice_agent_release(salts_ice_agent_t *agent);
 
 static void ice_agent_finish_close(salts_ice_agent_t *agent);
@@ -467,21 +469,34 @@ static ice_candidate_t *service_owner_candidate(salts_ice_agent_t *agent, ice_ca
 
 enum { ICE_DATAGRAM_SEND_TIMEOUT_MS = 3000 };
 
+static int destroy_candidate_transport(void **socket) {
+  ice_cnet_datagram_t *transport = (ice_cnet_datagram_t *)*socket;
+  int status;
+  if (!transport) return SALTS_OK;
+  status = ice_cnet_datagram_destroy(transport);
+  if (status != SALTS_OK) return status;
+  free(transport);
+  *socket = NULL;
+  return SALTS_OK;
+}
+
 static int create_candidate_socket(salts_ice_agent_t *agent, ice_candidate_t *candidate) {
   ice_candidate_runtime_t *runtime = ice_candidate_runtime(agent, candidate);
   ice_cnet_datagram_t *transport;
   uint16_t port = 0u;
   if (!candidate || !runtime || candidate->family != AF_INET || candidate->ip[0] == '\0') return -1;
+  if (agent->gathering_socket) return SALTS_EBUSY;
   transport = (ice_cnet_datagram_t *)calloc(1u, sizeof(*transport));
   if (!transport) return -1;
+  agent->gathering_socket = transport;
   if (ice_cnet_datagram_init(transport, candidate->ip, 0u, CNET_DATAGRAM_MAX_PAYLOAD_BYTES) !=
           SALTS_OK ||
       ice_cnet_datagram_port(transport, &port) != SALTS_OK) {
-    (void)ice_cnet_datagram_destroy(transport);
-    free(transport);
+    (void)destroy_candidate_transport(&agent->gathering_socket);
     return -1;
   }
   runtime->socket = transport;
+  agent->gathering_socket = NULL;
   candidate->port = port;
   return 0;
 }
@@ -494,21 +509,6 @@ static int send_udp_to_remote(ice_cnet_datagram_t *transport, const char *ip, ui
   return ice_cnet_datagram_send(transport, &peer, data, len, ICE_DATAGRAM_SEND_TIMEOUT_MS);
 }
 
-static void destroy_candidate_transport(void *socket) {
-  ice_cnet_datagram_t *transport = (ice_cnet_datagram_t *)socket;
-  if (!transport) return;
-  if (ice_cnet_datagram_destroy(transport) != SALTS_OK) return;
-  free(transport);
-}
-
-static int ice_datagram_peer_matches(const cnet_datagram_peer *left,
-                                     const cnet_datagram_peer *right) {
-  const size_t address_size = left && left->family == CNET_DATAGRAM_ADDRESS_IPV4 ? 4u : 16u;
-  return left && right && left->family == right->family && left->port == right->port &&
-         left->scope_id == right->scope_id &&
-         memcmp(left->address, right->address, address_size) == 0;
-}
-
 static int create_srflx_socket(salts_ice_agent_t *agent, const ice_candidate_t *base,
                                const char *server_host,
                                uint16_t server_port, int timeout_ms, int retries,
@@ -516,17 +516,20 @@ static int create_srflx_socket(salts_ice_agent_t *agent, const ice_candidate_t *
                                char *related_ip, size_t related_ip_len, uint16_t *related_port) {
   ice_cnet_datagram_t *transport;
   cnet_datagram_peer server_peer;
+  stun_binding_transaction transaction = {0};
   uint16_t local_port = 0u;
+  int result;
   if (!base || !server_host || !mapped || !socket_out || base->ip[0] == '\0') return -1;
   if (timeout_ms <= 0) timeout_ms = 3000;
   if (retries <= 0) retries = 3;
+  if (agent->gathering_socket) return SALTS_EBUSY;
   transport = (ice_cnet_datagram_t *)calloc(1u, sizeof(*transport));
   if (!transport) return -2;
+  agent->gathering_socket = transport;
   if (ice_cnet_datagram_init(transport, base->ip, 0u, STUN_MAX_MESSAGE_SIZE) != SALTS_OK ||
       ice_cnet_datagram_port(transport, &local_port) != SALTS_OK ||
       ice_cnet_datagram_resolve(server_host, server_port, &server_peer) != SALTS_OK) {
-    (void)ice_cnet_datagram_destroy(transport);
-    free(transport);
+    (void)destroy_candidate_transport(&agent->gathering_socket);
     return -4;
   }
   if (related_ip && related_ip_len > 0u) {
@@ -534,36 +537,31 @@ static int create_srflx_socket(salts_ice_agent_t *agent, const ice_candidate_t *
   }
   if (related_port) *related_port = local_port;
 
-  for (int attempt = 0; attempt < retries; ++attempt) {
-    stun_transaction_id_t transaction_id;
-    uint8_t request[STUN_HEADER_SIZE];
-    uint8_t response[STUN_MAX_MESSAGE_SIZE];
-    cnet_datagram_peer response_peer;
-    size_t response_size = 0u;
-    size_t request_size;
-    int rc;
-    if (stun_generate_transaction_id(&transaction_id) != 0) break;
-    request_size = stun_build_binding_request(request, &transaction_id);
-    if (ice_agent_wait_begin(agent, transport, ice_wake_datagram) != 0) break;
-    rc = ice_cnet_datagram_send(transport, &server_peer, request, request_size,
-                                (uint32_t)timeout_ms);
-    ice_agent_wait_end(agent, transport);
-    if (rc != SALTS_OK) break;
-    if (ice_agent_wait_begin(agent, transport, ice_wake_datagram) != 0) break;
-    rc = ice_cnet_datagram_receive(transport, &response_peer, response,
-                                   sizeof(response), &response_size,
-                                   (uint32_t)timeout_ms);
-    ice_agent_wait_end(agent, transport);
-    if (rc == SALTS_OK && ice_datagram_peer_matches(&response_peer, &server_peer) &&
-        stun_is_stun_message(response, response_size) &&
-        stun_parse_binding_response(response, response_size, &transaction_id, mapped) == 0) {
-      *socket_out = transport;
-      return 0;
+  /* Publish the wake target before admission; close cannot race an unregistered
+   * wait. The transaction owns matching/deadlines, the ICE Owner owns polling. */
+  if (ice_agent_wait_begin(agent, transport, ice_wake_datagram) != 0) {
+    result = SALTS_ECANCELED;
+  } else {
+    result = stun_binding_transaction_start(&transaction, transport, &server_peer,
+        (uint32_t)timeout_ms, (unsigned int)retries, cmeta_monotonic_ms());
+    while (result == SALTS_OK && transaction.phase != STUN_BINDING_DONE) {
+      if (ice_agent_is_closed(agent)) {
+        result = stun_binding_transaction_cancel(&transaction);
+        break;
+      }
+      result = stun_binding_transaction_advance(&transaction, cmeta_monotonic_ms());
+      if (transaction.phase == STUN_BINDING_DONE) break;
+      result = ice_cnet_datagram_poll_until(transport, transaction.deadline_ms);
+      if (result == SALTS_ETIMEDOUT) result = SALTS_OK;
     }
+    ice_agent_wait_end(agent, transport);
   }
-
-  (void)ice_cnet_datagram_destroy(transport);
-  free(transport);
+  if (result == SALTS_OK && !ice_agent_is_closed(agent)) {
+    *mapped = transaction.mapped;
+    *socket_out = transport; /* Borrowed until gather commits the candidate. */
+    return SALTS_OK;
+  }
+  (void)destroy_candidate_transport(&agent->gathering_socket);
   return -6;
 }
 
@@ -759,14 +757,14 @@ static void gather_srflx_candidates(salts_ice_agent_t *agent) {
                                        &related_port);
       if (result != 0 || mapped.family != STUN_ADDR_FAMILY_IPV4) {
         if (srflx_socket) {
-          destroy_candidate_transport(srflx_socket);
+          (void)destroy_candidate_transport(&agent->gathering_socket);
         }
         continue;
       }
       if (strcmp(mapped.ip_str, related_ip[0] ? related_ip : base->ip) == 0 &&
           mapped.port == (related_port ? related_port : base->port)) {
         if (srflx_socket) {
-          destroy_candidate_transport(srflx_socket);
+          (void)destroy_candidate_transport(&agent->gathering_socket);
         }
         continue;
       }
@@ -782,7 +780,7 @@ static void gather_srflx_candidates(salts_ice_agent_t *agent) {
       cand->port = mapped.port;
       cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX, 65534, 1);
       if (initialize_candidate_identity(agent, cand) != 0) {
-        destroy_candidate_transport(srflx_socket);
+        (void)destroy_candidate_transport(&agent->gathering_socket);
         return;
       }
 
@@ -790,6 +788,7 @@ static void gather_srflx_candidates(salts_ice_agent_t *agent) {
               sizeof(cand->related_ip) - 1);
       cand->related_port = related_port ? related_port : base->port;
       ice_candidate_runtime(agent, cand)->socket = srflx_socket;
+      agent->gathering_socket = NULL;
 
       agent->local_candidate_count++;
 
@@ -990,47 +989,52 @@ salts_ice_agent_t *ice_agent_create(const ice_config_t *config) {
 
 
 
-static void ice_agent_quiesce_transports(salts_ice_agent_t *agent) {
-  void *destroyed_sockets[ICE_MAX_CANDIDATES];
-  int destroyed_socket_count = 0;
-
-  if (!agent) {
-    return;
-  }
+static int ice_agent_quiesce_transports(salts_ice_agent_t *agent) {
+  int first, status;
+  bool visited[ICE_MAX_CANDIDATES] = {false};
+  if (!agent) return SALTS_OK;
+  first = destroy_candidate_transport(&agent->gathering_socket);
 
   for (int i = 0; i < ICE_MAX_TURN_SERVERS; i++) {
     if (agent->turn_clients[i]) {
-      turn_client_destroy(agent->turn_clients[i]);
-      agent->turn_clients[i] = NULL;
+      bool aliases[ICE_MAX_CANDIDATES];
+      for (int j = 0; j < ICE_MAX_CANDIDATES; ++j)
+        aliases[j] = agent->local_candidate_runtime[j].turn_client == agent->turn_clients[i];
+      status = turn_client_destroy_checked(agent->turn_clients[i]);
+      if (status == SALTS_OK) {
+        agent->turn_clients[i] = NULL;
+        for (int j = 0; j < ICE_MAX_CANDIDATES; ++j)
+          if (aliases[j]) agent->local_candidate_runtime[j].turn_client = NULL;
+      } else if (first == SALTS_OK) first = status;
     }
   }
 
-  for (int i = 0; i < agent->local_candidate_count; i++) {
+  for (int i = 0; i < ICE_MAX_CANDIDATES; i++) {
     ice_candidate_runtime_t *runtime = &agent->local_candidate_runtime[i];
-    runtime->turn_client = NULL;
     runtime->io_active = 0;
-    if (runtime->socket) {
-      int already_destroyed = 0;
-      for (int j = 0; j < destroyed_socket_count; j++) {
-        if (destroyed_sockets[j] == runtime->socket) {
-          already_destroyed = 1;
-          break;
-        }
+    if (runtime->socket && !visited[i]) {
+      bool aliases[ICE_MAX_CANDIDATES];
+      for (int j = 0; j < ICE_MAX_CANDIDATES; ++j) {
+        aliases[j] = agent->local_candidate_runtime[j].socket == runtime->socket;
+        if (aliases[j]) visited[j] = true;
       }
-      if (!already_destroyed) {
-        destroy_candidate_transport(runtime->socket);
-        destroyed_sockets[destroyed_socket_count++] = runtime->socket;
-      }
-      runtime->socket = NULL;
+      status = destroy_candidate_transport(&runtime->socket);
+      if (status == SALTS_OK) {
+        for (int j = 0; j < ICE_MAX_CANDIDATES; ++j)
+          if (aliases[j]) agent->local_candidate_runtime[j].socket = NULL;
+      } else if (first == SALTS_OK) first = status;
     }
   }
+  return first;
 }
 
 static void ice_agent_release(salts_ice_agent_t *agent) {
   ice_progress_owner_t *progress;
   if (!agent)
     return;
-  ice_agent_quiesce_transports(agent);
+  /* Keep the enclosing Owner and every failed handle available for another
+   * destroy attempt. Successful siblings have already been cleared exactly once. */
+  if (ice_agent_quiesce_transports(agent) != SALTS_OK) return;
   progress = ice_agent_progress(agent);
   if (progress) {
     cmeta_mutex_destroy(&progress->mutex);
@@ -1215,6 +1219,7 @@ int ice_agent_gather_candidates(salts_ice_agent_t *agent) {
 
   /* 1. Gather host candidates */
   rc = gather_host_candidates(agent);
+  if (agent->gathering_socket) rc = SALTS_EBUSY;
   if (ice_agent_is_closed(agent)) {
     ice_agent_owner_leave(agent);
     return ICE_AGENT_ERROR_CLOSED;
@@ -1243,6 +1248,12 @@ int ice_agent_gather_candidates(salts_ice_agent_t *agent) {
     if (ice_agent_is_closed(agent)) {
       ice_agent_owner_leave(agent);
       return ICE_AGENT_ERROR_CLOSED;
+    }
+    if (agent->gathering_socket) {
+      set_gathering_state(agent, ICE_GATHERING_COMPLETE);
+      set_state(agent, ICE_STATE_FAILED);
+      ice_agent_owner_leave(agent);
+      return SALTS_EBUSY;
     }
   }
 

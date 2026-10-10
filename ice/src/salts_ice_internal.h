@@ -22,6 +22,10 @@ typedef struct {
 struct salts_ice_agent_s {
   ice_config_t config;
   void *progress_owner_reserved;
+  /* One unpublished gathering socket, owned until commit or successful cleanup.
+   * A failed cleanup prevents another allocation; candidate slots own committed
+   * sockets. Neither handle is discarded by a failed destroy. */
+  void *gathering_socket;
 
   ice_state_t state;
   ice_gathering_state_t gathering_state;

@@ -396,6 +396,62 @@ Local Windows MSVC Release validation of this transaction slice passed all
 37 project CTests, ten consecutive runs each of `ice_cnet_sg` and `stun_cnet`,
 and both independent installed SDK C11/C++17 consumer tests.
 
+ICE server-reflexive gathering now drives the same private Binding transaction,
+including response matching within one attempt and the existing cross-thread
+close/wake boundary. Successful gathering transfers the actual bound socket to
+the candidate; it does not replace the NAT mapping with another endpoint. One
+Agent-owned unpublished socket slot covers initialization and rejected candidate
+cleanup. A failed cleanup retains that slot and prevents another allocation.
+Agent destruction retains failed candidate sockets (including aliases) and TURN
+clients and consumes only successfully destroyed children. A private checked
+TURN cleanup supplies the result needed by that enclosing Owner. The public
+void destruction APIs still cannot report incomplete cleanup to callers.
+
+The `ice_stun_gather` CTest exercises real public gathering against a local STUN
+server: a wrong ID followed by a valid response, the related bound port, close
+from the candidate callback, and cross-thread close while awaiting a response.
+`ice_cnet_sg` additionally verifies that an Agent retains both an unpublished
+socket and aliased candidate sockets after external stop returns busy, then
+releases them only after the host routes actual terminals and retries destroy.
+
+Local Windows MSVC Release validation of this gathering/cleanup slice passed
+all 38 project CTests, ten consecutive runs each of `ice_stun_gather` and
+`ice_cnet_sg`, and both independent installed SDK C11/C++17 consumer tests.
+
+### Lifecycle API follow-up proposal (#50, not implemented)
+
+Review found that the legacy synchronous `stun_binding_request` has a stack
+transport and no way to return a retained cleanup Owner. Its stop-timeout path
+therefore remains unresolved. Email/LDAP/SNMP/TURN/ICE void destruction also
+cannot tell callers whether the object was released. The private ICE changes
+above preserve enclosing ownership but do not close either public API gap.
+
+The proposed additive surface is an opaque STUN request Owner and checked
+destruction for protocol clients. A request would expose explicit create/start,
+progress/result, stop and destroy phases. Stop would take a total cleanup budget;
+destroy would take an owner pointer-to-pointer, clear it only when consumed, and
+otherwise leave the same handle available for retry. Transport settlement and
+protocol result remain separate. No request input, callback context or backend
+may be released while cleanup is outstanding. Initial public scope should be
+owned STUN and ICE/TURN cleanup; Email/LDAP/SNMP should follow the same reviewed
+contract without introducing a generic protocol Manager.
+
+The legacy signatures cannot express bounded cleanup failure with returned
+ownership. Merely returning an error or allocating the wrapper on the heap does
+not solve that gap. An unbounded cleanup loop would change latency guarantees;
+a process-global retirement queue would introduce a hidden lifetime owner. The
+proposal instead gives new consumers explicit ownership and keeps the legacy
+STUN limitation visible pending a separately agreed compatibility/deprecation
+decision. No new public declarations have been added by this slice.
+
+Migration would be opt-in, preserving existing ABI while callers switch to
+checked stop/destroy and keep handles on failure. Reverting requires draining
+all live Owners before replacing headers/libraries. Acceptance must include
+partial-create cleanup, exhausted cleanup budget, retry after real terminal,
+shared child aliases, and installed C11/C++17 consumers of the new public API.
+DNS remains a separate open boundary: synchronous UDP `getaddrinfo` currently
+precedes the transaction deadline and cannot be woken by the ICE close target.
+
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
 [SaltsUtils 4.3 prerelease](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2), vcpkg runs in manifest mode

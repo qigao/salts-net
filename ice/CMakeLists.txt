@@ -42,12 +42,20 @@ cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ice)
 # ============================================================================
 
 if(BUILD_TESTING)
+  add_executable(test_ice_stun_gather tests/test_ice_stun_gather.c)
+  target_link_libraries(test_ice_stun_gather PRIVATE SaltsNet::ICE Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_ice_stun_gather PRIVATE ws2_32)
+  endif()
+  add_test(NAME ice_stun_gather COMMAND test_ice_stun_gather)
+  set_target_properties(test_ice_stun_gather PROPERTIES FOLDER ice/tests)
+
   add_executable(test_ice_cnet_sg tests/test_ice_cnet_sg.c
     src/ice_cnet_datagram.c src/salts_stun.c)
   target_include_directories(test_ice_cnet_sg PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(test_ice_cnet_sg PRIVATE
-    Salts::CNet Salts::Core Salts::TinyTest)
+    SaltsNet::ICE Salts::CNet Salts::Core Salts::TinyTest)
   if(WIN32)
     target_link_libraries(test_ice_cnet_sg PRIVATE ws2_32)
   endif()

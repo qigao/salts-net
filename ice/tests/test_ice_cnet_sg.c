@@ -1,6 +1,7 @@
 #include "ice_cnet_datagram.h"
 #include "ice/salts_stun.h"
 #include "stun_binding_transaction.h"
+#include "salts_ice_internal.h"
 #include <cnet/destination_policy.h>
 #include <cnet/sg_host.h>
 #include <cmeta_buffer.h>
@@ -8,6 +9,7 @@
 #include <salts/thread.h>
 #include <tinytest.h>
 #include <string.h>
+#include <stdlib.h>
 
 enum { SG_OWNERS = 4, SG_BATCH = 16, SG_TIMEOUT_MS = 5000, SG_PACKET = 512 };
 static const char tcp_payload[] = "tcp-neighbor-after-udp-stop";
@@ -19,6 +21,8 @@ typedef struct udp_lane {
   native_io_backend *backend;
   native_io_sharded_host_lease lease;
   ice_cnet_datagram_t udp[2];
+  salts_ice_agent_t *cleanup_agent;
+  ice_cnet_datagram_t *cleanup_udp; /* Routing alias; the Agent owns storage. */
   cnet_client tcp;
   cnet_listener listener;
   cnet_connection outbound, inbound;
@@ -47,7 +51,7 @@ static void sg_record(udp_lane *lane, int status) {
 static bool sg_quiescent(void *user) {
   udp_lane *lane = (udp_lane *)user;
   return !lane->udp[0].initialized && !lane->udp[1].initialized &&
-         !lane->tcp.impl && !lane->listener.impl;
+         !lane->tcp.impl && !lane->listener.impl && !lane->cleanup_agent;
 }
 
 static int sg_send(udp_lane *lane, cnet_connection connection, const void *data, size_t size) {
@@ -101,7 +105,7 @@ static void sg_receive(void *user, cnet_connection connection,
 static int sg_pump(native_io_sharded_context *context, udp_lane *lane) {
   native_io_sharded_completion batch[SG_BATCH];
   cnet_client *clients[] = {&lane->tcp};
-  cnet_datagram *datagrams[2];
+  cnet_datagram *datagrams[3];
   size_t count = 0u, udp_count = 0u, events, accepts, sharded;
   cnet_sg_host_routes routes = {sizeof(routes), CNET_SG_HOST_ROUTING_VERSION,
       lane->listener.impl ? &lane->listener : NULL, clients, lane->tcp.impl ? 1u : 0u};
@@ -110,6 +114,10 @@ static int sg_pump(native_io_sharded_context *context, udp_lane *lane) {
     if (!lane->udp[i].initialized) continue;
     datagrams[udp_count++] = &lane->udp[i].datagram;
     sg_record(lane, ice_cnet_datagram_advance_external(&lane->udp[i], &events));
+  }
+  if (lane->cleanup_udp && lane->cleanup_udp->initialized) {
+    datagrams[udp_count++] = &lane->cleanup_udp->datagram;
+    sg_record(lane, ice_cnet_datagram_advance_external(lane->cleanup_udp, &events));
   }
   if (lane->tcp.impl) sg_record(lane, cnet_client_advance_external(&lane->tcp, &events));
   status = native_io_sharded_context_observe_host(context, lane->lease, batch,
@@ -202,6 +210,49 @@ static int sg_binding(native_io_sharded_context *context, udp_lane *lane,
   SG_REQUIRE(strcmp(binding.mapped.ip_str, "203.0.113.17") == 0);
   SG_OK(stun_binding_transaction_advance(&binding, UINT64_MAX));
   SG_OK(stun_binding_transaction_cancel(&binding));
+cleanup:
+  return lane->status;
+}
+
+static int sg_retained_cleanup(native_io_sharded_context *context, udp_lane *lane,
+                                const cnet_datagram_peer *destination, bool unpublished) {
+  const uint64_t deadline = cmeta_monotonic_ms() + SG_TIMEOUT_MS;
+  ice_config_t config = ice_default_config();
+  uint64_t tag;
+  bool stopped = false;
+  int status;
+  lane->cleanup_agent = ice_agent_create(&config);
+  SG_REQUIRE(lane->cleanup_agent != NULL);
+  lane->cleanup_udp = (ice_cnet_datagram_t *)calloc(1u, sizeof(*lane->cleanup_udp));
+  SG_REQUIRE(lane->cleanup_udp != NULL);
+  if (unpublished) lane->cleanup_agent->gathering_socket = lane->cleanup_udp;
+  else {
+    lane->cleanup_agent->local_candidate_count = 2;
+    lane->cleanup_agent->local_candidate_runtime[0].socket = lane->cleanup_udp;
+    lane->cleanup_agent->local_candidate_runtime[1].socket = lane->cleanup_udp;
+  }
+  SG_OK(ice_cnet_datagram_init_external(lane->cleanup_udp, "127.0.0.1", 0u,
+                                        SG_PACKET, lane->backend));
+  SG_OK(ice_cnet_datagram_receive_begin(lane->cleanup_udp));
+  SG_OK(ice_cnet_datagram_send_begin(lane->cleanup_udp, destination, "retained", 8u, &tag));
+  ice_agent_destroy(lane->cleanup_agent);
+  SG_REQUIRE(ice_agent_get_state(lane->cleanup_agent) == ICE_STATE_CLOSED);
+  SG_REQUIRE(lane->cleanup_udp->initialized && lane->cleanup_udp->send_pending);
+  if (unpublished) SG_REQUIRE(lane->cleanup_agent->gathering_socket == lane->cleanup_udp);
+  else {
+    SG_REQUIRE(lane->cleanup_agent->local_candidate_runtime[0].socket == lane->cleanup_udp);
+    SG_REQUIRE(lane->cleanup_agent->local_candidate_runtime[1].socket == lane->cleanup_udp);
+  }
+  while (!stopped) {
+    SG_REQUIRE(cmeta_monotonic_ms() < deadline);
+    SG_OK(sg_pump(context, lane));
+    status = ice_cnet_datagram_stop_external(lane->cleanup_udp, &stopped);
+    SG_REQUIRE(status == SALTS_OK || status == SALTS_EBUSY);
+  }
+  /* The successful retry consumes each shared socket exactly once. */
+  ice_agent_destroy(lane->cleanup_agent);
+  lane->cleanup_agent = NULL;
+  lane->cleanup_udp = NULL;
 cleanup:
   return lane->status;
 }
@@ -364,6 +415,8 @@ static void sg_run(native_io_sharded_context *context, void *user) {
   lane->received = 0u;
   SG_OK(sg_send(lane, lane->outbound, tcp_payload, sizeof(tcp_payload)));
   SG_UNTIL(lane->received == sizeof(tcp_payload));
+  SG_OK(sg_retained_cleanup(context, lane, &destination, false));
+  SG_OK(sg_retained_cleanup(context, lane, &destination, true));
 
 cleanup:
   lane->closing = true;
@@ -374,6 +427,18 @@ cleanup:
   if (lane->lease.generation) {
     const uint64_t drain_deadline = cmeta_monotonic_ms() + SG_TIMEOUT_MS;
     while (!sg_quiescent(lane) && cmeta_monotonic_ms() < drain_deadline) {
+      if (lane->cleanup_agent) {
+        bool cleanup_stopped = true;
+        if (lane->cleanup_udp && lane->cleanup_udp->initialized) {
+          status = ice_cnet_datagram_stop_external(lane->cleanup_udp, &cleanup_stopped);
+          if (status != SALTS_EBUSY) sg_record(lane, status);
+        }
+        if (cleanup_stopped) {
+          ice_agent_destroy(lane->cleanup_agent);
+          lane->cleanup_agent = NULL;
+          lane->cleanup_udp = NULL;
+        }
+      }
       for (size_t i = 0u; i < 2u; ++i) {
         if (!lane->udp[i].initialized) continue;
         status = ice_cnet_datagram_destroy(&lane->udp[i]);

@@ -78,5 +78,8 @@ int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer
                               void *data, size_t capacity, size_t *out_size, uint32_t timeout_ms);
 int ice_cnet_datagram_wake(ice_cnet_datagram_t *transport);
 int ice_cnet_datagram_destroy(ice_cnet_datagram_t *transport);
+/* Owned stop budget; external mode still makes one non-observing stop attempt. */
+int ice_cnet_datagram_stop(ice_cnet_datagram_t *transport, uint32_t timeout_ms);
+int ice_cnet_datagram_destroy_budget(ice_cnet_datagram_t *transport, uint32_t timeout_ms);
 
 #endif

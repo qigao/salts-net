@@ -7,7 +7,7 @@
 # SaltsNet::ICE - ICE/STUN/TURN library
 # ============================================================================
 
-add_library(SaltsICE SHARED src/ice_cnet_datagram.c src/salts_stun.c src/salts_ice.c
+add_library(SaltsICE SHARED src/ice_cnet_datagram.c src/salts_stun.c src/stun_request.c src/salts_ice.c
                             src/salts_turn.c)
 cmake_config_api(SaltsICE SALTSNET_ICE_C_API)
 cmake_config_target(
@@ -42,6 +42,14 @@ cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ice)
 # ============================================================================
 
 if(BUILD_TESTING)
+  add_executable(test_stun_request tests/test_stun_request.c)
+  target_link_libraries(test_stun_request PRIVATE SaltsNet::ICE Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_stun_request PRIVATE ws2_32)
+  endif()
+  add_test(NAME stun_request COMMAND test_stun_request)
+  set_target_properties(test_stun_request PROPERTIES FOLDER ice/tests)
+
   add_executable(test_ice_stun_gather tests/test_ice_stun_gather.c)
   target_link_libraries(test_ice_stun_gather PRIVATE SaltsNet::ICE Salts::Core Salts::TinyTest)
   if(WIN32)

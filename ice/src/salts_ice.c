@@ -17,7 +17,6 @@
 #include "ice/salts_turn.h"
 #include "ice_cnet_datagram.h"
 #include "salts_ice_internal.h"
-#include "salts_turn_internal.h"
 #include "stun_binding_transaction.h"
 #include <platform.h>
 #include <salts/clock.h>
@@ -198,8 +197,8 @@ static int initialize_candidate_identity(salts_ice_agent_t *agent, ice_candidate
 
 static void rebuild_candidate_pairs(salts_ice_agent_t *agent);
 static int ice_candidates_equivalent(const ice_candidate_t *a, const ice_candidate_t *b);
-static int ice_agent_quiesce_transports(salts_ice_agent_t *agent);
-static void ice_agent_release(salts_ice_agent_t *agent);
+static int ice_agent_quiesce_transports(salts_ice_agent_t *agent, uint32_t timeout_ms);
+static int ice_agent_release(salts_ice_agent_t *agent, uint32_t timeout_ms);
 
 static void ice_agent_finish_close(salts_ice_agent_t *agent);
 
@@ -469,15 +468,19 @@ static ice_candidate_t *service_owner_candidate(salts_ice_agent_t *agent, ice_ca
 
 enum { ICE_DATAGRAM_SEND_TIMEOUT_MS = 3000 };
 
-static int destroy_candidate_transport(void **socket) {
+static int destroy_candidate_transport_budget(void **socket, uint32_t timeout_ms) {
   ice_cnet_datagram_t *transport = (ice_cnet_datagram_t *)*socket;
   int status;
   if (!transport) return SALTS_OK;
-  status = ice_cnet_datagram_destroy(transport);
+  status = ice_cnet_datagram_destroy_budget(transport, timeout_ms);
   if (status != SALTS_OK) return status;
   free(transport);
   *socket = NULL;
   return SALTS_OK;
+}
+
+static int destroy_candidate_transport(void **socket) {
+  return destroy_candidate_transport_budget(socket, ICE_CNET_STOP_TIMEOUT_MS);
 }
 
 static int create_candidate_socket(salts_ice_agent_t *agent, ice_candidate_t *candidate) {
@@ -989,18 +992,26 @@ salts_ice_agent_t *ice_agent_create(const ice_config_t *config) {
 
 
 
-static int ice_agent_quiesce_transports(salts_ice_agent_t *agent) {
+static uint32_t ice_cleanup_remaining(uint64_t started, uint32_t budget) {
+  uint64_t elapsed = cmeta_monotonic_ms() - started;
+  return elapsed < budget ? budget - (uint32_t)elapsed : 0u;
+}
+
+static int ice_agent_quiesce_transports(salts_ice_agent_t *agent, uint32_t timeout_ms) {
+  const uint64_t started = cmeta_monotonic_ms();
   int first, status;
   bool visited[ICE_MAX_CANDIDATES] = {false};
   if (!agent) return SALTS_OK;
-  first = destroy_candidate_transport(&agent->gathering_socket);
+  first = destroy_candidate_transport_budget(&agent->gathering_socket,
+      ice_cleanup_remaining(started, timeout_ms));
 
   for (int i = 0; i < ICE_MAX_TURN_SERVERS; i++) {
     if (agent->turn_clients[i]) {
       bool aliases[ICE_MAX_CANDIDATES];
       for (int j = 0; j < ICE_MAX_CANDIDATES; ++j)
         aliases[j] = agent->local_candidate_runtime[j].turn_client == agent->turn_clients[i];
-      status = turn_client_destroy_checked(agent->turn_clients[i]);
+      status = turn_client_destroy_checked(&agent->turn_clients[i],
+          ice_cleanup_remaining(started, timeout_ms));
       if (status == SALTS_OK) {
         agent->turn_clients[i] = NULL;
         for (int j = 0; j < ICE_MAX_CANDIDATES; ++j)
@@ -1018,7 +1029,8 @@ static int ice_agent_quiesce_transports(salts_ice_agent_t *agent) {
         aliases[j] = agent->local_candidate_runtime[j].socket == runtime->socket;
         if (aliases[j]) visited[j] = true;
       }
-      status = destroy_candidate_transport(&runtime->socket);
+      status = destroy_candidate_transport_budget(&runtime->socket,
+          ice_cleanup_remaining(started, timeout_ms));
       if (status == SALTS_OK) {
         for (int j = 0; j < ICE_MAX_CANDIDATES; ++j)
           if (aliases[j]) agent->local_candidate_runtime[j].socket = NULL;
@@ -1028,13 +1040,15 @@ static int ice_agent_quiesce_transports(salts_ice_agent_t *agent) {
   return first;
 }
 
-static void ice_agent_release(salts_ice_agent_t *agent) {
+static int ice_agent_release(salts_ice_agent_t *agent, uint32_t timeout_ms) {
   ice_progress_owner_t *progress;
+  int status;
   if (!agent)
-    return;
+    return SALTS_OK;
   /* Keep the enclosing Owner and every failed handle available for another
    * destroy attempt. Successful siblings have already been cleared exactly once. */
-  if (ice_agent_quiesce_transports(agent) != SALTS_OK) return;
+  status = ice_agent_quiesce_transports(agent, timeout_ms);
+  if (status != SALTS_OK) return status;
   progress = ice_agent_progress(agent);
   if (progress) {
     cmeta_mutex_destroy(&progress->mutex);
@@ -1042,15 +1056,35 @@ static void ice_agent_release(salts_ice_agent_t *agent) {
     agent->progress_owner_reserved = NULL;
   }
   free(agent);
+  return SALTS_OK;
+}
+
+int ice_agent_destroy_checked(salts_ice_agent_t **owner, uint32_t timeout_ms) {
+  salts_ice_agent_t *agent;
+  ice_progress_owner_t *progress;
+  int status;
+  if (!owner) return SALTS_EINVAL;
+  agent = *owner;
+  if (!agent) return SALTS_OK;
+  progress = ice_agent_progress(agent);
+  if (progress) {
+    cmeta_mutex_lock(&progress->mutex);
+    if (progress->owner_active) {
+      cmeta_mutex_unlock(&progress->mutex);
+      return SALTS_EBUSY;
+    }
+    ice_progress_set_current_thread_owner(progress);
+    cmeta_mutex_unlock(&progress->mutex);
+  }
+  ice_agent_close(agent);
+  ice_agent_owner_leave(agent);
+  status = ice_agent_release(agent, timeout_ms);
+  if (status == SALTS_OK) *owner = NULL;
+  return status;
 }
 
 void ice_agent_destroy(salts_ice_agent_t *agent) {
-  if (!agent) return;
-
-  ice_agent_owner_enter(agent);
-  ice_agent_close(agent);
-  ice_agent_owner_leave(agent);
-  ice_agent_release(agent);
+  (void)ice_agent_destroy_checked(&agent, ICE_CNET_STOP_TIMEOUT_MS);
 }
 
 

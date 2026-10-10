@@ -143,6 +143,18 @@ SALTSNET_ICE_C_API salts_turn_client_t *turn_client_create(const turn_client_con
  */
 SALTSNET_ICE_C_API void turn_client_destroy(salts_turn_client_t *client);
 
+/** Close/drain and consume the client with one total cleanup budget.
+ * Same non-overlapping Owner thread as other TURN operations; no concurrent
+ * calls or callbacks may retain the client. timeout_ms=0 initiates stop without
+ * waiting. Returns Salts status; only OK clears *client. On error retain the
+ * handle and retry this function; protocol operations are no longer permitted.
+ * NULL client argument is EINVAL; NULL *client is idempotent OK.
+ * Example: int rc = turn_client_destroy_checked(&client, 1000);
+ * If rc != 0, retain client and retry cleanup on its Owner.
+ * Legacy void destroy cannot report cleanup failure; prefer this entry point. */
+SALTSNET_ICE_C_API int turn_client_destroy_checked(salts_turn_client_t **client,
+                                                  uint32_t timeout_ms);
+
 /**
  * Allocate relay address.
  *

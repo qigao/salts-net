@@ -235,7 +235,8 @@ static int sg_retained_cleanup(native_io_sharded_context *context, udp_lane *lan
                                         SG_PACKET, lane->backend));
   SG_OK(ice_cnet_datagram_receive_begin(lane->cleanup_udp));
   SG_OK(ice_cnet_datagram_send_begin(lane->cleanup_udp, destination, "retained", 8u, &tag));
-  ice_agent_destroy(lane->cleanup_agent);
+  SG_REQUIRE(ice_agent_destroy_checked(&lane->cleanup_agent, 0u) == SALTS_EBUSY);
+  SG_REQUIRE(lane->cleanup_agent != NULL);
   SG_REQUIRE(ice_agent_get_state(lane->cleanup_agent) == ICE_STATE_CLOSED);
   SG_REQUIRE(lane->cleanup_udp->initialized && lane->cleanup_udp->send_pending);
   if (unpublished) SG_REQUIRE(lane->cleanup_agent->gathering_socket == lane->cleanup_udp);
@@ -250,8 +251,8 @@ static int sg_retained_cleanup(native_io_sharded_context *context, udp_lane *lan
     SG_REQUIRE(status == SALTS_OK || status == SALTS_EBUSY);
   }
   /* The successful retry consumes each shared socket exactly once. */
-  ice_agent_destroy(lane->cleanup_agent);
-  lane->cleanup_agent = NULL;
+  SG_OK(ice_agent_destroy_checked(&lane->cleanup_agent, 0u));
+  SG_REQUIRE(lane->cleanup_agent == NULL);
   lane->cleanup_udp = NULL;
 cleanup:
   return lane->status;

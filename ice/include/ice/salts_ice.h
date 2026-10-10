@@ -330,6 +330,20 @@ SALTSNET_ICE_C_API salts_ice_agent_t *ice_agent_create(const ice_config_t *confi
  */
 SALTSNET_ICE_C_API void ice_agent_destroy(salts_ice_agent_t *agent);
 
+/** Close and destroy with one total I/O cleanup budget across all child sockets
+ * and TURN clients. timeout_ms=0 initiates stop without waiting. Synchronous
+ * close callbacks must return promptly; their execution cannot be preempted.
+ * Returns Salts status; only OK clears *agent. Errors retain the closed Owner
+ * and failed children for another checked destroy; successful siblings are
+ * already consumed. EBUSY from an active/reentrant Owner makes no changes.
+ * Requires exclusive lifecycle access, never from callbacks or concurrently
+ * with other calls (including close). NULL argument is EINVAL; NULL *agent OK.
+ * Example: int rc = ice_agent_destroy_checked(&agent, 1000);
+ * If rc != 0, retain agent and retry after the active operation/drain completes.
+ * Legacy void destroy cannot report cleanup failure; prefer this entry point. */
+SALTSNET_ICE_C_API int ice_agent_destroy_checked(salts_ice_agent_t **agent,
+                                                uint32_t timeout_ms);
+
 /**
  * Set callbacks
  *

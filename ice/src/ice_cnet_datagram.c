@@ -376,7 +376,7 @@ int ice_cnet_datagram_wake(ice_cnet_datagram_t *transport) {
   return cnet_datagram_wake(&transport->datagram);
 }
 
-int ice_cnet_datagram_destroy(ice_cnet_datagram_t *transport) {
+int ice_cnet_datagram_stop(ice_cnet_datagram_t *transport, uint32_t timeout_ms) {
   int status;
   if (transport == NULL) return SALTS_EINVAL;
   if (!transport->initialized) return SALTS_OK;
@@ -387,14 +387,25 @@ int ice_cnet_datagram_destroy(ice_cnet_datagram_t *transport) {
       if (status != SALTS_OK) return status;
       if (!stopped) return SALTS_EBUSY;
     } else {
-      status = cnet_datagram_stop(&transport->datagram, ICE_CNET_STOP_TIMEOUT_MS);
+      transport->stopping = 1;
+      status = cnet_datagram_stop(&transport->datagram, timeout_ms);
     }
     if (status != SALTS_OK) return status;
     transport->stopped = 1;
   }
+  return SALTS_OK;
+}
+
+int ice_cnet_datagram_destroy_budget(ice_cnet_datagram_t *transport, uint32_t timeout_ms) {
+  int status = ice_cnet_datagram_stop(transport, timeout_ms);
+  if (status != SALTS_OK || !transport->initialized) return status;
   status = cnet_datagram_destroy(&transport->datagram);
   if (status != SALTS_OK) return status;
   free(transport->receive_storage);
   memset(transport, 0, sizeof(*transport));
   return SALTS_OK;
+}
+
+int ice_cnet_datagram_destroy(ice_cnet_datagram_t *transport) {
+  return ice_cnet_datagram_destroy_budget(transport, ICE_CNET_STOP_TIMEOUT_MS);
 }

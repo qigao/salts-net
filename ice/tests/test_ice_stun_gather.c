@@ -1,11 +1,13 @@
 #include "stun_test_server.h"
 #include "ice/salts_ice.h"
 #include <fmt.h>
+#include <salts/error_codes.h>
 #include <tinytest.h>
 
 typedef struct gather_result {
   ice_candidate_t candidate;
   int count;
+  int destroy_status;
 } gather_result;
 
 static void close_after_srflx(salts_ice_agent_t *agent, const ice_candidate_t *candidate,
@@ -14,6 +16,7 @@ static void close_after_srflx(salts_ice_agent_t *agent, const ice_candidate_t *c
   if (candidate->type != ICE_CANDIDATE_TYPE_SRFLX) return;
   result->candidate = *candidate;
   ++result->count;
+  result->destroy_status = ice_agent_destroy_checked(&agent, 0u);
   ice_agent_close(agent);
 }
 
@@ -60,11 +63,14 @@ spec("ICE gathering with the shared STUN Binding transaction") {
       check_equal(server.received_requests, 1);
       check_equal(result.count, cancel ? 0 : 1);
       if (!cancel) {
+        check_equal(result.destroy_status, SALTS_EBUSY);
         check_equal(result.candidate.ip, "203.0.113.17");
         check_equal(result.candidate.port, 45678u);
         check_equal(result.candidate.related_port, server.request_port);
       }
-      ice_agent_destroy(agent);
+      check_equal(ice_agent_destroy_checked(&agent, 1000u), SALTS_OK);
+      check(agent == NULL);
+      check_equal(ice_agent_destroy_checked(&agent, 0u), SALTS_OK);
     }
   }
 }

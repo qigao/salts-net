@@ -403,8 +403,8 @@ the candidate; it does not replace the NAT mapping with another endpoint. One
 Agent-owned unpublished socket slot covers initialization and rejected candidate
 cleanup. A failed cleanup retains that slot and prevents another allocation.
 Agent destruction retains failed candidate sockets (including aliases) and TURN
-clients and consumes only successfully destroyed children. A private checked
-TURN cleanup supplies the result needed by that enclosing Owner. The public
+clients and consumes only successfully destroyed children. Checked
+TURN cleanup supplies the result needed by that enclosing Owner. The legacy
 void destruction APIs still cannot report incomplete cleanup to callers.
 
 The `ice_stun_gather` CTest exercises real public gathering against a local STUN
@@ -418,39 +418,62 @@ Local Windows MSVC Release validation of this gathering/cleanup slice passed
 all 38 project CTests, ten consecutive runs each of `ice_stun_gather` and
 `ice_cnet_sg`, and both independent installed SDK C11/C++17 consumer tests.
 
-### Lifecycle API follow-up proposal (#50, not implemented)
+### Explicit request and checked cleanup APIs (#50)
+
+The additive API design was approved on 2026-10-10 and is implemented as follows:
+`stun_request_create` allocates one opaque Owner without I/O; `start` accepts a
+numeric IPv4/IPv6 address and copies all inputs during the call. It is single-use
+once valid input reaches initialization, including failed initialization. The
+Owner holds one bounded datagram and one Binding transaction (one send and one
+copied receive slot, 548 bytes each). `progress` polls only its owned backend with
+a caller-specified maximum wait, capped by the protocol deadline. `result`
+distinguishes pending from a terminal protocol status and commits mapped output
+only on success. All operations are non-overlapping on one thread; no public
+callbacks, borrowed backend, DNS or cross-thread cancellation are added.
+
+`stun_request_stop` cancels an unfinished transaction and drains with one total
+budget, retaining the Owner on failure. A zero budget initiates stop without
+waiting. `stun_request_destroy` requires successful stop, returns busy otherwise,
+and clears the caller's pointer only on success. ICE/TURN checked destroy uses
+the same pointer-to-pointer convention and a total cleanup budget across child
+resources. Failed cleanup leaves the object closed/stopping and retryable; only
+cleanup/query operations are then valid. Null owner values are idempotent; null
+pointer-to-pointer arguments are invalid. No failed cleanup is silently retired.
+ICE callbacks must not destroy; checked destruction rejects an active Owner.
 
 Review found that the legacy synchronous `stun_binding_request` has a stack
 transport and no way to return a retained cleanup Owner. Its stop-timeout path
 therefore remains unresolved. Email/LDAP/SNMP/TURN/ICE void destruction also
-cannot tell callers whether the object was released. The private ICE changes
-above preserve enclosing ownership but do not close either public API gap.
-
-The proposed additive surface is an opaque STUN request Owner and checked
-destruction for protocol clients. A request would expose explicit create/start,
-progress/result, stop and destroy phases. Stop would take a total cleanup budget;
-destroy would take an owner pointer-to-pointer, clear it only when consumed, and
-otherwise leave the same handle available for retry. Transport settlement and
-protocol result remain separate. No request input, callback context or backend
-may be released while cleanup is outstanding. Initial public scope should be
-owned STUN and ICE/TURN cleanup; Email/LDAP/SNMP should follow the same reviewed
-contract without introducing a generic protocol Manager.
+cannot tell callers whether the object was released. New consumers can now use
+the explicit STUN Owner and `ice_agent_destroy_checked` /
+`turn_client_destroy_checked`; Email/LDAP/SNMP checked cleanup remains open.
+Existing signatures and layouts are preserved. No generic protocol Manager is
+introduced. Transport settlement and protocol result remain separate.
 
 The legacy signatures cannot express bounded cleanup failure with returned
 ownership. Merely returning an error or allocating the wrapper on the heap does
 not solve that gap. An unbounded cleanup loop would change latency guarantees;
 a process-global retirement queue would introduce a hidden lifetime owner. The
-proposal instead gives new consumers explicit ownership and keeps the legacy
+new surface instead gives consumers explicit ownership and keeps the legacy
 STUN limitation visible pending a separately agreed compatibility/deprecation
-decision. No new public declarations have been added by this slice.
+decision. The legacy synchronous STUN function has not been rewritten.
 
-Migration would be opt-in, preserving existing ABI while callers switch to
+Migration is opt-in, preserving existing ABI while callers switch to
 checked stop/destroy and keep handles on failure. Reverting requires draining
-all live Owners before replacing headers/libraries. Acceptance must include
-partial-create cleanup, exhausted cleanup budget, retry after real terminal,
-shared child aliases, and installed C11/C++17 consumers of the new public API.
+all live Owners before replacing headers/libraries. `stun_request` tests cover
+copied inputs, response matching/retry, timeout, cancellation, zero-budget stop,
+retained destroy rejection and invalid/unstarted cleanup. `ice_cnet_sg` verifies
+checked destroy retains shared child aliases until real external terminals;
+gathering tests also reject checked destruction from a callback. Allocation and
+backend initialization fault injection remains a follow-up validation gap.
+The independent installed C11/C++17 consumers now execute a real loopback STUN
+request/response using only public installed APIs, then exercise ICE/TURN checked
+cleanup. They do not qualify public mixed-protocol hosting or performance.
 DNS remains a separate open boundary: synchronous UDP `getaddrinfo` currently
 precedes the transaction deadline and cannot be woken by the ICE close target.
+
+Local Windows MSVC Release: all 39 source CTests and both installed consumers
+passed after adding the public API and runtime exchange coverage.
 
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following

@@ -15,6 +15,7 @@
 #include <cstring>
 #include <type_traits>
 #include "protocol_clients.h"
+#include "stun_owner.h"
 
 static_assert(std::is_standard_layout<salts_tcp_proxy_upstream_t>::value,
               "The installed native upstream record must be a C-compatible value.");
@@ -39,6 +40,7 @@ int main() {
   if (WSAStartup(MAKEWORD(2, 2), &winsock) != 0) return 2;
 #endif
   if (installed_protocol_clients() != 0) return 4;
+  if (installed_stun_owner() != SALTS_OK) return 5;
   auto config = salts_tcp_proxy_sg_config_default();
   config.owner_count = 4u;
   salts_tcp_proxy_sg_t *host = nullptr;

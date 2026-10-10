@@ -14,7 +14,6 @@
 #endif
 #include "ice/salts_turn.h"
 #include "ice_cnet_datagram.h"
-#include "salts_turn_internal.h"
 
 #include <fmt.h>
 #include <salts/clock.h>
@@ -902,11 +901,14 @@ salts_turn_client_t *turn_client_create(const turn_client_config_t *config) {
     return tc;
 }
 
-int turn_client_destroy_checked(salts_turn_client_t *tc) {
+int turn_client_destroy_checked(salts_turn_client_t **client, uint32_t timeout_ms) {
+    salts_turn_client_t *tc;
     int status;
+    if (!client) return SALTS_EINVAL;
+    tc = *client;
     if (!tc) return SALTS_OK;
     if (tc->transport_initialized) {
-        status = ice_cnet_datagram_destroy(&tc->transport);
+        status = ice_cnet_datagram_destroy_budget(&tc->transport, timeout_ms);
         if (status != SALTS_OK) return status;
     }
     if (tc->pending_buf) {
@@ -915,11 +917,12 @@ int turn_client_destroy_checked(salts_turn_client_t *tc) {
         tc->pending_len = 0;
     }
     free(tc);
+    *client = NULL;
     return SALTS_OK;
 }
 
 void turn_client_destroy(salts_turn_client_t *tc) {
-    (void)turn_client_destroy_checked(tc);
+    (void)turn_client_destroy_checked(&tc, ICE_CNET_STOP_TIMEOUT_MS);
 }
 
 int turn_client_allocate(salts_turn_client_t *tc, turn_allocation_t *allocation_out) {

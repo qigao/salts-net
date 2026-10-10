@@ -327,9 +327,29 @@ SaltsNet currently links directly to Salts/CNet, while SaltsUtils is
 resolved and validated as an explicit prerequisite for the shared 2.3/4.3
 SDK qualification. Protocol-layer business logic remains in SaltsNet.
 
+The current qualification pair is [Salts 2.3.0-rc.2](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.2)
+and [SaltsUtils 4.3.0-rc.2](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2).
+Upgrade or roll back both SDKs together: Unicode is now exported only by Salts,
+and SaltsUtils consumes that target. The floating restore policy above remains
+unchanged; historical benchmark results retain their actual SDK versions.
+Local Windows MSVC Release qualification of this pair passed all 36 project
+CTests and both installed SDK C11/C++17 consumer tests. This verifies existing
+SaltsNet paths against rc.2; it does not qualify new UDP/WS protocol adapters.
+
+CNet rc.2 adds `cnet_sg_host_route_batch_with_datagrams` for routing UDP and
+TCP completions through the same SG Owner, a dedicated TCP/TLS WebSocket
+write/terminal bridge, and per-attempt ManagedDial admission hooks. These are
+opt-in composition APIs: `cnet_manager_connect` still accepts only TCP/TLS,
+while UDP uses the datagram lifecycle. SNMP transaction retries and ICE/STUN/TURN
+selection, pacing and readiness remain protocol-owned. Upgrading the SDK alone
+does not enable mixed SG hosting in those consumers or implement HTTP/WS
+handshakes. Integration and protocol acceptance remain tracked in
+[SaltsNet #50](https://github.com/qigao/salts-net/issues/50) and
+[Salts #1095](https://github.com/qigao/salts/issues/1095).
+
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
-[SaltsUtils 4.3 prerelease](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.1), vcpkg runs in manifest mode
+[SaltsUtils 4.3 prerelease](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2), vcpkg runs in manifest mode
 through the shared `qigao/vcpkg-cache` toolchain, with a read-only GitHub feed
 and a writable local cache. The existing vcpkg baseline is retained. SaltsNet
 uses the [GmSSL-backed crypto provider in Salts](https://github.com/qigao/salts)

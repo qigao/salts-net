@@ -640,7 +640,7 @@ There is no silent fallback to the old naming or runtime model. Residual legacy 
 
 GitHub Packages policy: consumers must restore `Salts.Native` explicitly as latest; `SaltsNet.Native` does not embed versioned dependency metadata.
 
-Release: [1.1.0-rc.1 notes, compatibility and known limitations](docs/releases/1.1.0-rc.1.md).
+Release: [1.1.0-rc.2 notes, breaking STUN migration and known limitations](docs/releases/1.1.0-rc.2.md).
 The full package SemVer is in `vcpkg.json`; CMake uses its numeric core (1.1.0).
 After merging, dispatch the native SDK workflow with `prepare_release=true`
 on the exact merged commit to build the candidate without publication.

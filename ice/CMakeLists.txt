@@ -82,7 +82,8 @@ if(BUILD_TESTING)
   add_test(NAME ice_cnet_23 COMMAND test_ice_cnet_23)
   set_target_properties(test_ice_cnet_23 PROPERTIES FOLDER ice/tests)
 
-  add_executable(test_stun_cnet tests/test_stun_cnet.c src/ice_cnet_datagram.c src/salts_stun.c)
+  add_executable(test_stun_cnet tests/test_stun_cnet.c src/ice_cnet_datagram.c src/salts_stun.c
+    src/stun_request.c)
   target_include_directories(test_stun_cnet PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include
                                                     ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(test_stun_cnet PRIVATE Salts::CNet Salts::Core Salts::TinyTest)

@@ -160,6 +160,29 @@ spec("public STUN request ownership") {
     check(request == NULL);
   }
 
+  it("validates synchronous use before admission and never consumes its Owner") {
+    stun_client_config_t config = {"localhost", 3478u, 10, 1};
+    stun_mapped_address_t mapped = {0};
+    stun_request_t *saved;
+    int result = 17;
+    mapped.port = 123u;
+    check_equal(stun_binding_request(NULL, &config, &mapped), SALTS_EINVAL);
+    check_equal(stun_request_create(&request), SALTS_OK);
+    saved = request;
+    check_equal(stun_binding_request(request, &config, NULL), SALTS_EINVAL);
+    check_equal(stun_binding_request(request, NULL, &mapped), SALTS_EINVAL);
+    check_equal(stun_binding_request(request, &config, &mapped), SALTS_EINVAL);
+    check_equal(stun_request_result(request, &result, NULL), SALTS_EINVAL);
+    check_equal(result, 17);
+    check_equal(mapped.port, 123u);
+    check_equal(stun_request_destroy(&request), SALTS_EBUSY);
+    check(request == saved);
+    check_equal(stun_request_stop(request, 0u), SALTS_OK);
+    check_equal(stun_binding_request(request, &config, &mapped), SALTS_ESHUTDOWN);
+    check_equal(stun_request_destroy(&request), SALTS_OK);
+    check(request == NULL);
+  }
+
   it("reports checked TURN destruction and clears only consumed handles") {
     turn_client_config_t config = {0};
     config.server_host = "127.0.0.1";

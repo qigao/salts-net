@@ -3,33 +3,38 @@
  */
 
 #include "ice/salts_stun.h"
+#include <salts/error_codes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-static int discover_public_address(void) {
+static int discover_public_address(stun_request_t *request) {
     const char *server_host = getenv("STUN_SERVER_HOST");
     const char *server_port_text = getenv("STUN_SERVER_PORT");
 
     if (!server_host || !server_host[0]) {
-        server_host = "stun.l.google.com";
+        printf("Set STUN_SERVER_HOST or pass a numeric IPv4/IPv6 address.\n");
+        return SALTS_EINVAL;
     }
 
     stun_client_config_t config = {
         .server_host = server_host,
-        .server_port = 19302,
+        .server_port = STUN_DEFAULT_PORT,
         .timeout_ms = 3000,
         .retries = 3
     };
 
     if (server_port_text && server_port_text[0]) {
-        config.server_port = (uint16_t)strtoul(server_port_text, NULL, 10);
+        char *end = NULL;
+        unsigned long port = strtoul(server_port_text, &end, 10);
+        if (*end || port == 0u || port > UINT16_MAX) return SALTS_EINVAL;
+        config.server_port = (uint16_t)port;
     }
 
     printf("Querying STUN server: %s:%u...\n", config.server_host, config.server_port);
 
     stun_mapped_address_t mapped;
-    int rc = stun_binding_request(&config, &mapped);
+    int rc = stun_binding_request(request, &config, &mapped);
 
     if (rc == 0) {
         printf("\nSUCCESS: Discovered public address\n");
@@ -44,6 +49,8 @@ static int discover_public_address(void) {
 }
 
 int main(int argc, char **argv) {
+    stun_request_t *request = NULL;
+    int status, cleanup;
     if (argc > 1 && argv[1] && argv[1][0]) {
 #ifdef _WIN32
         _putenv_s("STUN_SERVER_HOST", argv[1]);
@@ -61,5 +68,16 @@ int main(int argc, char **argv) {
     }
 
     printf("Starting caller-driven CNet STUN discovery...\n");
-    return discover_public_address() == 0 ? 0 : 1;
+    status = stun_request_create(&request);
+    if (status != SALTS_OK) return 1;
+    status = discover_public_address(request);
+    cleanup = stun_request_stop(request, 1000u);
+    if (cleanup == SALTS_OK) cleanup = stun_request_destroy(&request);
+    if (cleanup != SALTS_OK) {
+        /* This CLI terminates the process on cleanup failure. A long-running
+         * application must retain request and retry cleanup with its own budget. */
+        printf("Cleanup incomplete (%d); terminating with retained Owner.\n", cleanup);
+        return 1;
+    }
+    return status == SALTS_OK ? 0 : 1;
 }

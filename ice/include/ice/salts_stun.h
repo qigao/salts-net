@@ -116,43 +116,42 @@ typedef struct {
  * STUN client configuration
  */
 typedef struct {
-    const char *server_host;    /* STUN server hostname/IP */
+    const char *server_host;    /* Numeric IPv4/IPv6 address; resolve DNS separately */
     uint16_t server_port;       /* STUN server port (default 3478) */
     int timeout_ms;             /* Request timeout (default 3000ms) */
-    int retries;                /* Number of retries (default 3) */
+    int retries;                /* Total attempts, including initial request (default 3) */
 } stun_client_config_t;
 
 /* ============================================================================
  * API Functions
  * ============================================================================ */
 
-/**
- * Perform STUN binding request (discover public IP:port).
- *
- * Owns a bounded caller-driven CNet datagram for the duration of this call.
- * Sends a request and waits synchronously with retry logic.
- * Legacy limitation (#50): cleanup timeout cannot return a retained transport
- * Owner through this signature. Use stun_request_* when cleanup must be retryable.
- *
- * @param config  Client configuration
- * @param mapped  Output mapped address
- * @return 0 on success, negative on error
- */
-SALTSNET_ICE_C_API int stun_binding_request(const stun_client_config_t *config,
-                                            stun_mapped_address_t *mapped);
-
 /** Single-use, caller-driven Binding Owner. No hidden thread or public callback.
  * All operations run non-overlapping on one thread, including stop/destroy.
- * Protocol completion does not release I/O storage. Prefer this surface when
- * bounded cleanup failure must leave a reachable Owner (legacy sync cannot).
+ * Protocol completion does not release I/O storage. The caller retains the
+ * Owner until stop and destroy both succeed, including after synchronous use.
  * Return codes use salts/error_codes.h; no function retains input pointers. */
 typedef struct stun_request_s stun_request_t;
+
+/** Synchronously starts and drives a caller-owned request to protocol completion.
+ * request must be a fresh Owner from stun_request_create; config follows start's
+ * numeric-address/default/single-use contract. mapped is required and is written
+ * only on success. Returns SALTS_OK or a validation/start/poll/protocol error.
+ * Never stops, destroys or transfers the Owner, on either success or failure.
+ * The caller must stop with an explicit budget, then destroy; any cleanup error
+ * retains the handle and is separate from this function's protocol result.
+ * Breaking change: the previous two-argument ABI is removed; rebuild consumers.
+ * Usage: stun_request_create(&r), then stun_binding_request(r, &cfg, &mapped).
+ * If stun_request_stop(r, budget) == SALTS_OK, call stun_request_destroy(&r).
+ * Check each result and retain r when stop/destroy fails. */
+SALTSNET_ICE_C_API int stun_binding_request(stun_request_t *request,
+    const stun_client_config_t *config, stun_mapped_address_t *mapped);
 
 /** Allocates without I/O. Requires out_request != NULL and *out_request == NULL.
  * Returns SALTS_ENOMEM on allocation failure, leaving *out_request unchanged. */
 SALTSNET_ICE_C_API int stun_request_create(stun_request_t **out_request);
 /** Accepts numeric IPv4/IPv6 server_host only (invalid text/hostname: EINVAL).
- * No DNS. Config defaults match sync: zero port=3478, timeout=3000, retries=3
+ * No DNS. Config defaults: zero port=3478, timeout=3000, retries=3
  * total attempts, each with a new ID and fixed timeout. Negative values fail.
  * Validation failures permit retry; after initialization begins, start is
  * single-use even on failure. Stop/destroy the retained Owner on every path. */

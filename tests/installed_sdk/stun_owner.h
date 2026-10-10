@@ -96,6 +96,23 @@ static int installed_stun_owner(void) {
     if (cleanup == SALTS_OK) cleanup = stun_request_destroy(&request);
     if (status == SALTS_OK) status = cleanup;
   }
+  /* The synchronous ABI also requires a caller-owned handle. Keep the server
+   * socket bound but do not poll it: protocol timeout is independent of cleanup. */
+  if (status == SALTS_OK) {
+    request_config.timeout_ms = 10;
+    mapped.port = 123u;
+    status = stun_request_create(&request);
+    if (status == SALTS_OK) {
+      stun_request_t *saved = request;
+      int protocol = stun_binding_request(request, &request_config, &mapped);
+      if (protocol != SALTS_ETIMEDOUT || mapped.port != 123u ||
+          stun_request_destroy(&request) != SALTS_EBUSY || request != saved)
+        status = SALTS_EPROTO;
+      cleanup = stun_request_stop(request, 1000u);
+      if (cleanup == SALTS_OK) cleanup = stun_request_destroy(&request);
+      if (status == SALTS_OK) status = cleanup;
+    }
+  }
   cleanup = cnet_datagram_stop(&server, 1000u);
   if (cleanup == SALTS_OK) cleanup = cnet_datagram_destroy(&server);
   if (status == SALTS_OK) status = cleanup;

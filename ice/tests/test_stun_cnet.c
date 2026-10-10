@@ -8,6 +8,7 @@ spec("STUN CNet transport") {
     stun_test_server_t server;
     cmeta_thread_t server_thread = NULL;
     stun_mapped_address_t mapped;
+    stun_request_t *request = NULL, *saved;
     uint16_t port = 0u;
     int status;
 
@@ -16,12 +17,25 @@ spec("STUN CNet transport") {
     server.drop_requests = dropped;
     check_equal(cmeta_thread_create(&server_thread, stun_test_server_run, &server), 0);
 
-    const stun_client_config_t config = {.server_host = "localhost",
+    const stun_client_config_t config = {.server_host = "127.0.0.1",
                                          .server_port = port,
                                          .timeout_ms = STUN_TEST_CLIENT_TIMEOUT_MS,
                                          .retries = dropped + 1};
     memset(&mapped, 0, sizeof(mapped));
-    status = stun_binding_request(&config, &mapped);
+    check_equal(stun_request_create(&request), SALTS_OK);
+    saved = request;
+    status = stun_binding_request(request, &config, &mapped);
+    /* A terminal protocol result must not consume or implicitly stop its Owner. */
+    check(request == saved);
+    check_equal(stun_binding_request(request, &config, &mapped), SALTS_EALREADY);
+    check_equal(stun_request_destroy(&request), SALTS_EBUSY);
+    check(request == saved);
+    check_equal(stun_request_stop(request, 1000u), SALTS_OK);
+    int protocol_status;
+    check_equal(stun_request_result(request, &protocol_status, NULL), SALTS_OK);
+    check_equal(protocol_status, status);
+    check_equal(stun_request_destroy(&request), SALTS_OK);
+    check(request == NULL);
 
     check_equal(cmeta_thread_join(&server_thread), 0);
     cmeta_thread_destroy(&server_thread);
@@ -71,16 +85,31 @@ spec("STUN CNet transport") {
 
   it("times out when no server responds") {
     stun_test_server_t server;
-    stun_mapped_address_t mapped;
+    stun_mapped_address_t mapped = {0};
+    stun_request_t *request = NULL, *saved;
+    int result;
     uint16_t port = 0u;
 
     check_equal(stun_test_server_open(&server, &port), 0);
-    stun_test_server_close(&server);
 
     const stun_client_config_t config = {.server_host = "127.0.0.1",
                                          .server_port = port,
                                          .timeout_ms = 20,
                                          .retries = 1};
-    check(stun_binding_request(&config, &mapped) < 0);
+    check_equal(stun_request_create(&request), SALTS_OK);
+    saved = request;
+    mapped.port = 123u;
+    check_equal(stun_binding_request(request, &config, &mapped), SALTS_ETIMEDOUT);
+    check_equal(mapped.port, 123u);
+    check_equal(stun_request_destroy(&request), SALTS_EBUSY);
+    check(request == saved);
+    check_equal(stun_request_result(request, &result, NULL), SALTS_OK);
+    check_equal(result, SALTS_ETIMEDOUT);
+    check_equal(stun_request_stop(request, 1000u), SALTS_OK);
+    check_equal(stun_request_result(request, &result, NULL), SALTS_OK);
+    check_equal(result, SALTS_ETIMEDOUT);
+    check_equal(stun_request_destroy(&request), SALTS_OK);
+    check(request == NULL);
+    stun_test_server_close(&server);
   }
 }

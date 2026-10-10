@@ -367,44 +367,6 @@ int stun_binding_transaction_cancel(stun_binding_transaction *transaction) {
   return stun_binding_finish(transaction, SALTS_ECANCELED);
 }
 
-int stun_binding_request(const stun_client_config_t *config, stun_mapped_address_t *mapped) {
-  ice_cnet_datagram_t transport;
-  stun_binding_transaction transaction = {0};
-  cnet_datagram_peer server_peer;
-  const uint16_t port = config != NULL && config->server_port != 0u
-                            ? config->server_port
-                            : STUN_DEFAULT_PORT;
-  const int timeout_ms = config != NULL && config->timeout_ms != 0 ? config->timeout_ms : 3000;
-  const int retries = config != NULL && config->retries != 0 ? config->retries : 3;
-  int result = -4;
-  int destroy_status;
-
-  if (config == NULL || config->server_host == NULL || config->server_host[0] == '\0' ||
-      mapped == NULL || timeout_ms <= 0 || retries <= 0) {
-    return -1;
-  }
-  memset(&transport, 0, sizeof(transport));
-  result = ice_cnet_datagram_init(&transport, "0.0.0.0", 0u, STUN_MAX_MESSAGE_SIZE);
-  if (result != SALTS_OK) return result;
-  result = ice_cnet_datagram_resolve(config->server_host, port, &server_peer);
-  if (result != SALTS_OK) goto cleanup;
-
-  result = stun_binding_transaction_start(&transaction, &transport, &server_peer,
-      (uint32_t)timeout_ms, (unsigned int)retries, cmeta_monotonic_ms());
-  if (result != SALTS_OK) goto cleanup;
-  while (transaction.phase != STUN_BINDING_DONE) {
-    result = stun_binding_transaction_advance(&transaction, cmeta_monotonic_ms());
-    if (transaction.phase == STUN_BINDING_DONE) break;
-    result = ice_cnet_datagram_poll_until(&transport, transaction.deadline_ms);
-    if (result != SALTS_OK && result != SALTS_ETIMEDOUT) goto cleanup;
-  }
-  if (result == SALTS_OK) *mapped = transaction.mapped;
-
-cleanup:
-  destroy_status = ice_cnet_datagram_destroy(&transport);
-  return result == 0 && destroy_status != SALTS_OK ? destroy_status : result;
-}
-
 /* ============================================================================
  * ICE Connectivity Check Functions
  * ============================================================================ */

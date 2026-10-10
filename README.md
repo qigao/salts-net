@@ -327,7 +327,7 @@ SaltsNet currently links directly to Salts/CNet, while SaltsUtils is
 resolved and validated as an explicit prerequisite for the shared 2.3/4.3
 SDK qualification. Protocol-layer business logic remains in SaltsNet.
 
-The current qualification pair is [Salts 2.3.0-rc.2](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.2)
+The release candidate qualification pair is [Salts 2.3.0-rc.3](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.3)
 and [SaltsUtils 4.3.0-rc.2](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2).
 Upgrade or roll back both SDKs together: Unicode is now exported only by Salts,
 and SaltsUtils consumes that target. The floating restore policy above remains
@@ -336,9 +336,12 @@ macOS builds and installed SDK consumers use AppleClang, matching the rc.2
 SDK's native thread-local storage ABI; GCC's emulated TLS is incompatible with
 the published TinyTest runtime. Reconfigure an existing macOS CI build tree
 with `cmake --fresh --preset ci-macos-release-user` when changing compilers.
-Local Windows MSVC Release qualification of this pair passed all 36 project
+Earlier local Windows MSVC Release qualification of the rc.2 pair passed all 36 project
 CTests and both installed SDK C11/C++17 consumer tests. This verifies existing
 SaltsNet paths against rc.2; it does not qualify new UDP/WS protocol adapters.
+The 1.1.0-rc.1 release preparation requalifies the full current graph and installed
+consumers against rc.3. Its upstream change adds an opt-in IDNA DNS profile;
+it does not resolve the legacy STUN cleanup limitation documented below.
 
 CNet rc.2 adds `cnet_sg_host_route_batch_with_datagrams` for routing UDP and
 TCP completions through the same SG Owner, a dedicated TCP/TLS WebSocket

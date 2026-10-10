@@ -24,6 +24,7 @@
     <PackageReference Update="SaltsUtils.Native" Version="$(SaltsUtilsNativeQualifiedVersion)"
                       Condition="'$(SaltsUtilsNativeQualifiedVersion)' != ''" />
     <None Include="../../README.md" Link="README.md" Pack="true" PackagePath="\" />
+    <None Include="../../docs/releases/*.md" Pack="true" PackagePath="docs/releases/" />
     <None Include="$(PackageRoot)/sdk/**/*" Pack="true" PackagePath="sdk/" />
   </ItemGroup>
 </Project>

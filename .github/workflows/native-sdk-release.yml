@@ -294,7 +294,8 @@ jobs:
         run: |
           set -euo pipefail
           dotnet nuget add source https://nuget.pkg.github.com/qigao/index.json --name github --username qigao --password "$GITHUB_TOKEN" --store-password-in-clear-text
-          dotnet nuget push "dist/SaltsNet.Native.${{ needs.metadata.outputs.source_version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github --skip-duplicate
+          # A duplicate requires inspection; do not silently accept unknown bytes.
+          dotnet nuget push "dist/SaltsNet.Native.${{ needs.metadata.outputs.source_version }}.nupkg" --api-key "$GITHUB_TOKEN" --source github
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

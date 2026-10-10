@@ -42,6 +42,18 @@ cmake_install_headers(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ice)
 # ============================================================================
 
 if(BUILD_TESTING)
+  add_executable(test_ice_cnet_sg tests/test_ice_cnet_sg.c
+    src/ice_cnet_datagram.c src/salts_stun.c)
+  target_include_directories(test_ice_cnet_sg PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(test_ice_cnet_sg PRIVATE
+    Salts::CNet Salts::Core Salts::TinyTest)
+  if(WIN32)
+    target_link_libraries(test_ice_cnet_sg PRIVATE ws2_32)
+  endif()
+  add_test(NAME ice_cnet_sg COMMAND test_ice_cnet_sg)
+  set_target_properties(test_ice_cnet_sg PROPERTIES FOLDER ice/tests)
+
   # Real CNet 2.3 datagram/owner lifetime and generation-tag conformance.
   add_executable(test_ice_cnet_23 tests/test_ice_cnet_23.c src/ice_cnet_datagram.c)
   target_include_directories(test_ice_cnet_23 PRIVATE

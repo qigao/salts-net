@@ -107,8 +107,9 @@ static int ice_cnet_peer_from_sockaddr(const struct sockaddr *address,
   return SALTS_ENOTSUP;
 }
 
-int ice_cnet_datagram_init(ice_cnet_datagram_t *transport, const char *bind_host,
-                           uint16_t bind_port, size_t max_datagram_bytes) {
+static int ice_cnet_datagram_init_impl(ice_cnet_datagram_t *transport, const char *bind_host,
+                                      uint16_t bind_port, size_t max_datagram_bytes,
+                                      native_io_backend *backend) {
   cnet_datagram_config config = CNET_DATAGRAM_CONFIG_INIT;
   int status;
   if (transport == NULL || bind_host == NULL || bind_host[0] == '\0' || max_datagram_bytes == 0u ||
@@ -135,14 +136,29 @@ int ice_cnet_datagram_init(ice_cnet_datagram_t *transport, const char *bind_host
   config.receive_buffer_bytes = max_datagram_bytes;
   config.observer = (cnet_datagram_observer){
       .on_receive = ice_cnet_on_receive, .on_send = ice_cnet_on_send, .user = transport};
-  status = cnet_datagram_init(&transport->datagram, &config);
+  status = backend != NULL
+      ? cnet_datagram_init_external(&transport->datagram, &config, backend)
+      : cnet_datagram_init(&transport->datagram, &config);
   if (status != SALTS_OK) {
     free(transport->receive_storage);
     memset(transport, 0, sizeof(*transport));
     return status;
   }
   transport->initialized = 1;
+  transport->external = backend != NULL;
   return SALTS_OK;
+}
+
+int ice_cnet_datagram_init(ice_cnet_datagram_t *transport, const char *bind_host,
+                           uint16_t bind_port, size_t max_datagram_bytes) {
+  return ice_cnet_datagram_init_impl(transport, bind_host, bind_port, max_datagram_bytes, NULL);
+}
+
+int ice_cnet_datagram_init_external(ice_cnet_datagram_t *transport, const char *bind_host,
+                                    uint16_t bind_port, size_t max_datagram_bytes,
+                                    native_io_backend *backend) {
+  if (backend == NULL) return SALTS_EINVAL;
+  return ice_cnet_datagram_init_impl(transport, bind_host, bind_port, max_datagram_bytes, backend);
 }
 
 int ice_cnet_datagram_port(const ice_cnet_datagram_t *transport, uint16_t *out_port) {
@@ -226,57 +242,80 @@ int ice_cnet_datagram_peer_to_text(const cnet_datagram_peer *peer, char *host,
   return SALTS_OK;
 }
 
-int ice_cnet_datagram_send(ice_cnet_datagram_t *transport, const cnet_datagram_peer *peer,
-                           const void *data, size_t size, uint32_t timeout_ms) {
-  uint64_t deadline;
+int ice_cnet_datagram_send_begin(ice_cnet_datagram_t *transport,
+                                 const cnet_datagram_peer *peer, const void *data,
+                                 size_t size, uint64_t *out_tag) {
   int status;
-  if (transport == NULL || !transport->initialized || transport->stopped || peer == NULL ||
-      data == NULL || size == 0u || size > transport->receive_capacity || timeout_ms == 0u) {
+  uint64_t tag;
+  if (out_tag == NULL) return SALTS_EINVAL;
+  *out_tag = 0u;
+  if (transport == NULL || !transport->initialized || peer == NULL ||
+      data == NULL || size == 0u || size > transport->receive_capacity) {
     return SALTS_EINVAL;
   }
+  if (transport->stopping || transport->stopped) return SALTS_ESHUTDOWN;
   if (transport->send_pending) return SALTS_EBUSY;
   /* CNet 2.3 completions are correlated by tag. Never reuse zero or wrap
    * the tag identity while an old UDP completion could still arrive. */
   if (transport->next_send_tag == 0u || transport->next_send_tag == UINT64_MAX)
     return SALTS_ERANGE;
 
-  transport->pending_send_tag = transport->next_send_tag++;
+  tag = transport->next_send_tag;
+  status = cnet_datagram_send(&transport->datagram, peer, data, size, tag);
+  if (status != SALTS_OK) return status;
+  transport->pending_send_tag = tag;
+  ++transport->next_send_tag;
   transport->send_status = SALTS_EBUSY;
   transport->send_pending = 1;
-  status = cnet_datagram_send(&transport->datagram, peer, data, size, transport->pending_send_tag);
-  if (status != SALTS_OK) {
-    transport->send_pending = 0;
-    transport->send_status = status;
-    return status;
-  }
+  *out_tag = tag;
+  return SALTS_OK;
+}
 
+int ice_cnet_datagram_send_result(const ice_cnet_datagram_t *transport, uint64_t tag) {
+  if (transport == NULL || !transport->initialized || tag == 0u) return SALTS_EINVAL;
+  if (tag != transport->pending_send_tag) return SALTS_ENOENT;
+  return transport->send_pending ? SALTS_EBUSY : transport->send_status;
+}
+
+int ice_cnet_datagram_send(ice_cnet_datagram_t *transport, const cnet_datagram_peer *peer,
+                           const void *data, size_t size, uint32_t timeout_ms) {
+  uint64_t deadline, tag;
+  int status;
+  if (transport == NULL || !transport->initialized || transport->stopped || timeout_ms == 0u)
+    return SALTS_EINVAL;
+  if (transport->external) return SALTS_ENOTSUP;
+  status = ice_cnet_datagram_send_begin(transport, peer, data, size, &tag);
+  if (status != SALTS_OK) return status;
   deadline = cmeta_monotonic_ms() + timeout_ms;
   while (transport->send_pending) {
     status = ice_cnet_poll(transport, deadline);
     if (status != SALTS_OK) return status;
   }
-  return transport->send_status;
+  return ice_cnet_datagram_send_result(transport, tag);
 }
 
-int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer *out_peer,
-                              void *data, size_t capacity, size_t *out_size, uint32_t timeout_ms) {
-  uint64_t deadline;
+int ice_cnet_datagram_receive_begin(ice_cnet_datagram_t *transport) {
   int status;
-  if (transport == NULL || !transport->initialized || transport->stopped || out_peer == NULL ||
-      data == NULL || capacity == 0u || out_size == NULL || timeout_ms == 0u) {
-    return SALTS_EINVAL;
-  }
+  if (transport == NULL || !transport->initialized) return SALTS_EINVAL;
+  if (transport->stopping || transport->stopped) return SALTS_ESHUTDOWN;
   if (!transport->receive_ready && !transport->receive_armed) {
     status = cnet_datagram_receive(&transport->datagram, 1u);
     if (status != SALTS_OK) return status;
     transport->receive_armed = 1;
   }
+  return SALTS_OK;
+}
 
-  deadline = cmeta_monotonic_ms() + timeout_ms;
-  while (transport->receive_ready == 0) {
-    status = ice_cnet_poll(transport, deadline);
-    if (status != SALTS_OK) return status;
-  }
+int ice_cnet_datagram_receive_take(ice_cnet_datagram_t *transport,
+                                   cnet_datagram_peer *out_peer, void *data,
+                                   size_t capacity, size_t *out_size) {
+  int status;
+  if (out_size == NULL) return SALTS_EINVAL;
+  *out_size = 0u;
+  if (transport == NULL || !transport->initialized || out_peer == NULL ||
+      data == NULL || capacity == 0u) return SALTS_EINVAL;
+  if (transport->stopping || transport->stopped) return SALTS_ESHUTDOWN;
+  if (transport->receive_ready == 0) return SALTS_EBUSY;
   if (transport->receive_ready < 0) {
     status = transport->receive_status;
     transport->receive_ready = 0;
@@ -292,6 +331,43 @@ int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer
   return SALTS_OK;
 }
 
+int ice_cnet_datagram_receive(ice_cnet_datagram_t *transport, cnet_datagram_peer *out_peer,
+                              void *data, size_t capacity, size_t *out_size, uint32_t timeout_ms) {
+  uint64_t deadline;
+  int status;
+  if (transport == NULL || !transport->initialized || transport->stopped || out_peer == NULL ||
+      data == NULL || capacity == 0u || out_size == NULL || timeout_ms == 0u) return SALTS_EINVAL;
+  if (transport->external) return SALTS_ENOTSUP;
+  status = ice_cnet_datagram_receive_begin(transport);
+  if (status != SALTS_OK) return status;
+  deadline = cmeta_monotonic_ms() + timeout_ms;
+  while (transport->receive_ready == 0) {
+    status = ice_cnet_poll(transport, deadline);
+    if (status != SALTS_OK) return status;
+  }
+  return ice_cnet_datagram_receive_take(transport, out_peer, data, capacity, out_size);
+}
+
+int ice_cnet_datagram_advance_external(ice_cnet_datagram_t *transport, size_t *out_events) {
+  if (out_events == NULL) return SALTS_EINVAL;
+  *out_events = 0u;
+  if (transport == NULL || !transport->initialized) return SALTS_EINVAL;
+  if (!transport->external) return SALTS_ENOTSUP;
+  return cnet_datagram_advance_external(&transport->datagram, out_events);
+}
+
+int ice_cnet_datagram_stop_external(ice_cnet_datagram_t *transport, bool *out_stopped) {
+  int status;
+  if (out_stopped == NULL) return SALTS_EINVAL;
+  *out_stopped = false;
+  if (transport == NULL || !transport->initialized) return SALTS_EINVAL;
+  if (!transport->external) return SALTS_ENOTSUP;
+  transport->stopping = 1;
+  status = cnet_datagram_stop_external(&transport->datagram, out_stopped);
+  if (*out_stopped) transport->stopped = 1;
+  return status;
+}
+
 int ice_cnet_datagram_wake(ice_cnet_datagram_t *transport) {
   if (transport == NULL || !transport->initialized || transport->stopped) return SALTS_EINVAL;
   atomic_store_explicit(&transport->wake_requested, 1, memory_order_release);
@@ -303,7 +379,14 @@ int ice_cnet_datagram_destroy(ice_cnet_datagram_t *transport) {
   if (transport == NULL) return SALTS_EINVAL;
   if (!transport->initialized) return SALTS_OK;
   if (!transport->stopped) {
-    status = cnet_datagram_stop(&transport->datagram, ICE_CNET_STOP_TIMEOUT_MS);
+    if (transport->external) {
+      bool stopped = false;
+      status = ice_cnet_datagram_stop_external(transport, &stopped);
+      if (status != SALTS_OK) return status;
+      if (!stopped) return SALTS_EBUSY;
+    } else {
+      status = cnet_datagram_stop(&transport->datagram, ICE_CNET_STOP_TIMEOUT_MS);
+    }
     if (status != SALTS_OK) return status;
     transport->stopped = 1;
   }

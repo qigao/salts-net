@@ -351,6 +351,33 @@ handshakes. Integration and protocol acceptance remain tracked in
 [SaltsNet #50](https://github.com/qigao/salts-net/issues/50) and
 [Salts #1095](https://github.com/qigao/salts/issues/1095).
 
+The first internal ICE transport slice now separates bounded send/receive
+admission and result consumption from waiting. The existing synchronous path
+uses the same state; an explicit external initializer borrows the host backend.
+The host exclusively observes and routes completions with the rc.2 mixed
+router. Each endpoint owns one copied receive slot and at most one in-flight
+send; short output buffers retain the received packet. Send results use the
+admitted tag and mean local transport completion, never protocol success.
+Stop closes admission and retains the endpoint, tag and callback storage until
+all actual terminals have been routed. External destroy returns busy while
+draining, and synchronous send/receive reject external mode before admission.
+
+The formal `ice_cnet_sg` test uses this internal adapter on 1/2/4 real SG Owners
+with a TCP neighbor on each backend. It exercises a fixed-peer STUN exchange,
+transaction-ID rejection, copied payload ownership, full send admission,
+retained receive data, cancellation and continued TCP/UDP progress after one
+UDP endpoint stops. This is a transport composition slice: public ICE/STUN/TURN
+and SNMP calls still use their existing synchronous mode. Nonblocking protocol
+timers/retransmissions, shared application hosting, public async APIs and
+installed-consumer coverage for those APIs remain open in #50. The adapter is
+private and is not installed. This keeps one transport state machine instead
+of duplicating it or blocking the shared Owner inside a synchronous facade;
+rollback drains external borrowers before selecting the existing owned mode.
+Local Windows Release validation of this slice passed all 37 CTests, ten
+consecutive `ice_cnet_sg` runs (each covering 1/2/4 Owners), and the two existing
+installed SDK consumer tests. The latter verify the unchanged public APIs,
+not the private external adapter.
+
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
 [SaltsUtils 4.3 prerelease](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2), vcpkg runs in manifest mode

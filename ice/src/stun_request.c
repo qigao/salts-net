@@ -81,6 +81,21 @@ int stun_request_result(const stun_request_t *request, int *out_status,
   return SALTS_OK;
 }
 
+int stun_binding_request(stun_request_t *request,
+    const stun_client_config_t *config, stun_mapped_address_t *mapped) {
+  int status, result;
+  if (!mapped) return SALTS_EINVAL;
+  status = stun_request_start(request, config);
+  if (status != SALTS_OK) return status;
+  for (;;) {
+    status = stun_request_result(request, &result, mapped);
+    if (status == SALTS_OK) return result;
+    if (status != SALTS_EBUSY) return status;
+    status = stun_request_progress(request, UINT32_MAX);
+    if (status != SALTS_OK) return status;
+  }
+}
+
 int stun_request_stop(stun_request_t *request, uint32_t timeout_ms) {
   int status;
   if (!request) return SALTS_EINVAL;

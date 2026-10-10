@@ -341,8 +341,8 @@ CTests and both installed SDK C11/C++17 consumer tests. This verifies existing
 SaltsNet paths against rc.2; it does not qualify new UDP/WS protocol adapters.
 The 1.1.0-rc.1 release preparation requalifies the full current graph and installed
 consumers against rc.4. This includes rc.3's opt-in IDNA DNS profile and rc.4's
-ManagedDial close-admission retry fix. Neither resolves the legacy STUN cleanup
-limitation documented below.
+ManagedDial close-admission retry fix. The released 1.1.0-rc.1 still has the
+legacy STUN cleanup limitation; the breaking source fix is documented below.
 
 CNet rc.2 adds `cnet_sg_host_route_batch_with_datagrams` for routing UDP and
 TCP completions through the same SG Owner, a dedicated TCP/TLS WebSocket
@@ -371,7 +371,7 @@ matching and attempt deadlines from transport progress. Its Owner lends one
 idle datagram exclusively, pins a copied peer, and supplies monotonic time;
 each advance consumes at most one packet without observing or waiting. The
 synchronous `stun_binding_request` drives the same state through owned polling.
-Compatibility is preserved: `retries` counts total attempts, each with a fresh
+The retry policy is preserved: `retries` counts total attempts, each with a fresh
 transaction ID and a fixed timeout. This is not an implementation of RFC
 exponential retransmission backoff. Invalid or late responses do not extend the
 deadline, mapped output is committed only on success, and protocol timeout or
@@ -445,39 +445,59 @@ cleanup/query operations are then valid. Null owner values are idempotent; null
 pointer-to-pointer arguments are invalid. No failed cleanup is silently retired.
 ICE callbacks must not destroy; checked destruction rejects an active Owner.
 
-Review found that the legacy synchronous `stun_binding_request` has a stack
-transport and no way to return a retained cleanup Owner. Its stop-timeout path
-therefore remains unresolved. Email/LDAP/SNMP/TURN/ICE void destruction also
-cannot tell callers whether the object was released. New consumers can now use
-the explicit STUN Owner and `ice_agent_destroy_checked` /
-`turn_client_destroy_checked`; Email/LDAP/SNMP checked cleanup remains open.
-Existing signatures and layouts are preserved. No generic protocol Manager is
-introduced. Transport settlement and protocol result remain separate.
+The legacy synchronous function used a stack transport and could lose its Owner
+when bounded stop failed. With the ABI break explicitly approved, the current
+source removes that two-argument signature. `stun_binding_request(request,
+config, mapped)` now starts and drives a fresh caller-owned `stun_request_t`
+through the existing state machine. It returns the validation/start/poll/protocol
+status and never stops or destroys the Owner. The caller retains the handle on
+every path and explicitly checks bounded stop and destroy separately. There is
+no compatibility wrapper, automatic cleanup retry or hidden retirement owner.
 
-The legacy signatures cannot express bounded cleanup failure with returned
-ownership. Merely returning an error or allocating the wrapper on the heap does
-not solve that gap. An unbounded cleanup loop would change latency guarantees;
-a process-global retirement queue would introduce a hidden lifetime owner. The
-new surface instead gives consumers explicit ownership and keeps the legacy
-STUN limitation visible pending a separately agreed compatibility/deprecation
-decision. The legacy synchronous STUN function has not been rewritten.
+Migration is required: rebuild all consumers with the matching headers/library,
+create a request before the synchronous call, then stop with an application
+budget and destroy only after stop succeeds. Retain the handle on either cleanup
+error. The synchronous call now shares start's numeric IPv4/IPv6-only contract;
+resolve hostnames before calling it. Defaults, fixed per-attempt timeouts and
+total-attempt retry semantics remain unchanged. `stun_discovery` accepts a
+numeric address through its argument or `STUN_SERVER_HOST` and reports protocol
+and cleanup errors separately. The published 1.1.0-rc.1 package is unchanged.
 
-Migration is opt-in, preserving existing ABI while callers switch to
-checked stop/destroy and keep handles on failure. Reverting requires draining
-all live Owners before replacing headers/libraries. `stun_request` tests cover
+Choosing explicit ownership avoids duplicating the asynchronous protocol loop
+and makes bounded cleanup failure observable without losing callback storage.
+Keeping the old signature could not return that cleanup obligation; unbounded
+drain or a process-global retirement queue would change latency or ownership.
+Rollback requires draining all live Owners and replacing headers and libraries
+together with consumers rebuilt for the previous signature. Email/LDAP/SNMP/
+TURN/ICE void destruction still cannot report whether the object was released;
+use ICE/TURN checked destroy. Email/LDAP/SNMP checked cleanup remains open.
+No generic protocol Manager is introduced.
+
+`stun_cnet` tests synchronous success/retry and exact protocol timeout, unchanged
+failure output, deterministic destroy rejection before stop, retained handle and
+stable protocol result through cleanup. `stun_request` tests additionally cover
 copied inputs, response matching/retry, timeout, cancellation, zero-budget stop,
 retained destroy rejection and invalid/unstarted cleanup. `ice_cnet_sg` verifies
 checked destroy retains shared child aliases until real external terminals;
 gathering tests also reject checked destruction from a callback. Allocation and
 backend initialization fault injection remains a follow-up validation gap.
 The independent installed C11/C++17 consumers now execute a real loopback STUN
-request/response using only public installed APIs, then exercise ICE/TURN checked
-cleanup. They do not qualify public mixed-protocol hosting or performance.
+request/response using only public installed APIs, execute the changed synchronous
+ABI with protocol timeout and retained cleanup ownership, then exercise ICE/TURN
+checked cleanup. They do not qualify public mixed-protocol hosting or performance.
 DNS remains a separate open boundary: synchronous UDP `getaddrinfo` currently
 precedes the transaction deadline and cannot be woken by the ICE close target.
 
 Local Windows MSVC Release: all 39 source CTests and both installed consumers
 passed after adding the public API and runtime exchange coverage.
+
+The breaking synchronous ownership fix passed local Windows MSVC Release:
+the nine ICE/STUN/TURN CTests, all 39 source CTests, and both installed C11/C++17
+consumers. The normal `win-release-user` graph also built all enabled examples,
+including the migrated `stun_discovery`. Reproduce with the configured SDK roots:
+`cmake --preset ci-win-release-user`, `cmake --build --preset ci-win-release-user`,
+`ctest --preset ci-win-release-user`, `cmake --build --preset install-ci-win-release-user`,
+then `pwsh -File cmake/ci/verify-installed-sdk.ps1` from the MSVC environment.
 
 The versioned `CMakeUserPresets.json` owns local and CI entry points. Shared
 presets retain compiler and platform settings. Following
@@ -620,7 +640,7 @@ There is no silent fallback to the old naming or runtime model. Residual legacy 
 
 GitHub Packages policy: consumers must restore `Salts.Native` explicitly as latest; `SaltsNet.Native` does not embed versioned dependency metadata.
 
-Release: [1.1.0-rc.1 notes, compatibility and known limitations](docs/releases/1.1.0-rc.1.md).
+Release: [1.1.0-rc.2 notes, breaking STUN migration and known limitations](docs/releases/1.1.0-rc.2.md).
 The full package SemVer is in `vcpkg.json`; CMake uses its numeric core (1.1.0).
 After merging, dispatch the native SDK workflow with `prepare_release=true`
 on the exact merged commit to build the candidate without publication.

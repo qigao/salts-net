@@ -327,7 +327,7 @@ SaltsNet currently links directly to Salts/CNet, while SaltsUtils is
 resolved and validated as an explicit prerequisite for the shared 2.3/4.3
 SDK qualification. Protocol-layer business logic remains in SaltsNet.
 
-The release candidate qualification pair is [Salts 2.3.0-rc.3](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.3)
+The release candidate qualification pair is [Salts 2.3.0-rc.4](https://github.com/qigao/salts/releases/tag/v2.3.0-rc.4)
 and [SaltsUtils 4.3.0-rc.2](https://github.com/qigao/salts-utils/releases/tag/v4.3.0-rc.2).
 Upgrade or roll back both SDKs together: Unicode is now exported only by Salts,
 and SaltsUtils consumes that target. The floating restore policy above remains
@@ -340,8 +340,9 @@ Earlier local Windows MSVC Release qualification of the rc.2 pair passed all 36 
 CTests and both installed SDK C11/C++17 consumer tests. This verifies existing
 SaltsNet paths against rc.2; it does not qualify new UDP/WS protocol adapters.
 The 1.1.0-rc.1 release preparation requalifies the full current graph and installed
-consumers against rc.3. Its upstream change adds an opt-in IDNA DNS profile;
-it does not resolve the legacy STUN cleanup limitation documented below.
+consumers against rc.4. This includes rc.3's opt-in IDNA DNS profile and rc.4's
+ManagedDial close-admission retry fix. Neither resolves the legacy STUN cleanup
+limitation documented below.
 
 CNet rc.2 adds `cnet_sg_host_route_batch_with_datagrams` for routing UDP and
 TCP completions through the same SG Owner, a dedicated TCP/TLS WebSocket
@@ -619,9 +620,10 @@ There is no silent fallback to the old naming or runtime model. Residual legacy 
 
 GitHub Packages policy: consumers must restore `Salts.Native` explicitly as latest; `SaltsNet.Native` does not embed versioned dependency metadata.
 
-Release preparation: [1.1.0-rc.1 notes, compatibility and known limitations](docs/releases/1.1.0-rc.1.md).
+Release: [1.1.0-rc.1 notes, compatibility and known limitations](docs/releases/1.1.0-rc.1.md).
 The full package SemVer is in `vcpkg.json`; CMake uses its numeric core (1.1.0).
-Dispatch the native SDK workflow with `prepare_release=true` to build the exact
-candidate without publication. A separately authorized RC publication consumes
+After merging, dispatch the native SDK workflow with `prepare_release=true`
+on the exact merged commit to build the candidate without publication.
+A separately authorized RC publication consumes
 that successful run via `publish_from_run` on the matching immutable tag; it
 does not rebuild the package. RC branches/tags do not publish automatically.

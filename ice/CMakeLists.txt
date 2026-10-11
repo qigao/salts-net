@@ -51,6 +51,7 @@ if(BUILD_TESTING)
   set_target_properties(test_stun_request PROPERTIES FOLDER ice/tests)
 
   add_executable(test_ice_stun_gather tests/test_ice_stun_gather.c)
+  target_include_directories(test_ice_stun_gather PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
   target_link_libraries(test_ice_stun_gather PRIVATE SaltsNet::ICE Salts::Core Salts::TinyTest)
   if(WIN32)
     target_link_libraries(test_ice_stun_gather PRIVATE ws2_32)

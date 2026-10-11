@@ -25,3 +25,14 @@ The `ice_cnet_23` CTest exercises real loopback send terminal, receive demand,
 buffer-too-small retry without packet loss, invalid admission and generation
 tag overflow. Host tests execute on Linux x64/ARM64, Windows and macOS. Mobile
 CI qualifies SDK compile/link only.
+
+Host and server-reflexive candidate sockets share CNet's bounded UDP payload
+capacity (65507 bytes). A server-reflexive socket remains owned by its candidate
+after STUN discovery and must carry DTLS/media datagrams larger than STUN's
+548-byte parsing buffer. This raises its adapter receive storage from 548 to
+65507 bytes and uses the same bounded native receive/send configuration as a
+host candidate; candidate count remains capped at 32. Allocation failures keep
+the existing gathering cleanup/error path. The `ice_stun_gather` CTest uses a
+real local STUN response and checks 1280-byte send and receive through the
+gathered socket. It seeds nomination internally to isolate this transport
+contract; it does not qualify NAT traversal or DTLS interoperability.

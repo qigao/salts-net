@@ -529,7 +529,9 @@ static int create_srflx_socket(salts_ice_agent_t *agent, const ice_candidate_t *
   transport = (ice_cnet_datagram_t *)calloc(1u, sizeof(*transport));
   if (!transport) return -2;
   agent->gathering_socket = transport;
-  if (ice_cnet_datagram_init(transport, base->ip, 0u, STUN_MAX_MESSAGE_SIZE) != SALTS_OK ||
+  /* This socket survives gathering and carries the selected pair's application
+   * datagrams. STUN's parser limit must not become its lifetime UDP limit. */
+  if (ice_cnet_datagram_init(transport, base->ip, 0u, CNET_DATAGRAM_MAX_PAYLOAD_BYTES) != SALTS_OK ||
       ice_cnet_datagram_port(transport, &local_port) != SALTS_OK ||
       ice_cnet_datagram_resolve(server_host, server_port, &server_peer) != SALTS_OK) {
     (void)destroy_candidate_transport(&agent->gathering_socket);

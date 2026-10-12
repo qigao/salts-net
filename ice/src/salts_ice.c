@@ -2322,12 +2322,17 @@ static void run_connectivity_checks(salts_ice_agent_t *agent) {
     return;
 
   while (agent->state == ICE_STATE_CONNECTING) {
+    /* Cross-thread close is an admission cancellation, not an ICE timeout.
+     * Only the current ICE Owner may publish the CLOSED terminal callback. */
+    if (ice_agent_is_closed(agent)) break;
     uint64_t now = cmeta_monotonic_ms();
     uint64_t elapsed = now - agent->check_start_time;
 
     /* Connectivity checks need inbound STUN pumping before a pair can advance. */
     service_connectivity_check_io(agent, 1);
-    if (agent->state != ICE_STATE_CONNECTING) {
+    /* A close may arrive during network polling. Do not continue the 12s
+     * connectivity/retry deadline once termination has been requested. */
+    if (ice_agent_is_closed(agent) || agent->state != ICE_STATE_CONNECTING) {
       break;
     }
 

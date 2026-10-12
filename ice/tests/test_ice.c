@@ -83,6 +83,18 @@ typedef struct {
     int close_callback_on_poll_thread;
 } ice_lifecycle_observer_t;
 
+typedef struct {
+    atomic_int connecting_seen;
+    atomic_int closed_count;
+    atomic_int closed_on_owner;
+} ice_checks_close_observer_t;
+
+typedef struct {
+    salts_ice_agent_t *agent;
+    int rc;
+    atomic_int done;
+} ice_checks_close_task_state_t;
+
 static SALTS_THREAD_LOCAL int ice_test_owner_thread;
 
 static void on_lifecycle_state_change(salts_ice_agent_t *agent, ice_state_t old_state,
@@ -190,6 +202,33 @@ static void ice_start_checks_task(void *arg) {
 
     state->rc = ice_agent_start_checks(state->agent);
     state->done = 1;
+}
+
+static void on_checks_close_state_change(salts_ice_agent_t *agent,
+                                         ice_state_t old_state,
+                                         ice_state_t new_state,
+                                         void *user_data) {
+    ice_checks_close_observer_t *observer =
+        (ice_checks_close_observer_t *)user_data;
+    (void)agent;
+    (void)old_state;
+    if (!observer) return;
+    if (new_state == ICE_STATE_CONNECTING) {
+        atomic_store_explicit(&observer->connecting_seen, 1, memory_order_release);
+    } else if (new_state == ICE_STATE_CLOSED) {
+        atomic_fetch_add_explicit(&observer->closed_count, 1, memory_order_acq_rel);
+        atomic_store_explicit(&observer->closed_on_owner,
+                              ice_test_owner_thread, memory_order_release);
+    }
+}
+
+static void ice_checks_close_task(void *arg) {
+    ice_checks_close_task_state_t *state = (ice_checks_close_task_state_t *)arg;
+    if (!state || !state->agent) return;
+    ice_test_owner_thread = 1;
+    state->rc = ice_agent_start_checks(state->agent);
+    ice_test_owner_thread = 0;
+    atomic_store_explicit(&state->done, 1, memory_order_release);
 }
 
 static void ice_poll_task(void *arg) {
@@ -937,6 +976,66 @@ spec("ice") {
         memset(&callbacks, 0, sizeof(callbacks));
         ice_agent_set_callbacks(agent, &callbacks);
         ice_agent_destroy(agent);
+    }
+
+    it("should cancel active connectivity checks promptly on their Owner") {
+        ice_config_t config = ice_default_config();
+        salts_ice_agent_t *agent;
+        ice_callbacks_t callbacks = {0};
+        ice_checks_close_observer_t observer;
+        ice_checks_close_task_state_t task;
+        cmeta_thread_t thread = NULL;
+        uint64_t deadline;
+        uint64_t close_started_ms;
+
+        /* Leave remote candidate pairs empty: without cancellation, the
+         * synchronous owner would remain in the 12-second check loop. */
+        config.allow_loopback = 1;
+        config.stun_server_count = 0;
+        config.turn_server_count = 0;
+        check_equal(config.connectivity_timeout_ms, ICE_DEFAULT_CONNECTIVITY_TIMEOUT);
+        agent = ice_agent_create(&config);
+        check_not_null(agent);
+        check_equal(ice_agent_set_remote_credentials(
+                        agent, "remoteufrag", "remote-password-1234567890"), 0);
+        check_equal(ice_agent_gather_candidates(agent), 0);
+        check(ice_agent_get_local_candidate_count(agent) > 0);
+        check_equal(ice_agent_get_gathering_state(agent), ICE_GATHERING_COMPLETE);
+
+        atomic_init(&observer.connecting_seen, 0);
+        atomic_init(&observer.closed_count, 0);
+        atomic_init(&observer.closed_on_owner, 0);
+        callbacks.on_state_change = on_checks_close_state_change;
+        callbacks.user_data = &observer;
+        ice_agent_set_callbacks(agent, &callbacks);
+
+        task.agent = agent;
+        task.rc = 0;
+        atomic_init(&task.done, 0);
+        check_equal(cmeta_thread_create(&thread, ice_checks_close_task, &task), 0);
+        deadline = cmeta_monotonic_ms() + 1000u;
+        while (!atomic_load_explicit(&observer.connecting_seen, memory_order_acquire) &&
+               cmeta_monotonic_ms() < deadline) {
+            cmeta_sleep_ms(1u);
+        }
+        check(atomic_load_explicit(&observer.connecting_seen, memory_order_acquire));
+        /* The CONNECTING callback has already returned; give the owner
+         * time to enter the actual pacing loop before the foreign close. */
+        cmeta_sleep_ms(100u);
+        check(!atomic_load_explicit(&task.done, memory_order_acquire));
+
+        close_started_ms = cmeta_monotonic_ms();
+        ice_agent_close(agent);
+        check_equal(cmeta_thread_join(&thread), 0);
+        cmeta_thread_destroy(&thread);
+        check(atomic_load_explicit(&task.done, memory_order_acquire));
+        check(cmeta_monotonic_ms() - close_started_ms < 1500u);
+        check_equal(task.rc, ICE_AGENT_ERROR_CLOSED);
+        check_equal(ice_agent_get_state(agent), ICE_STATE_CLOSED);
+        check_equal(atomic_load_explicit(&observer.closed_count, memory_order_acquire), 1);
+        check_equal(atomic_load_explicit(&observer.closed_on_owner, memory_order_acquire), 1);
+        check_equal(ice_agent_destroy_checked(&agent, 1000u), 0);
+        check_null(agent);
     }
 
     it("should complete a cross-thread close on the polling owner") {

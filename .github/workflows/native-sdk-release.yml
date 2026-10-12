@@ -2,7 +2,8 @@ name: SaltsNet native SDK package
 
 on:
   pull_request:
-    branches: [master]
+    # Temporary stacked Draft #54 qualification. Drop this after #52 lands.
+    branches: [master, fix/ice-srflx-datagram-capacity]
     paths:
       - "CMakeLists.txt"
       - "CMakeOptions.cmake"

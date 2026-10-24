@@ -18,7 +18,7 @@ target_include_directories(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC Salts::Core
-  PRIVATE Salts::CNet SaltsNet::Asn1Parser)
+  PRIVATE Salts::CNet Salts::ASN1)
 
 set_target_properties(
   ${TARGET_NAME}

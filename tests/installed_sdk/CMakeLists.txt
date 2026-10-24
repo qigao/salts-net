@@ -19,7 +19,7 @@ find_package(SaltsNet CONFIG REQUIRED
   PATHS "${saltsnet_prefix}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
-foreach(component ICE LB TCPProxy Email LDAP SNMP)
+foreach(component ICE LB TCPProxy Email LDAP SNMP SNMPSupport)
   if(NOT TARGET "SaltsNet::${component}")
     message(FATAL_ERROR "Missing installed public target: SaltsNet::${component}")
   endif()

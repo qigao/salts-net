@@ -39,6 +39,7 @@ SaltsNet is the **network extension layer**. It is intentionally separate from H
 | --- | --- |
 | `SaltsNet::ICE` | STUN, TURN, and ICE |
 | `SaltsNet::SNMP` | SNMP client and protocol codec |
+| `SaltsNet::SNMPSupport` | MIB schema compilation, X.509 parsing, and crypto helpers |
 | `SaltsNet::LDAP` | LDAP client |
 | `SaltsNet::Email` | SMTP, POP3, and IMAP clients |
 | `SaltsNet::MimeParser` | MIME parsing |
@@ -47,6 +48,17 @@ SaltsNet is the **network extension layer**. It is intentionally separate from H
 | `SaltsNet::TCPProxy` | TCP/TLS proxying |
 
 The URI parser is a concrete package component, but it is not a top-level ecosystem layer or architectural pillar.
+
+### ASN.1 ownership
+
+SNMP, LDAP, USM, and X.509 consume `Salts::ASN1` directly. SaltsNet no longer
+ships its former `asn1_value_t` tree, BER/DER scanner/encoder, compatibility
+headers, or `SaltsNet::Asn1Parser` target. The MIB grammar remains in
+`SaltsNet::SNMPSupport` because it parses ASN.1 schema text rather than BER/DER
+values. This keeps one bounded codec and one owned value-tree contract in the
+stack; downstream code that used the removed low-level SaltsNet API must link
+`Salts::ASN1` and use `salts_asn1_value` directly. Rollback requires pinning the
+previous SaltsNet SDK together with its matching Salts version.
 
 ## Runtime model
 

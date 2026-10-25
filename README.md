@@ -48,6 +48,10 @@ SaltsNet is the **network extension layer**. It is intentionally separate from H
 
 The URI parser is a concrete package component, but it is not a top-level ecosystem layer or architectural pillar.
 
+Cryptographic and certificate support is recorded per protocol in the
+[cryptographic compatibility matrix](docs/CRYPTO_COMPATIBILITY_MATRIX.md).
+Primitive availability is not treated as proof of TLS, X.509, or S/MIME support.
+
 ## Runtime model
 
 SaltsNet keeps CNet's explicit caller-driven ownership model:

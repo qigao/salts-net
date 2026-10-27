@@ -1,5 +1,5 @@
 #include "mime_utils.h"
-#include "base64_utils.h"
+#include "mime_base64.h"
 #include "mime_scan.h"
 #include "cmeta_buffer.h"
 #include <string.h>
@@ -102,34 +102,23 @@ int mime_decode_quoted_printable(mem_pool_t *pool,
 int mime_decode_base64(mem_pool_t *pool,
                        const char *input, size_t input_len,
                        uint8_t **output, size_t *output_len) {
-  char *encoded = NULL;
+  size_t decoded_len = 0u;
+  uint8_t *decoded;
+  size_t written = 0u;
   if (!pool || !input || !output || !output_len) return -1;
-
-  encoded = mem_alloc(pool, input_len + 1);
-  if (!encoded) return -1;
-  memcpy(encoded, input, input_len);
-  encoded[input_len] = '\0';
-
-  // Use base64_utils (allocates with malloc)
-  uint8_t *decoded = NULL;
-  size_t decoded_len = 0;
-
-  if (tn_base64_decode(encoded, &decoded, &decoded_len) != 0) {
+  /* Validate the entire counted wire payload before allocating a pool block.
+   * Invalid padding or truncated quartets leave all caller outputs intact. */
+  if (mime_base64_decode(input, input_len, NULL, 0u, &decoded_len) != 0 ||
+      decoded_len == SIZE_MAX) return -1;
+  decoded = mem_alloc(pool, decoded_len + 1u);
+  if (!decoded) return -1;
+  if (mime_base64_decode(input, input_len, decoded, decoded_len, &written) != 0 ||
+      written != decoded_len) {
+    mem_free(pool, decoded);
     return -1;
   }
-
-  // Copy to pool memory
-  uint8_t *result = mem_alloc(pool, decoded_len + 1);
-  if (!result) {
-    free(decoded);
-    return -1;
-  }
-
-  memcpy(result, decoded, decoded_len);
-  result[decoded_len] = '\0';
-  free(decoded);
-
-  *output = result;
+  decoded[decoded_len] = '\0';
+  *output = decoded;
   *output_len = decoded_len;
   return 0;
 }

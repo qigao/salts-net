@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 foreach ($name in @('GITHUB_WORKSPACE', 'QIGAO_SDK_RID', 'QIGAO_TARGET_TRIPLET',
-                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT',
+                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT', 'SALTS_ASN1_ROOT',
                     'VCPKG_ROOT', 'VCPKG_CACHE_REPOSITORY_ROOT', 'VCPKG_BINARY_SOURCES')) {
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
     throw "Installed SDK verification requires $name"
@@ -12,6 +12,10 @@ $prefix = Join-Path $repositoryRoot "stage/sdk/$env:QIGAO_SDK_RID"
 $config = Join-Path $prefix 'lib/cmake/SaltsNet/SaltsNetConfig.cmake'
 if (-not (Test-Path -LiteralPath $config -PathType Leaf)) {
   throw "Missing installed SaltsNet config: $config"
+}
+$asn1Config = Join-Path $env:SALTS_ASN1_ROOT 'lib/cmake/ASN1/ASN1Config.cmake'
+if (-not (Test-Path -LiteralPath $asn1Config -PathType Leaf)) {
+  throw "Missing exact source-owner ASN1 SDK: $asn1Config"
 }
 # The formal consumer has its own empty manifest/build tree. Only the shared
 # external toolchain and installed packages are inputs; no source-tree targets.

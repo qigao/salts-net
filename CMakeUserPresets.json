@@ -191,6 +191,7 @@
       "binaryDir": "$env{SALTSNET_CI_BUILD_ROOT}",
       "cacheVariables": {
         "CMAKE_PREFIX_PATH": "$env{VCPKG_INSTALLED_DIR}/$env{QIGAO_TARGET_TRIPLET}",
+        "ASN1_DIR": "$env{SALTS_ASN1_ROOT}/lib/cmake/ASN1",
         "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/sdk/$env{QIGAO_SDK_RID}",
         "BUILD_TESTING": true,
         "BUILD_EXAMPLES": false,
@@ -223,10 +224,12 @@
       "binaryDir": "${sourceDir}/build/ci-host",
       "cacheVariables": {
         "BUILD_TESTING": false,
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet-host/release"
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet-host/release",
+        "ASN1_DIR": "$env{SALTS_ASN1_HOST_ROOT}/lib/cmake/ASN1"
       },
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_HOST_ROOT}",
+        "SALTS_ASN1_ROOT": "$penv{SALTS_ASN1_HOST_ROOT}",
         "QIGAO_TARGET_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-host",
         "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host",
@@ -269,10 +272,12 @@
       "binaryDir": "${sourceDir}/build/ci-host",
       "cacheVariables": {
         "BUILD_TESTING": false,
-        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet-host/release"
+        "CMAKE_INSTALL_PREFIX": "$env{PKG_ROOT}/saltsnet-host/release",
+        "ASN1_DIR": "$env{SALTS_ASN1_HOST_ROOT}/lib/cmake/ASN1"
       },
       "environment": {
         "SALTS_ROOT": "$penv{SALTS_HOST_ROOT}",
+        "SALTS_ASN1_ROOT": "$penv{SALTS_ASN1_HOST_ROOT}",
         "QIGAO_TARGET_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
         "VCPKG_INSTALLED_DIR": "${sourceDir}/vcpkg_installed-host",
         "SALTSNET_CI_BUILD_ROOT": "${sourceDir}/build/ci-host",

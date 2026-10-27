@@ -11,11 +11,13 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "$env{QIGAO_TARGET_TRIPLET}",
         "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
+        "ASN1_DIR": "$env{SALTS_ASN1_ROOT}/lib/cmake/ASN1",
         "VCPKG_INSTALLED_DIR": "$env{GITHUB_WORKSPACE}/build/ci-installed/$env{QIGAO_SDK_RID}/vcpkg_installed"
       },
       "environment": {
         "SALTSNET_ROOT": "$penv{SALTSNET_ROOT}",
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
+        "SALTS_ASN1_ROOT": "$penv{SALTS_ASN1_ROOT}",
         "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
         "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
       }

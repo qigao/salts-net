@@ -60,7 +60,7 @@ function Get-OfficialNativeVersion([string]$repository, [string]$line,
   return $selected.Version
 }
 
-$saltsOfficialVersion = Get-OfficialNativeVersion 'salts' '2.3.0' 'Salts.Native'
+$saltsOfficialVersion = Get-OfficialNativeVersion 'salts' '3.0.0' 'Salts.Native'
 $saltsUtilsOfficialVersion = Get-OfficialNativeVersion 'salts-utils' '4.3.0' 'SaltsUtils.Native'
 Write-Host "Qualifying official Salts.Native $saltsOfficialVersion + SaltsUtils.Native $saltsUtilsOfficialVersion"
 function Restore-QualifiedSdk([string]$Id, [string]$Version, [string]$Repository) {

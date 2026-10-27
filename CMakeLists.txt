@@ -52,7 +52,17 @@ include(CmakeUtils)
 
 find_package(Threads REQUIRED)
 # Binary ASN.1 is a standalone provider-neutral static codec, not SaltsCore or Crypto.
-find_package(ASN1 0.1 CONFIG REQUIRED)
+if(NOT DEFINED ENV{SALTS_ASN1_ROOT} OR
+   NOT IS_DIRECTORY "$ENV{SALTS_ASN1_ROOT}")
+  message(FATAL_ERROR "SALTS_ASN1_ROOT must name the exact independently installed qigao/crypto/asn1 SDK")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ASN1_ROOT}" _saltsnet_asn1_prefix)
+unset(ASN1_DIR CACHE)
+unset(ASN1_DIR)
+find_package(ASN1 0.1 CONFIG REQUIRED
+  PATHS "${_saltsnet_asn1_prefix}"
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+unset(_saltsnet_asn1_prefix)
 if(NOT TARGET Salts::ASN1)
   message(FATAL_ERROR "Standalone static Salts::ASN1 is required")
 endif()

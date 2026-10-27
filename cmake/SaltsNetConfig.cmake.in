@@ -3,7 +3,17 @@
 include(CMakeFindDependencyMacro)
 
 find_dependency(Threads)
-find_dependency(ASN1 0.1 CONFIG REQUIRED)
+if(NOT DEFINED ENV{SALTS_ASN1_ROOT} OR
+   NOT IS_DIRECTORY "$ENV{SALTS_ASN1_ROOT}")
+  message(FATAL_ERROR "Installed SaltsNet requires exact SALTS_ASN1_ROOT from qigao/crypto")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ASN1_ROOT}" _saltsnet_asn1_prefix)
+unset(ASN1_DIR CACHE)
+unset(ASN1_DIR)
+find_dependency(ASN1 0.1 CONFIG REQUIRED
+  PATHS "${_saltsnet_asn1_prefix}"
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+unset(_saltsnet_asn1_prefix)
 if(NOT TARGET Salts::ASN1)
   message(FATAL_ERROR "SaltsNet installed package requires canonical standalone Salts::ASN1")
 endif()

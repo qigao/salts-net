@@ -1,5 +1,5 @@
 #include "mime_utils.h"
-#include "mime_base64.h"
+#include <base64_utils.h>
 #include "mime_scan.h"
 #include "cmeta_buffer.h"
 #include <string.h>
@@ -99,30 +99,6 @@ int mime_decode_quoted_printable(mem_pool_t *pool,
 
 /* ── Base64 decoder (wrapper) ──────────────────────────────────────── */
 
-int mime_decode_base64(mem_pool_t *pool,
-                       const char *input, size_t input_len,
-                       uint8_t **output, size_t *output_len) {
-  size_t decoded_len = 0u;
-  uint8_t *decoded;
-  size_t written = 0u;
-  if (!pool || !input || !output || !output_len) return -1;
-  /* Validate the entire counted wire payload before allocating a pool block.
-   * Invalid padding or truncated quartets leave all caller outputs intact. */
-  if (mime_base64_decode(input, input_len, NULL, 0u, &decoded_len) != 0 ||
-      decoded_len == SIZE_MAX) return -1;
-  decoded = mem_alloc(pool, decoded_len + 1u);
-  if (!decoded) return -1;
-  if (mime_base64_decode(input, input_len, decoded, decoded_len, &written) != 0 ||
-      written != decoded_len) {
-    mem_free(pool, decoded);
-    return -1;
-  }
-  decoded[decoded_len] = '\0';
-  *output = decoded;
-  *output_len = decoded_len;
-  return 0;
-}
-
 /* ── Unified decoder ───────────────────────────────────────────────── */
 
 int mime_decode_body(mem_pool_t *pool,
@@ -143,8 +119,25 @@ int mime_decode_body(mem_pool_t *pool,
       *output_len = input_len;
       return 0;
 
-    case MIME_ENCODING_BASE64:
-      return mime_decode_base64(pool, input, input_len, (uint8_t **)output, output_len);
+    case MIME_ENCODING_BASE64: {
+      size_t needed = 0u, written = 0u;
+      uint8_t *decoded;
+      /* One canonical Core codec validates the complete counted wire span
+       * before a pool allocation or a caller-visible output assignment. */
+      if (tn_base64_decode_buf_ex(input, input_len, NULL, 0u, &needed)
+            != TN_BASE64_OK || needed == SIZE_MAX) return -1;
+      decoded = mem_alloc(pool, needed + 1u);
+      if (!decoded) return -1;
+      if (tn_base64_decode_buf_ex(input, input_len, decoded, needed, &written)
+            != TN_BASE64_OK || written != needed) {
+        mem_free(pool, decoded);
+        return -1;
+      }
+      decoded[needed] = '\0';
+      *output = (char *)decoded;
+      *output_len = needed;
+      return 0;
+    }
 
     case MIME_ENCODING_QUOTED_PRINTABLE:
       return mime_decode_quoted_printable(pool, input, input_len, output, output_len);

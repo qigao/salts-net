@@ -44,7 +44,7 @@ char *mime_extract_content_location(mem_pool_t *pool, const char *headers, size_
 
   // Find "Content-Location:" header
   while (ptr < end) {
-    if (tstr_ncasecmp(ptr, "Content-Location:", 17) == 0) {
+    if ((size_t)(end - ptr) >= 17u && mime_scan_ascii_equal_ci(ptr, "Content-Location:", 17u)) {
       ptr += 17;
       skip_whitespace(&ptr, end);
 
@@ -77,7 +77,7 @@ char *mime_extract_content_id(mem_pool_t *pool, const char *headers, size_t len)
 
   // Find "Content-ID:" header
   while (ptr < end) {
-    if (tstr_ncasecmp(ptr, "Content-ID:", 11) == 0) {
+    if ((size_t)(end - ptr) >= 11u && mime_scan_ascii_equal_ci(ptr, "Content-ID:", 11u)) {
       ptr += 11;
       skip_whitespace(&ptr, end);
 

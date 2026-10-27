@@ -121,4 +121,4 @@ foreach ($entry in $variables.GetEnumerator()) {
   [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
   if ($env:GITHUB_ENV) { "$($entry.Key)=$($entry.Value)" >> $env:GITHUB_ENV }
 }
-Write-Host "PASS exact qigao/crypto/asn1@$cryptoCommit: $TargetRid -> $targetRoot, host $HostRid -> $hostRoot"
+Write-Host "PASS exact qigao/crypto/asn1@$($cryptoCommit): $TargetRid -> $targetRoot, host $HostRid -> $hostRoot"

@@ -25,8 +25,8 @@ if contents:
         errors.append("SNMP must compile only its MIB CLI, never local ASN1")
     if "add_library(" in mib or "SaltsNet::SNMPSupport" in mib or "asn1_parser" in mib:
         errors.append("MIB CLI must not export an independent ASN1 support library")
-    import re
-    if re.search(r"foreach\\s*\\(\\s*component[^\\n]*\\bSNMPSupport\\b", consumer):
+    if any("SNMPSupport" in line for line in consumer.splitlines()
+           if line.lstrip().startswith("foreach(component")):
         errors.append("Installed SDK must not require retired SNMPSupport")
     if "Salts::ASN1" not in snmp:
         errors.append("SNMP must link the single imported Salts::ASN1")

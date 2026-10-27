@@ -1,0 +1,57 @@
+name: MIME bounded C11 scanner (no legacy CMeta)
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "email/mime_parser/**"
+      - ".github/workflows/mime-private-c11.yml"
+  push:
+    branches: [master]
+    paths:
+      - "email/mime_parser/**"
+      - ".github/workflows/mime-private-c11.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  scanner:
+    name: Portable C11 / ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Compile and run independent real MIME lexical C11 contract
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $src = 'email/mime_parser/test/standalone_scan'
+          $build = 'build/mime-private-c11'
+          if ($IsWindows) {
+            & cmake -S $src -B $build -G 'Visual Studio 18 2026' -A x64
+          } else {
+            & cmake -S $src -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'MIME bounded C11 configure failed' }
+          & cmake --build $build --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw 'MIME bounded C11 build failed' }
+          & ctest --test-dir $build -C Release --no-tests=error --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw 'MIME bounded C11 lexical test failed' }
+      - name: Reject retired scanner includes in MIME module
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $old = Get-ChildItem 'email/mime_parser/src' -Filter '*.c' -Recurse |
+            Select-String -Pattern 'cmeta_simd_scan\.h|cmeta_scan_' -List
+          if ($old) {
+            $old | ForEach-Object { Write-Host $_.Path $_.Line }
+            throw 'MIME code still imports retired CMeta SIMD scanner'
+          }
+          Write-Host 'PASS: source MIME lexer uses single private C11 scanner'

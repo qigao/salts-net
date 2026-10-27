@@ -83,17 +83,6 @@ find_package(
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 
-if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
-  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the restored SaltsUtils 4.3 SDK")
-endif()
-file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTSNET_SALTS_UTILS_ROOT_PATH)
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
-find_package(
-  SaltsUtils 4.3 CONFIG REQUIRED
-  PATHS "${SALTSNET_SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH
-  NO_CMAKE_FIND_ROOT_PATH)
 # Additional components
 add_subdirectory(tools)
 include(FindTools)

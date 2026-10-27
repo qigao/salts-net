@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 foreach ($name in @('GITHUB_WORKSPACE', 'QIGAO_SDK_RID', 'QIGAO_TARGET_TRIPLET',
-                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_UTILS_ROOT', 'SALTS_ASN1_ROOT',
+                    'QIGAO_HOST_TRIPLET', 'SALTS_ROOT', 'SALTS_CORE_ROOT', 'SALTS_ASN1_ROOT',
                     'VCPKG_ROOT', 'VCPKG_CACHE_REPOSITORY_ROOT', 'VCPKG_BINARY_SOURCES')) {
   if ([string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($name))) {
     throw "Installed SDK verification requires $name"
@@ -32,10 +32,10 @@ $separator = [string][IO.Path]::PathSeparator
 $runtimeDirs = @(
   (Join-Path $prefix 'bin'),
   (Join-Path $prefix 'lib'),
+  (Join-Path $env:SALTS_CORE_ROOT 'bin'),
+  (Join-Path $env:SALTS_CORE_ROOT 'lib'),
   (Join-Path $env:SALTS_ROOT 'bin'),
   (Join-Path $env:SALTS_ROOT 'lib'),
-  (Join-Path $env:SALTS_UTILS_ROOT 'bin'),
-  (Join-Path $env:SALTS_UTILS_ROOT 'lib'),
   (Join-Path $dependencies 'bin'),
   (Join-Path $dependencies 'lib')
 )

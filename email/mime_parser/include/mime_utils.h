@@ -50,13 +50,6 @@ int mime_decode_body(mem_pool_t *pool,
                                 char **output, size_t *output_len);
 
 /**
- * Decode Base64 content (wrapper around base64_utils)
- */
-int mime_decode_base64(mem_pool_t *pool,
-                                  const char *input, size_t input_len,
-                                  uint8_t **output, size_t *output_len);
-
-/**
  * Decode Quoted-Printable content
  */
 int mime_decode_quoted_printable(mem_pool_t *pool,

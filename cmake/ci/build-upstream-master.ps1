@@ -151,17 +151,17 @@ if ($env:QIGAO_TARGET_TRIPLET -eq '' -or $env:QIGAO_HOST_TRIPLET -eq '') {
 }
 $hostTriplet = $env:QIGAO_HOST_TRIPLET
 $targetTriplet = $env:QIGAO_TARGET_TRIPLET
-$host = Build-Upstream $HostRid $hostTriplet $hostTriplet
+$hostBuild = Build-Upstream $HostRid $hostTriplet $hostTriplet
 $target = if ($HostRid -ceq $TargetRid) {
-  $host
+  $hostBuild
 } else {
   Build-Upstream $TargetRid $targetTriplet $hostTriplet
 }
 $variables = [ordered]@{
   SALTS_ROOT = $target.Salts
   SALTS_CORE_ROOT = $target.Core
-  SALTS_HOST_ROOT = $host.Salts
-  SALTS_CORE_HOST_ROOT = $host.Core
+  SALTS_HOST_ROOT = $hostBuild.Salts
+  SALTS_CORE_HOST_ROOT = $hostBuild.Core
   SALTS_VERSION = '3.0.0-master'
   SALTS_SOURCE_SHA = $expected.Salts
   SALTS_CORE_SOURCE_SHA = $expected.Core

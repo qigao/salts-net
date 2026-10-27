@@ -12,7 +12,6 @@
 
 #include "asn1_api.h"
 #include "platform.h"
-#include "asn1_der_compat.h"
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>

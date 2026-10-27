@@ -4,126 +4,122 @@
  */
 
 #include "ldap_parser.h"
-#include "asn1_types.h"
+#include <salts/asn1_value.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* Check if we have a complete BER TLV */
 int ldap_message_complete(const uint8_t *data, size_t len) {
-    if (len < 2) return 0;
+    salts_asn1_reader reader;
+    salts_asn1_tlv value;
+    salts_asn1_status status;
+    if (!data && len != 0u) return -1;
+    if (salts_asn1_reader_init(&reader, data, len, SALTS_ASN1_BER) !=
+        SALTS_ASN1_OK)
+        return -1;
+    status = salts_asn1_reader_next(&reader, &value);
+    if (status == SALTS_ASN1_UNEXPECTED_END || status == SALTS_ASN1_DONE)
+        return 0;
+    if (status != SALTS_ASN1_OK || value.encoded_size > INT_MAX) return -1;
+    return (int)value.encoded_size;
+}
 
-    /* Skip tag byte */
-    size_t pos = 1;
-
-    /* Parse length */
-    if (data[pos] < 0x80) {
-        /* Short form */
-        size_t content_len = data[pos];
-        size_t total = pos + 1 + content_len;
-        return (len >= total) ? (int)total : 0;
-    } else if (data[pos] == 0x80) {
-        /* Indefinite length - scan for end-of-contents */
-        return -1;  /* Not supported for now */
-    } else {
-        /* Long form */
-        int num_octets = data[pos] & 0x7f;
-        pos++;
-        if (len < pos + num_octets) return 0;
-
-        size_t content_len = 0;
-        for (int i = 0; i < num_octets; i++) {
-            content_len = (content_len << 8) | data[pos + i];
-        }
-        size_t total = pos + num_octets + content_len;
-        return (len >= total) ? (int)total : 0;
-    }
+static int tag_is(const salts_asn1_value *value, uint8_t tag_class,
+                  uint8_t constructed, uint32_t tag_number) {
+    uint8_t actual_class = 0u, actual_constructed = 0u;
+    uint32_t actual_number = 0u;
+    return value &&
+           salts_asn1_value_get_tag(value, &actual_class, &actual_constructed,
+                                    &actual_number) == SALTS_ASN1_OK &&
+           actual_class == tag_class && actual_constructed == constructed &&
+           actual_number == tag_number;
 }
 
 /* Extract OCTET STRING as null-terminated string */
-static char *extract_string(const asn1_value_t *val) {
-    if (!val || val->type != ASN1_TYPE_OCTET_STRING) return NULL;
-
-    size_t len = val->value.octet_string.length;
+static char *extract_string(const salts_asn1_value *value) {
+    const uint8_t *data = NULL;
+    size_t len = 0u;
+    if (!tag_is(value, 0u, 0u, 4u) ||
+        salts_asn1_value_get_content(value, &data, &len) != SALTS_ASN1_OK)
+        return NULL;
     char *str = malloc(len + 1);
     if (str) {
-        if (len > 0) memcpy(str, val->value.octet_string.data, len);
+        if (len > 0) memcpy(str, data, len);
         str[len] = '\0';
     }
     return str;
 }
 
 /* Extract OCTET STRING data (copy) */
-static uint8_t *extract_data(const asn1_value_t *val, size_t *out_len) {
-    if (!val || val->type != ASN1_TYPE_OCTET_STRING) {
+static uint8_t *extract_data(const salts_asn1_value *value, size_t *out_len) {
+    const uint8_t *content = NULL;
+    size_t len = 0u;
+    if (!out_len || !tag_is(value, 0u, 0u, 4u) ||
+        salts_asn1_value_get_content(value, &content, &len) != SALTS_ASN1_OK) {
+        if (!out_len) return NULL;
         *out_len = 0;
         return NULL;
     }
-
-    size_t len = val->value.octet_string.length;
-    uint8_t *data = malloc(len);
+    uint8_t *data = len ? malloc(len) : NULL;
     if (data && len > 0) {
-        memcpy(data, val->value.octet_string.data, len);
+        memcpy(data, content, len);
     }
     *out_len = len;
     return data;
 }
 
 /* Get child from sequence by index */
-static asn1_value_t *seq_child(const asn1_value_t *seq, size_t idx) {
-    if (!seq) return NULL;
-    if (seq->type != ASN1_TYPE_SEQUENCE && 
-        (seq->type != TK_CONTEXT_SPECIFIC || !seq->constructed)) {
-        return NULL;
-    }
-    if (idx >= seq->value.sequence.count) return NULL;
-    return seq->value.sequence.children[idx];
+static const salts_asn1_value *seq_child(const salts_asn1_value *seq,
+                                         size_t idx) {
+    return salts_asn1_value_child_at(seq, idx);
 }
 
 /* Get sequence child count */
-static size_t seq_count(const asn1_value_t *seq) {
-    if (!seq) return 0;
-    if (seq->type != ASN1_TYPE_SEQUENCE && 
-        (seq->type != TK_CONTEXT_SPECIFIC || !seq->constructed)) {
-        return 0;
-    }
-    return seq->value.sequence.count;
+static size_t seq_count(const salts_asn1_value *seq) {
+    return salts_asn1_value_child_count(seq);
+}
+
+static int get_enumerated(const salts_asn1_value *value, int *out) {
+    const uint8_t *data = NULL;
+    size_t size = 0u;
+    uint64_t result = 0u;
+    if (!out || !tag_is(value, 0u, 0u, 10u) ||
+        salts_asn1_value_get_content(value, &data, &size) != SALTS_ASN1_OK ||
+        size == 0u || size > sizeof(int) || (data[0] & 0x80u) != 0u)
+        return -1;
+    for (size_t i = 0u; i < size; ++i) result = (result << 8u) | data[i];
+    if (result > INT_MAX) return -1;
+    *out = (int)result;
+    return 0;
 }
 
 /* Parse LDAPResult: resultCode, matchedDN, diagnosticMessage, [referral] */
-static int parse_ldap_result(const asn1_value_t *seq, size_t start_idx, ldap_result_data_t *result) {
+static int parse_ldap_result(const salts_asn1_value *seq, size_t start_idx,
+                             ldap_result_data_t *result) {
     memset(result, 0, sizeof(*result));
 
     /* resultCode (INTEGER/ENUMERATED) */
-    asn1_value_t *code = seq_child(seq, start_idx);
-    if (!code) return LDAP_PARSE_ERROR_FORMAT;
-
-    /* ENUMERATED (tag 0x0a) is encoded same as INTEGER but may be stored differently */
-    if (code->type == ASN1_TYPE_INTEGER || code->tag == 0x0a) {
-        result->result_code = (int)code->value.integer;
-    } else if (code->type == ASN1_TYPE_OCTET_STRING && code->value.octet_string.length > 0) {
-        /* Fallback: parse from raw bytes */
-        result->result_code = 0;
-        for (size_t i = 0; i < code->value.octet_string.length; i++) {
-            result->result_code = (result->result_code << 8) | code->value.octet_string.data[i];
-        }
-    }
+    const salts_asn1_value *code = seq_child(seq, start_idx);
+    if (!code || get_enumerated(code, &result->result_code) != 0)
+        return LDAP_PARSE_ERROR_FORMAT;
 
     /* matchedDN (OCTET STRING) */
-    asn1_value_t *matched = seq_child(seq, start_idx + 1);
+    const salts_asn1_value *matched = seq_child(seq, start_idx + 1);
     if (matched) {
         result->matched_dn = extract_string(matched);
     }
 
     /* diagnosticMessage (OCTET STRING) */
-    asn1_value_t *diag = seq_child(seq, start_idx + 2);
+    const salts_asn1_value *diag = seq_child(seq, start_idx + 2);
     if (diag) {
         result->diagnostic_message = extract_string(diag);
     }
 
     /* referral [3] SEQUENCE OF URI (optional) */
     if (seq_count(seq) > start_idx + 3) {
-        asn1_value_t *ref = seq_child(seq, start_idx + 3);
-        if (ref && ref->tag_class == 2 && ref->tag_number == 3) {
+        const salts_asn1_value *ref = seq_child(seq, start_idx + 3);
+        if (tag_is(ref, 2u, 1u, 3u)) {
             size_t ref_count = seq_count(ref);
             result->referrals = malloc(ref_count * sizeof(char *));
             if (result->referrals) {
@@ -139,16 +135,17 @@ static int parse_ldap_result(const asn1_value_t *seq, size_t start_idx, ldap_res
 }
 
 /* Parse SearchResultEntry */
-static int parse_search_entry(const asn1_value_t *entry_seq, ldap_entry_t *entry) {
+static int parse_search_entry(const salts_asn1_value *entry_seq,
+                              ldap_entry_t *entry) {
     memset(entry, 0, sizeof(*entry));
 
     /* objectName (DN) */
-    asn1_value_t *dn = seq_child(entry_seq, 0);
+    const salts_asn1_value *dn = seq_child(entry_seq, 0);
     if (!dn) return LDAP_PARSE_ERROR_FORMAT;
     entry->dn = extract_string(dn);
 
     /* attributes (PartialAttributeList) */
-    asn1_value_t *attrs = seq_child(entry_seq, 1);
+    const salts_asn1_value *attrs = seq_child(entry_seq, 1);
     if (!attrs) return LDAP_PARSE_OK;  /* No attributes */
 
     size_t attr_count = seq_count(attrs);
@@ -159,24 +156,24 @@ static int parse_search_entry(const asn1_value_t *entry_seq, ldap_entry_t *entry
     entry->attribute_count = attr_count;
 
     for (size_t i = 0; i < attr_count; i++) {
-        asn1_value_t *attr_seq = seq_child(attrs, i);
+        const salts_asn1_value *attr_seq = seq_child(attrs, i);
         if (!attr_seq) continue;
 
         /* type (AttributeDescription) */
-        asn1_value_t *type = seq_child(attr_seq, 0);
+        const salts_asn1_value *type = seq_child(attr_seq, 0);
         if (type) {
             entry->attributes[i].type = extract_string(type);
         }
 
         /* vals (SET OF AttributeValue) */
-        asn1_value_t *vals = seq_child(attr_seq, 1);
-        if (vals && vals->type == ASN1_TYPE_SET) {
-            size_t val_count = vals->value.set.count;
+        const salts_asn1_value *vals = seq_child(attr_seq, 1);
+        if (tag_is(vals, 0u, 1u, 17u)) {
+            size_t val_count = seq_count(vals);
             if (val_count > 0) {
                 ldap_value_t *values = calloc(val_count, sizeof(ldap_value_t));
                 if (values) {
                     for (size_t j = 0; j < val_count; j++) {
-                        asn1_value_t *v = vals->value.set.children[j];
+                        const salts_asn1_value *v = seq_child(vals, j);
                         if (v) {
                             values[j].data = extract_data(v, &values[j].length);
                         }
@@ -202,44 +199,58 @@ int ldap_parse_message(const uint8_t *data, size_t len, ldap_parse_result_t *res
     if (complete <= 0) return LDAP_PARSE_ERROR_TRUNCATED;
 
     /* Decode BER */
-    asn1_value_t *root = NULL;
-    int rc = asn1_ber_decode(data, complete, &root);
-    if (rc != 0 || !root) return LDAP_PARSE_ERROR_FORMAT;
+    salts_asn1_value *root = NULL;
+    if (salts_asn1_value_decode(data, (size_t)complete, SALTS_ASN1_BER,
+                                &root) != SALTS_ASN1_OK)
+        return LDAP_PARSE_ERROR_FORMAT;
 
     result->bytes_consumed = complete;
 
     /* LDAPMessage ::= SEQUENCE { messageID, protocolOp, [controls] } */
-    if (root->type != ASN1_TYPE_SEQUENCE || seq_count(root) < 2) {
-        asn1_free(root);
+    if (!tag_is(root, 0u, 1u, 16u) || seq_count(root) < 2) {
+        salts_asn1_value_free(root);
         return LDAP_PARSE_ERROR_FORMAT;
     }
 
     /* Allocate message */
     ldap_message_t *msg = calloc(1, sizeof(ldap_message_t));
     if (!msg) {
-        asn1_free(root);
+        salts_asn1_value_free(root);
         return LDAP_PARSE_ERROR_MEMORY;
     }
 
     /* messageID */
-    asn1_value_t *mid = seq_child(root, 0);
-    if (mid) {
-        msg->message_id = (int)mid->value.integer;
-    }
-
-    /* protocolOp */
-    asn1_value_t *op = seq_child(root, 1);
-    if (!op) {
+    const salts_asn1_value *mid = seq_child(root, 0);
+    int64_t message_id = 0;
+    if (salts_asn1_value_get_integer_i64(mid, &message_id) != SALTS_ASN1_OK ||
+        message_id < 0 || message_id > INT_MAX) {
         free(msg);
-        asn1_free(root);
+        salts_asn1_value_free(root);
         return LDAP_PARSE_ERROR_FORMAT;
     }
+    msg->message_id = (int)message_id;
 
-    msg->protocol_op = op->tag_number;
+    /* protocolOp */
+    const salts_asn1_value *op = seq_child(root, 1);
+    if (!op) {
+        free(msg);
+        salts_asn1_value_free(root);
+        return LDAP_PARSE_ERROR_FORMAT;
+    }
+    uint8_t op_class = 0u, op_constructed = 0u;
+    uint32_t op_number = 0u;
+    if (salts_asn1_value_get_tag(op, &op_class, &op_constructed, &op_number) !=
+            SALTS_ASN1_OK ||
+        op_class != 1u) {
+        free(msg);
+        salts_asn1_value_free(root);
+        return LDAP_PARSE_ERROR_FORMAT;
+    }
+    msg->protocol_op = (int)op_number;
 
     int parse_rc = LDAP_PARSE_OK;
 
-    switch (op->tag_number) {
+    switch (op_number) {
         case LDAP_RES_BIND:
             /* BindResponse: resultCode, matchedDN, diagnosticMessage, [serverSaslCreds] */
             parse_rc = parse_ldap_result(op, 0, &msg->payload.bind_response);
@@ -279,7 +290,7 @@ int ldap_parse_message(const uint8_t *data, size_t len, ldap_parse_result_t *res
             break;
     }
 
-    asn1_free(root);
+    salts_asn1_value_free(root);
 
     if (parse_rc != LDAP_PARSE_OK) {
         ldap_message_free(msg);

@@ -17,8 +17,7 @@
         "SALTSNET_ROOT": "$penv{SALTSNET_ROOT}",
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
         "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
-        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
-        "PATH": "$penv{PATH}"
+        "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}"
       }
     },
     {"name": "win-release-user", "inherits": ["consumer-paths", "Msvc"]},

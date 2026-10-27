@@ -39,6 +39,7 @@ SaltsNet is the **network extension layer**. It is intentionally separate from H
 | --- | --- |
 | `SaltsNet::ICE` | STUN, TURN, and ICE |
 | `SaltsNet::SNMP` | SNMP client and protocol codec |
+| `SaltsNet::SNMPSupport` | MIB ASN.1 schema compiler, X.509 metadata and helper APIs |
 | `SaltsNet::LDAP` | LDAP client |
 | `SaltsNet::Email` | SMTP, POP3, and IMAP clients |
 | `SaltsNet::MimeParser` | MIME parsing |
@@ -51,6 +52,26 @@ The URI parser is a concrete package component, but it is not a top-level ecosys
 Cryptographic and certificate support is recorded per protocol in the
 [cryptographic compatibility matrix](docs/CRYPTO_COMPATIBILITY_MATRIX.md).
 Primitive availability is not treated as proof of TLS, X.509, or S/MIME support.
+
+### ASN.1 ownership (independent provider-neutral library)
+
+SNMP v1/v2c/v3 and LDAP use the **same installed static `Salts::ASN1`**
+target, supplied by independent package `find_package(ASN1 0.1 CONFIG REQUIRED)`.
+The generic BER/DER Reader, Validator, Encoder, OID and Owned Value Tree are
+not compiled by SaltsNet or Crypto. The ABI is `salts_asn1_*` from
+`<salts/asn1.h>` and `<salts/asn1_value.h>`.
+
+SaltsNet's previous binary scanner, encoder, owned value tree and compatibility
+target `SaltsNet::Asn1Parser` have been deleted in this migration candidate.
+The **ASN.1 MIB schema grammar** is a different domain and remains under
+`SaltsNet::SNMPSupport`. ECDSA/RFC8410 crypto-specific key formats remain
+in `Salts::Crypto`, separate from protocol SNMP/LDAP wire handling.
+
+The canonical standalone package is currently staged at
+[qigao/crypto export branch](https://github.com/qigao/crypto/tree/export/standalone-asn1-owner);
+do not merge or release this consumer change until `qigao/asn1` exists and
+installed SDK / wire-equivalence CI passes. This is a breaking source ownership
+change without old API aliases or fallbacks.
 
 ## Runtime model
 

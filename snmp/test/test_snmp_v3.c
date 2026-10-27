@@ -6,7 +6,7 @@
 #include "snmp_usm.h"
 #include "snmp_builder.h"
 #include "snmp_parser.h"
-#include "asn1_types.h"
+#include <salts/asn1_value.h>
 #include "tinytest.h"
 #include <stdlib.h>
 #include <string.h>
@@ -52,32 +52,42 @@ static int build_test_auth_request(uint8_t *request, size_t *request_len,
 
 static int test_usm_parameter_lengths(const uint8_t *message, size_t message_len,
                                       size_t *auth_len, size_t *priv_len) {
-    asn1_value_t *root = NULL;
-    asn1_value_t *usm = NULL;
+    salts_asn1_value *root = NULL;
+    salts_asn1_value *usm = NULL;
+    const salts_asn1_value *security = NULL;
+    const uint8_t *security_data = NULL;
+    const uint8_t *field_data = NULL;
+    size_t security_size = 0u;
+    size_t field_size = 0u;
     int result = -1;
     if (!message || !auth_len || !priv_len ||
-        scan_binary_asn1(message, message_len, &root) != 0 || !root ||
-        root->tag != 0x30 || root->value.sequence.count != 4) {
+        salts_asn1_value_decode(message, message_len, SALTS_ASN1_BER, &root) !=
+            SALTS_ASN1_OK ||
+        salts_asn1_value_child_count(root) != 4u) {
         goto cleanup;
     }
-    asn1_value_t *security = root->value.sequence.children[2];
-    if (security->tag != 0x04 ||
-        scan_binary_asn1(security->value.octet_string.data,
-                         security->value.octet_string.length, &usm) != 0 ||
-        !usm || usm->tag != 0x30 || usm->value.sequence.count != 6) {
+    security = salts_asn1_value_child_at(root, 2u);
+    if (salts_asn1_value_get_content(security, &security_data,
+                                     &security_size) != SALTS_ASN1_OK ||
+        salts_asn1_value_decode(security_data, security_size, SALTS_ASN1_BER,
+                                &usm) != SALTS_ASN1_OK ||
+        salts_asn1_value_child_count(usm) != 6u) {
         goto cleanup;
     }
-    if (usm->value.sequence.children[4]->tag != 0x04 ||
-        usm->value.sequence.children[5]->tag != 0x04) {
+    if (salts_asn1_value_get_content(salts_asn1_value_child_at(usm, 4u),
+                                     &field_data, &field_size) != SALTS_ASN1_OK) {
         goto cleanup;
     }
-    *auth_len = usm->value.sequence.children[4]->value.octet_string.length;
-    *priv_len = usm->value.sequence.children[5]->value.octet_string.length;
+    *auth_len = field_size;
+    if (salts_asn1_value_get_content(salts_asn1_value_child_at(usm, 5u),
+                                     &field_data, &field_size) != SALTS_ASN1_OK)
+        goto cleanup;
+    *priv_len = field_size;
     result = 0;
 
 cleanup:
-    if (usm) asn1_free(usm);
-    if (root) asn1_free(root);
+    salts_asn1_value_free(usm);
+    salts_asn1_value_free(root);
     return result;
 }
 

@@ -33,7 +33,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(MSVC)
-  # Align with Salts 2.3: the dash spelling is compatible with the MSVC ccache launcher.
+  # Keep MSVC C11 atomics as required by native SaltsNet source.
   add_compile_options("$<$<COMPILE_LANGUAGE:C>:-experimental:c11atomics>")
 endif()
 # Enable folder organization in IDEs
@@ -51,6 +51,11 @@ include(Sanitizers)
 include(CmakeUtils)
 
 find_package(Threads REQUIRED)
+# Binary ASN.1 is a standalone provider-neutral static codec, not SaltsCore or Crypto.
+find_package(ASN1 0.1 CONFIG REQUIRED)
+if(NOT TARGET Salts::ASN1)
+  message(FATAL_ERROR "Standalone static Salts::ASN1 is required")
+endif()
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "Required dependency root is not defined: SALTS_ROOT")
@@ -63,7 +68,7 @@ file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 find_package(
-  Salts 2.3 CONFIG REQUIRED
+  Salts 3.0 CONFIG REQUIRED
   PATHS "${SALTSNET_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)

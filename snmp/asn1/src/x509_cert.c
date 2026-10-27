@@ -1,410 +1,354 @@
-/**
- * @file x509_cert.c
- * @brief X.509 Certificate Parser Implementation
- */
-
+/** @file x509_cert.c @brief X.509 DER certificate parser. */
 #include "x509_cert.h"
-#include "asn1/asn1_der_compat.h"
+#include <salts/asn1_value.h>
 #include <stdlib.h>
 #include <string.h>
 
-/* ============================================================================
- * Helper Functions
- * ============================================================================ */
-
-static bool oid_equals(const uint32_t *oid1, size_t count1, const char *oid_str) {
-    uint32_t oid2[16];
-    size_t count2 = 0;
-    const char *p = oid_str;
-
-    while (*p && count2 < 16) {
-        char *end;
-        unsigned long val = strtoul(p, &end, 10);
-        if (p == end) break;
-        oid2[count2++] = (uint32_t)val;
-        p = (*end == '.') ? end + 1 : end;
-    }
-
-    if (count1 != count2) return false;
-    for (size_t i = 0; i < count1; i++) {
-        if (oid1[i] != oid2[i]) return false;
-    }
-    return true;
+static int tag_is(const salts_asn1_value *value, uint8_t tag_class,
+                  uint8_t constructed, uint32_t tag_number) {
+    uint8_t actual_class = 0u, actual_constructed = 0u;
+    uint32_t actual_number = 0u;
+    return value &&
+           salts_asn1_value_get_tag(value, &actual_class, &actual_constructed,
+                                    &actual_number) == SALTS_ASN1_OK &&
+           actual_class == tag_class && actual_constructed == constructed &&
+           actual_number == tag_number;
 }
 
-static char *string_from_asn1(const asn1_value_t *v) {
-    if (!v || v->value.octet_string.length == 0) return NULL;
-
-    char *str = malloc(v->value.octet_string.length + 1);
-    if (!str) return NULL;
-
-    memcpy(str, v->value.octet_string.data, v->value.octet_string.length);
-    str[v->value.octet_string.length] = '\0';
-    return str;
+static const salts_asn1_value *child(const salts_asn1_value *value,
+                                     size_t index) {
+    return salts_asn1_value_child_at(value, index);
 }
 
-static time_t parse_asn1_time(const asn1_value_t *v) {
-    if (!v || v->value.octet_string.length == 0) return 0;
+static int copy_content(const salts_asn1_value *value, uint8_t **out,
+                        size_t *out_size) {
+    const uint8_t *data = NULL;
+    size_t size = 0u;
+    if (!out || !out_size ||
+        salts_asn1_value_get_content(value, &data, &size) != SALTS_ASN1_OK)
+        return -1;
+    *out = NULL;
+    *out_size = size;
+    if (size != 0u) {
+        *out = (uint8_t *)malloc(size);
+        if (!*out) return -1;
+        memcpy(*out, data, size);
+    }
+    return 0;
+}
 
-    struct tm tm = {0};
-    const char *str = (const char *)v->value.octet_string.data;
-    size_t len = v->value.octet_string.length;
+static bool oid_equals(const uint32_t *oid, size_t count, const char *text) {
+    uint32_t expected[16];
+    size_t expected_count = 0u;
+    while (*text && expected_count < 16u) {
+        char *end = NULL;
+        unsigned long value = strtoul(text, &end, 10);
+        if (text == end || value > UINT32_MAX) return false;
+        expected[expected_count++] = (uint32_t)value;
+        text = *end == '.' ? end + 1 : end;
+    }
+    return !*text && count == expected_count &&
+           memcmp(oid, expected, count * sizeof(*oid)) == 0;
+}
 
-    if (v->type == ASN1_TYPE_UTC_TIME) {
-        // YYMMDDhhmmssZ (13 chars)
-        if (len < 13) return 0;
-        int year = (str[0] - '0') * 10 + (str[1] - '0');
-        tm.tm_year = (year < 50 ? 2000 + year : 1900 + year) - 1900;
-        tm.tm_mon = (str[2] - '0') * 10 + (str[3] - '0') - 1;
-        tm.tm_mday = (str[4] - '0') * 10 + (str[5] - '0');
-        tm.tm_hour = (str[6] - '0') * 10 + (str[7] - '0');
-        tm.tm_min = (str[8] - '0') * 10 + (str[9] - '0');
-        tm.tm_sec = (str[10] - '0') * 10 + (str[11] - '0');
-    } else if (v->type == ASN1_TYPE_GENERALIZED_TIME) {
-        // YYYYMMDDhhmmssZ (15 chars)
-        if (len < 15) return 0;
-        tm.tm_year = ((str[0] - '0') * 1000 + (str[1] - '0') * 100 +
-                      (str[2] - '0') * 10 + (str[3] - '0')) - 1900;
-        tm.tm_mon = (str[4] - '0') * 10 + (str[5] - '0') - 1;
-        tm.tm_mday = (str[6] - '0') * 10 + (str[7] - '0');
-        tm.tm_hour = (str[8] - '0') * 10 + (str[9] - '0');
-        tm.tm_min = (str[10] - '0') * 10 + (str[11] - '0');
-        tm.tm_sec = (str[12] - '0') * 10 + (str[13] - '0');
+static char *string_from_asn1(const salts_asn1_value *value) {
+    const uint8_t *data = NULL;
+    size_t size = 0u;
+    char *string;
+    if (!value || salts_asn1_value_get_content(value, &data, &size) !=
+                      SALTS_ASN1_OK ||
+        size == 0u)
+        return NULL;
+    string = (char *)malloc(size + 1u);
+    if (!string) return NULL;
+    memcpy(string, data, size);
+    string[size] = '\0';
+    return string;
+}
+
+static time_t parse_asn1_time(const salts_asn1_value *value) {
+    const uint8_t *data = NULL;
+    size_t size = 0u;
+    uint8_t tag_class = 0u, constructed = 0u;
+    uint32_t tag_number = 0u;
+    struct tm parsed = {0};
+    const char *text;
+    if (salts_asn1_value_get_tag(value, &tag_class, &constructed, &tag_number) !=
+            SALTS_ASN1_OK ||
+        tag_class != 0u || constructed ||
+        salts_asn1_value_get_content(value, &data, &size) != SALTS_ASN1_OK)
+        return 0;
+    text = (const char *)data;
+    if (tag_number == 23u) {
+        int year;
+        if (size != 13u || text[12] != 'Z') return 0;
+        year = (text[0] - '0') * 10 + text[1] - '0';
+        parsed.tm_year = (year < 50 ? 2000 + year : 1900 + year) - 1900;
+        parsed.tm_mon = (text[2] - '0') * 10 + text[3] - '0' - 1;
+        parsed.tm_mday = (text[4] - '0') * 10 + text[5] - '0';
+        parsed.tm_hour = (text[6] - '0') * 10 + text[7] - '0';
+        parsed.tm_min = (text[8] - '0') * 10 + text[9] - '0';
+        parsed.tm_sec = (text[10] - '0') * 10 + text[11] - '0';
+    } else if (tag_number == 24u) {
+        if (size != 15u || text[14] != 'Z') return 0;
+        parsed.tm_year = (text[0] - '0') * 1000 + (text[1] - '0') * 100 +
+                         (text[2] - '0') * 10 + text[3] - '0' - 1900;
+        parsed.tm_mon = (text[4] - '0') * 10 + text[5] - '0' - 1;
+        parsed.tm_mday = (text[6] - '0') * 10 + text[7] - '0';
+        parsed.tm_hour = (text[8] - '0') * 10 + text[9] - '0';
+        parsed.tm_min = (text[10] - '0') * 10 + text[11] - '0';
+        parsed.tm_sec = (text[12] - '0') * 10 + text[13] - '0';
     } else {
         return 0;
     }
-
-    return mktime(&tm);
+    return mktime(&parsed);
 }
 
-/* ============================================================================
- * Name Parsing
- * ============================================================================ */
+static int copy_oid(const salts_asn1_value *value, uint32_t **out,
+                    size_t *out_count) {
+    size_t count = 0u;
+    uint32_t *components;
+    if (!out || !out_count ||
+        salts_asn1_value_get_oid(value, NULL, 0u, &count) != SALTS_ASN1_OK ||
+        count > SIZE_MAX / sizeof(*components))
+        return -1;
+    components = (uint32_t *)malloc(count * sizeof(*components));
+    if (!components) return -1;
+    if (salts_asn1_value_get_oid(value, components, count, &count) !=
+        SALTS_ASN1_OK) {
+        free(components);
+        return -1;
+    }
+    *out = components;
+    *out_count = count;
+    return 0;
+}
 
-static int parse_name(asn1_value_t *name_seq, x509_name_t *name) {
-    if (!name_seq || name_seq->type != ASN1_TYPE_SEQUENCE) return -1;
-
-    memset(name, 0, sizeof(x509_name_t));
-
-    // Name is SEQUENCE OF RelativeDistinguishedName
-    // RelativeDistinguishedName is SET OF AttributeTypeAndValue
-    // AttributeTypeAndValue is SEQUENCE { type OID, value ANY }
-
-    for (size_t i = 0; i < name_seq->value.sequence.count; i++) {
-        asn1_value_t *rdn = name_seq->value.sequence.children[i];
-        if (rdn->type != ASN1_TYPE_SET) continue;
-
-        for (size_t j = 0; j < rdn->value.set.count; j++) {
-            asn1_value_t *attr = rdn->value.set.children[j];
-            if (attr->type != ASN1_TYPE_SEQUENCE) continue;
-            if (attr->value.sequence.count < 2) continue;
-
-            asn1_value_t *oid = attr->value.sequence.children[0];
-            asn1_value_t *value = attr->value.sequence.children[1];
-
-            if (oid->type != ASN1_TYPE_OBJECT_IDENTIFIER) continue;
-
-            char *str = string_from_asn1(value);
-            if (!str) continue;
-
-            if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_CN)) {
-                free(name->common_name);
-                name->common_name = str;
-            } else if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_ORG)) {
-                free(name->organization);
-                name->organization = str;
-            } else if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_OU)) {
-                free(name->organizational_unit);
-                name->organizational_unit = str;
-            } else if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_COUNTRY)) {
-                free(name->country);
-                name->country = str;
-            } else if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_STATE)) {
-                free(name->state);
-                name->state = str;
-            } else if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_LOCALITY)) {
-                free(name->locality);
-                name->locality = str;
-            } else if (oid_equals(oid->value.oid.components, oid->value.oid.count, X509_OID_AT_EMAIL)) {
-                free(name->email);
-                name->email = str;
+static int parse_name(const salts_asn1_value *sequence, x509_name_t *name) {
+    if (!tag_is(sequence, 0u, 1u, 16u)) return -1;
+    memset(name, 0, sizeof(*name));
+    for (size_t i = 0u; i < salts_asn1_value_child_count(sequence); ++i) {
+        const salts_asn1_value *rdn = child(sequence, i);
+        if (!tag_is(rdn, 0u, 1u, 17u)) continue;
+        for (size_t j = 0u; j < salts_asn1_value_child_count(rdn); ++j) {
+            const salts_asn1_value *attribute = child(rdn, j);
+            const salts_asn1_value *oid_value, *text_value;
+            uint32_t *oid = NULL;
+            size_t oid_count = 0u;
+            char *text;
+            char **destination = NULL;
+            if (!tag_is(attribute, 0u, 1u, 16u) ||
+                salts_asn1_value_child_count(attribute) < 2u)
+                continue;
+            oid_value = child(attribute, 0u);
+            text_value = child(attribute, 1u);
+            if (copy_oid(oid_value, &oid, &oid_count) != 0) continue;
+            text = string_from_asn1(text_value);
+            if (oid_equals(oid, oid_count, X509_OID_AT_CN))
+                destination = &name->common_name;
+            else if (oid_equals(oid, oid_count, X509_OID_AT_ORG))
+                destination = &name->organization;
+            else if (oid_equals(oid, oid_count, X509_OID_AT_OU))
+                destination = &name->organizational_unit;
+            else if (oid_equals(oid, oid_count, X509_OID_AT_COUNTRY))
+                destination = &name->country;
+            else if (oid_equals(oid, oid_count, X509_OID_AT_STATE))
+                destination = &name->state;
+            else if (oid_equals(oid, oid_count, X509_OID_AT_LOCALITY))
+                destination = &name->locality;
+            else if (oid_equals(oid, oid_count, X509_OID_AT_EMAIL))
+                destination = &name->email;
+            free(oid);
+            if (destination) {
+                free(*destination);
+                *destination = text;
             } else {
-                free(str);
+                free(text);
             }
         }
     }
-
     return 0;
 }
 
-/* ============================================================================
- * Algorithm Parsing
- * ============================================================================ */
+static int parse_algorithm(const salts_asn1_value *sequence,
+                           x509_algorithm_t *algorithm) {
+    if (!tag_is(sequence, 0u, 1u, 16u) ||
+        salts_asn1_value_child_count(sequence) < 1u)
+        return -1;
+    memset(algorithm, 0, sizeof(*algorithm));
+    return copy_oid(child(sequence, 0u), &algorithm->oid,
+                    &algorithm->oid_count);
+}
 
-static int parse_algorithm(asn1_value_t *alg_seq, x509_algorithm_t *alg) {
-    if (!alg_seq || alg_seq->type != ASN1_TYPE_SEQUENCE) return -1;
-    if (alg_seq->value.sequence.count < 1) return -1;
-
-    memset(alg, 0, sizeof(x509_algorithm_t));
-
-    asn1_value_t *oid = alg_seq->value.sequence.children[0];
-    if (oid->type != ASN1_TYPE_OBJECT_IDENTIFIER) return -1;
-
-    alg->oid = malloc(oid->value.oid.count * sizeof(uint32_t));
-    if (!alg->oid) return -1;
-
-    memcpy(alg->oid, oid->value.oid.components, oid->value.oid.count * sizeof(uint32_t));
-    alg->oid_count = oid->value.oid.count;
-
-    // Optional parameters
-    if (alg_seq->value.sequence.count > 1) {
-        asn1_value_t *params = alg_seq->value.sequence.children[1];
-        if (params->type != ASN1_TYPE_NULL) {
-            // Store raw DER encoding of parameters
-            // (Would need to re-encode, but we'll skip for now)
-        }
+static int parse_rsa_pubkey(const uint8_t *der, size_t der_size,
+                            x509_rsa_pubkey_t *rsa) {
+    salts_asn1_value *sequence = NULL;
+    const salts_asn1_value *modulus, *exponent;
+    if (salts_asn1_value_decode(der, der_size, SALTS_ASN1_DER, &sequence) !=
+            SALTS_ASN1_OK ||
+        !tag_is(sequence, 0u, 1u, 16u) ||
+        salts_asn1_value_child_count(sequence) != 2u) {
+        salts_asn1_value_free(sequence);
+        return -1;
     }
-
+    modulus = child(sequence, 0u);
+    exponent = child(sequence, 1u);
+    if (!tag_is(modulus, 0u, 0u, 2u) || !tag_is(exponent, 0u, 0u, 2u) ||
+        copy_content(modulus, &rsa->modulus, &rsa->modulus_len) != 0 ||
+        copy_content(exponent, &rsa->exponent, &rsa->exponent_len) != 0) {
+        salts_asn1_value_free(sequence);
+        return -1;
+    }
+    salts_asn1_value_free(sequence);
     return 0;
 }
 
-/* ============================================================================
- * Public Key Parsing
- * ============================================================================ */
-
-static int parse_rsa_pubkey(const uint8_t *der, size_t der_len, x509_rsa_pubkey_t *rsa) {
-    asn1_value_t *seq = NULL;
-    int ret = asn1_der_decode_legacy(der, der_len, &seq);
-    if (ret < 0 || !seq) return -1;
-
-    if (seq->type != ASN1_TYPE_SEQUENCE || seq->value.sequence.count < 2) {
-        asn1_free(seq);
+static int parse_pubkey_info(const salts_asn1_value *sequence,
+                             x509_pubkey_info_t *public_key) {
+    const salts_asn1_value *bits;
+    const uint8_t *content = NULL;
+    size_t size = 0u;
+    if (!tag_is(sequence, 0u, 1u, 16u) ||
+        salts_asn1_value_child_count(sequence) != 2u)
         return -1;
-    }
-
-    // SEQUENCE { modulus INTEGER, exponent INTEGER }
-    asn1_value_t *n = seq->value.sequence.children[0];
-    asn1_value_t *e = seq->value.sequence.children[1];
-
-    if (n->type != ASN1_TYPE_INTEGER || e->type != ASN1_TYPE_INTEGER) {
-        asn1_free(seq);
+    memset(public_key, 0, sizeof(*public_key));
+    if (parse_algorithm(child(sequence, 0u), &public_key->algorithm) != 0)
         return -1;
+    bits = child(sequence, 1u);
+    if (!tag_is(bits, 0u, 0u, 3u) ||
+        salts_asn1_value_get_content(bits, &content, &size) != SALTS_ASN1_OK ||
+        size == 0u || content[0] > 7u)
+        return -1;
+    ++content;
+    --size;
+    if (oid_equals(public_key->algorithm.oid, public_key->algorithm.oid_count,
+                   X509_OID_RSA_ENCRYPTION)) {
+        public_key->key_type = X509_PUBKEY_RSA;
+        return parse_rsa_pubkey(content, size, &public_key->key.rsa);
     }
-
-    // For now, store as raw bytes (would need INTEGER to bytes conversion)
-    // This is simplified - real implementation would extract the integer bytes
-
-    asn1_free(seq);
+    if (oid_equals(public_key->algorithm.oid, public_key->algorithm.oid_count,
+                   X509_OID_EC_PUBKEY)) {
+        public_key->key_type = X509_PUBKEY_EC;
+        public_key->key.ec.point = size ? (uint8_t *)malloc(size) : NULL;
+        if (size && !public_key->key.ec.point) return -1;
+        if (size) memcpy(public_key->key.ec.point, content, size);
+        public_key->key.ec.point_len = size;
+        return 0;
+    }
+    public_key->key_type =
+        oid_equals(public_key->algorithm.oid, public_key->algorithm.oid_count,
+                   X509_OID_ED25519)
+            ? X509_PUBKEY_ED25519
+            : X509_PUBKEY_UNKNOWN;
+    public_key->key.raw.data = size ? (uint8_t *)malloc(size) : NULL;
+    if (size && !public_key->key.raw.data) return -1;
+    if (size) memcpy(public_key->key.raw.data, content, size);
+    public_key->key.raw.len = size;
     return 0;
 }
 
-static int parse_pubkey_info(asn1_value_t *pubkey_seq, x509_pubkey_info_t *pubkey) {
-    if (!pubkey_seq || pubkey_seq->type != ASN1_TYPE_SEQUENCE) return -1;
-    if (pubkey_seq->value.sequence.count < 2) return -1;
-
-    memset(pubkey, 0, sizeof(x509_pubkey_info_t));
-
-    // SubjectPublicKeyInfo ::= SEQUENCE {
-    //   algorithm AlgorithmIdentifier,
-    //   subjectPublicKey BIT STRING }
-
-    asn1_value_t *alg_seq = pubkey_seq->value.sequence.children[0];
-    asn1_value_t *pubkey_bits = pubkey_seq->value.sequence.children[1];
-
-    if (parse_algorithm(alg_seq, &pubkey->algorithm) < 0) return -1;
-    if (pubkey_bits->type != ASN1_TYPE_BIT_STRING) return -1;
-
-    // Determine key type by OID
-    if (oid_equals(pubkey->algorithm.oid, pubkey->algorithm.oid_count, X509_OID_RSA_ENCRYPTION)) {
-        pubkey->key_type = X509_PUBKEY_RSA;
-        // Parse RSA key from BIT STRING
-        parse_rsa_pubkey(pubkey_bits->value.octet_string.data, pubkey_bits->value.octet_string.length, &pubkey->key.rsa);
-    } else if (oid_equals(pubkey->algorithm.oid, pubkey->algorithm.oid_count, X509_OID_EC_PUBKEY)) {
-        pubkey->key_type = X509_PUBKEY_EC;
-        // EC key is just the point
-        pubkey->key.ec.point = malloc(pubkey_bits->value.octet_string.length);
-        if (pubkey->key.ec.point) {
-            memcpy(pubkey->key.ec.point, pubkey_bits->value.octet_string.data, pubkey_bits->value.octet_string.length);
-            pubkey->key.ec.point_len = pubkey_bits->value.octet_string.length;
-        }
-    } else if (oid_equals(pubkey->algorithm.oid, pubkey->algorithm.oid_count, X509_OID_ED25519)) {
-        pubkey->key_type = X509_PUBKEY_ED25519;
-        // Ed25519 public key is raw 32 bytes
-        pubkey->key.raw.data = malloc(pubkey_bits->value.octet_string.length);
-        if (pubkey->key.raw.data) {
-            memcpy(pubkey->key.raw.data, pubkey_bits->value.octet_string.data, pubkey_bits->value.octet_string.length);
-            pubkey->key.raw.len = pubkey_bits->value.octet_string.length;
-        }
-    } else {
-        pubkey->key_type = X509_PUBKEY_UNKNOWN;
-        pubkey->key.raw.data = malloc(pubkey_bits->value.octet_string.length);
-        if (pubkey->key.raw.data) {
-            memcpy(pubkey->key.raw.data, pubkey_bits->value.octet_string.data, pubkey_bits->value.octet_string.length);
-            pubkey->key.raw.len = pubkey_bits->value.octet_string.length;
-        }
+static int parse_tbs_certificate(const salts_asn1_value *tbs,
+                                 x509_tbs_cert_t *certificate) {
+    size_t index = 0u, count;
+    const salts_asn1_value *field;
+    uint8_t tag_class = 0u, constructed = 0u;
+    uint32_t tag_number = 0u;
+    int64_t version = 0;
+    if (!tag_is(tbs, 0u, 1u, 16u)) return -1;
+    memset(certificate, 0, sizeof(*certificate));
+    count = salts_asn1_value_child_count(tbs);
+    if (count < 6u) return -1;
+    field = child(tbs, index);
+    if (salts_asn1_value_get_tag(field, &tag_class, &constructed, &tag_number) ==
+            SALTS_ASN1_OK &&
+        tag_class == 2u && constructed && tag_number == 0u) {
+        if (salts_asn1_value_child_count(field) != 1u ||
+            salts_asn1_value_get_integer_i64(child(field, 0u), &version) !=
+                SALTS_ASN1_OK ||
+            version < 0 || version > 2)
+            return -1;
+        certificate->version = (int)version;
+        ++index;
     }
-
+    if (index >= count || !tag_is(child(tbs, index), 0u, 0u, 2u) ||
+        copy_content(child(tbs, index++), &certificate->serial_number,
+                     &certificate->serial_number_len) != 0 ||
+        index >= count ||
+        parse_algorithm(child(tbs, index++), &certificate->signature) != 0 ||
+        index >= count ||
+        parse_name(child(tbs, index++), &certificate->issuer) != 0 ||
+        index >= count)
+        return -1;
+    field = child(tbs, index++);
+    if (!tag_is(field, 0u, 1u, 16u) ||
+        salts_asn1_value_child_count(field) != 2u)
+        return -1;
+    certificate->validity.not_before = parse_asn1_time(child(field, 0u));
+    certificate->validity.not_after = parse_asn1_time(child(field, 1u));
+    if (index >= count ||
+        parse_name(child(tbs, index++), &certificate->subject) != 0 ||
+        index >= count ||
+        parse_pubkey_info(child(tbs, index++), &certificate->public_key) != 0)
+        return -1;
     return 0;
 }
 
-/* ============================================================================
- * TBSCertificate Parsing
- * ============================================================================ */
-
-static int parse_tbs_certificate(asn1_value_t *tbs, x509_tbs_cert_t *tbs_cert) {
-    if (!tbs || tbs->type != ASN1_TYPE_SEQUENCE) return -1;
-
-    memset(tbs_cert, 0, sizeof(x509_tbs_cert_t));
-
-    size_t idx = 0;
-    size_t count = tbs->value.sequence.count;
-
-    // Version [0] EXPLICIT (optional, default v1)
-    asn1_value_t *field = tbs->value.sequence.children[idx];
-    if (field->tag_class == 2 && field->tag_number == 0) {
-        // Context-specific [0]
-        if (field->value.sequence.count > 0) {
-            asn1_value_t *ver = field->value.sequence.children[0];
-            if (ver->type == ASN1_TYPE_INTEGER) {
-                tbs_cert->version = (int)ver->value.integer;
-            }
+int x509_cert_parse(const uint8_t *der, size_t der_size,
+                    x509_cert_t **certificate_out) {
+    salts_asn1_value *root = NULL;
+    x509_cert_t *certificate;
+    const salts_asn1_value *signature;
+    const uint8_t *signature_content = NULL;
+    size_t signature_size = 0u;
+    if (!der || der_size == 0u || !certificate_out) return -1;
+    *certificate_out = NULL;
+    if (salts_asn1_value_decode(der, der_size, SALTS_ASN1_DER, &root) !=
+            SALTS_ASN1_OK ||
+        !tag_is(root, 0u, 1u, 16u) ||
+        salts_asn1_value_child_count(root) != 3u) {
+        salts_asn1_value_free(root);
+        return -1;
+    }
+    certificate = (x509_cert_t *)calloc(1u, sizeof(*certificate));
+    if (!certificate) {
+        salts_asn1_value_free(root);
+        return -1;
+    }
+    signature = child(root, 2u);
+    if (parse_tbs_certificate(child(root, 0u), &certificate->tbs) != 0 ||
+        parse_algorithm(child(root, 1u), &certificate->sig_algorithm) != 0 ||
+        !tag_is(signature, 0u, 0u, 3u) ||
+        salts_asn1_value_get_content(signature, &signature_content,
+                                     &signature_size) != SALTS_ASN1_OK ||
+        signature_size == 0u || signature_content[0] > 7u) {
+        x509_cert_free(certificate);
+        salts_asn1_value_free(root);
+        return -1;
+    }
+    certificate->signature_unused_bits = signature_content[0];
+    certificate->signature_len = signature_size - 1u;
+    if (certificate->signature_len) {
+        certificate->signature = (uint8_t *)malloc(certificate->signature_len);
+        if (!certificate->signature) {
+            x509_cert_free(certificate);
+            salts_asn1_value_free(root);
+            return -1;
         }
-        idx++;
+        memcpy(certificate->signature, signature_content + 1u,
+               certificate->signature_len);
     }
-
-    // Serial Number
-    if (idx >= count) return -1;
-    field = tbs->value.sequence.children[idx++];
-    if (field->type == ASN1_TYPE_INTEGER) {
-        // Small integer - convert to bytes
-        tbs_cert->serial_number_len = 1;
-        tbs_cert->serial_number = malloc(1);
-        if (tbs_cert->serial_number) {
-            tbs_cert->serial_number[0] = (uint8_t)field->value.integer;
-        }
-    } else {
-        // Large integer or other type - copy as octet string
-        if (field->type == ASN1_TYPE_OCTET_STRING) {
-            tbs_cert->serial_number_len = field->value.octet_string.length;
-            tbs_cert->serial_number = malloc(field->value.octet_string.length);
-            if (tbs_cert->serial_number) {
-                memcpy(tbs_cert->serial_number, field->value.octet_string.data, field->value.octet_string.length);
-            }
-        } else {
-            // Fallback for other types
-            tbs_cert->serial_number_len = 0;
-            tbs_cert->serial_number = NULL;
-        }
+    certificate->der = (uint8_t *)malloc(der_size);
+    if (!certificate->der) {
+        x509_cert_free(certificate);
+        salts_asn1_value_free(root);
+        return -1;
     }
-
-    // Signature Algorithm
-    if (idx >= count) return -1;
-    field = tbs->value.sequence.children[idx++];
-    if (parse_algorithm(field, &tbs_cert->signature) < 0) return -1;
-
-    // Issuer
-    if (idx >= count) return -1;
-    field = tbs->value.sequence.children[idx++];
-    if (parse_name(field, &tbs_cert->issuer) < 0) return -1;
-
-    // Validity
-    if (idx >= count) return -1;
-    field = tbs->value.sequence.children[idx++];
-    if (field->type == ASN1_TYPE_SEQUENCE && field->value.sequence.count == 2) {
-        tbs_cert->validity.not_before = parse_asn1_time(field->value.sequence.children[0]);
-        tbs_cert->validity.not_after = parse_asn1_time(field->value.sequence.children[1]);
-    }
-
-    // Subject
-    if (idx >= count) return -1;
-    field = tbs->value.sequence.children[idx++];
-    if (parse_name(field, &tbs_cert->subject) < 0) return -1;
-
-    // SubjectPublicKeyInfo
-    if (idx >= count) return -1;
-    field = tbs->value.sequence.children[idx++];
-    if (parse_pubkey_info(field, &tbs_cert->public_key) < 0) return -1;
-
-    // Extensions [3] EXPLICIT (v3 only)
-    while (idx < count) {
-        field = tbs->value.sequence.children[idx++];
-        // Skip extensions for now
-    }
-
+    memcpy(certificate->der, der, der_size);
+    certificate->der_len = der_size;
+    salts_asn1_value_free(root);
+    *certificate_out = certificate;
     return 0;
 }
-
-/* ============================================================================
- * Certificate Parsing
- * ============================================================================ */
-
-int x509_cert_parse(const uint8_t *der, size_t der_len, x509_cert_t **cert_out) {
-    if (!der || der_len == 0 || !cert_out) return -1;
-
-    asn1_value_t *cert_seq = NULL;
-    int ret = asn1_der_decode_legacy(der, der_len, &cert_seq);
-    if (ret < 0 || !cert_seq) return -1;
-
-    if (cert_seq->type != ASN1_TYPE_SEQUENCE || cert_seq->value.sequence.count < 3) {
-        asn1_free(cert_seq);
-        return -1;
-    }
-
-    x509_cert_t *cert = calloc(1, sizeof(x509_cert_t));
-    if (!cert) {
-        asn1_free(cert_seq);
-        return -1;
-    }
-
-    // Certificate ::= SEQUENCE {
-    //   tbsCertificate TBSCertificate,
-    //   signatureAlgorithm AlgorithmIdentifier,
-    //   signatureValue BIT STRING }
-
-    asn1_value_t *tbs = cert_seq->value.sequence.children[0];
-    asn1_value_t *sig_alg = cert_seq->value.sequence.children[1];
-    asn1_value_t *sig_val = cert_seq->value.sequence.children[2];
-
-    // Parse TBSCertificate
-    if (parse_tbs_certificate(tbs, &cert->tbs) < 0) {
-        x509_cert_free(cert);
-        asn1_free(cert_seq);
-        return -1;
-    }
-
-    // Parse signature algorithm
-    if (parse_algorithm(sig_alg, &cert->sig_algorithm) < 0) {
-        x509_cert_free(cert);
-        asn1_free(cert_seq);
-        return -1;
-    }
-
-    // Parse signature value
-    if (sig_val->type == ASN1_TYPE_BIT_STRING) {
-        cert->signature = malloc(sig_val->value.octet_string.length);
-        if (cert->signature) {
-            memcpy(cert->signature, sig_val->value.octet_string.data, sig_val->value.octet_string.length);
-            cert->signature_len = sig_val->value.octet_string.length;
-            // Note: BIT STRING unused bits info is lost in our simplified structure
-            cert->signature_unused_bits = 0;
-        }
-    }
-
-    // Store original DER
-    cert->der = malloc(der_len);
-    if (cert->der) {
-        memcpy(cert->der, der, der_len);
-        cert->der_len = der_len;
-    }
-
-    asn1_free(cert_seq);
-    *cert_out = cert;
-    return 0;
-}
-
-/* ============================================================================
- * Memory Management
- * ============================================================================ */
 
 void x509_name_free(x509_name_t *name) {
     if (!name) return;
@@ -418,78 +362,67 @@ void x509_name_free(x509_name_t *name) {
     free(name->der);
 }
 
-void x509_cert_free(x509_cert_t *cert) {
-    if (!cert) return;
-
-    free(cert->tbs.serial_number);
-    free(cert->tbs.signature.oid);
-    x509_name_free(&cert->tbs.issuer);
-    x509_name_free(&cert->tbs.subject);
-
-    free(cert->tbs.public_key.algorithm.oid);
-    if (cert->tbs.public_key.key_type == X509_PUBKEY_RSA) {
-        free(cert->tbs.public_key.key.rsa.modulus);
-        free(cert->tbs.public_key.key.rsa.exponent);
-    } else if (cert->tbs.public_key.key_type == X509_PUBKEY_EC) {
-        free(cert->tbs.public_key.key.ec.curve_oid);
-        free(cert->tbs.public_key.key.ec.point);
+void x509_cert_free(x509_cert_t *certificate) {
+    if (!certificate) return;
+    free(certificate->tbs.serial_number);
+    free(certificate->tbs.signature.oid);
+    free(certificate->tbs.signature.parameters);
+    x509_name_free(&certificate->tbs.issuer);
+    x509_name_free(&certificate->tbs.subject);
+    free(certificate->tbs.public_key.algorithm.oid);
+    free(certificate->tbs.public_key.algorithm.parameters);
+    if (certificate->tbs.public_key.key_type == X509_PUBKEY_RSA) {
+        free(certificate->tbs.public_key.key.rsa.modulus);
+        free(certificate->tbs.public_key.key.rsa.exponent);
+    } else if (certificate->tbs.public_key.key_type == X509_PUBKEY_EC) {
+        free(certificate->tbs.public_key.key.ec.curve_oid);
+        free(certificate->tbs.public_key.key.ec.point);
     } else {
-        free(cert->tbs.public_key.key.raw.data);
+        free(certificate->tbs.public_key.key.raw.data);
     }
-
-    for (size_t i = 0; i < cert->tbs.extensions_count; i++) {
-        free(cert->tbs.extensions[i].oid);
-        free(cert->tbs.extensions[i].value);
+    for (size_t i = 0u; i < certificate->tbs.extensions_count; ++i) {
+        free(certificate->tbs.extensions[i].oid);
+        free(certificate->tbs.extensions[i].value);
     }
-    free(cert->tbs.extensions);
-    free(cert->tbs.der);
-
-    free(cert->sig_algorithm.oid);
-    free(cert->signature);
-    free(cert->der);
-
-    free(cert);
+    free(certificate->tbs.extensions);
+    free(certificate->tbs.der);
+    free(certificate->sig_algorithm.oid);
+    free(certificate->sig_algorithm.parameters);
+    free(certificate->signature);
+    free(certificate->der);
+    free(certificate);
 }
 
-/* ============================================================================
- * Validation Helpers
- * ============================================================================ */
-
-bool x509_cert_is_valid_at(const x509_cert_t *cert, time_t t) {
-    if (!cert) return false;
-    return (t >= cert->tbs.validity.not_before && t <= cert->tbs.validity.not_after);
+bool x509_cert_is_valid_at(const x509_cert_t *certificate, time_t time_value) {
+    return certificate && time_value >= certificate->tbs.validity.not_before &&
+           time_value <= certificate->tbs.validity.not_after;
 }
 
-bool x509_cert_is_valid_now(const x509_cert_t *cert) {
-    return x509_cert_is_valid_at(cert, time(NULL));
+bool x509_cert_is_valid_now(const x509_cert_t *certificate) {
+    return x509_cert_is_valid_at(certificate, time(NULL));
 }
 
-const char *x509_cert_get_subject_cn(const x509_cert_t *cert) {
-    if (!cert) return NULL;
-    return cert->tbs.subject.common_name;
+const char *x509_cert_get_subject_cn(const x509_cert_t *certificate) {
+    return certificate ? certificate->tbs.subject.common_name : NULL;
 }
 
-const char *x509_cert_get_issuer_cn(const x509_cert_t *cert) {
-    if (!cert) return NULL;
-    return cert->tbs.issuer.common_name;
+const char *x509_cert_get_issuer_cn(const x509_cert_t *certificate) {
+    return certificate ? certificate->tbs.issuer.common_name : NULL;
 }
 
-bool x509_cert_is_self_signed(const x509_cert_t *cert) {
-    if (!cert) return false;
-
-    const x509_name_t *issuer = &cert->tbs.issuer;
-    const x509_name_t *subject = &cert->tbs.subject;
-
-    #define STR_EQ(a, b) (((a) == (b)) || ((a) && (b) && strcmp((a), (b)) == 0))
-
+bool x509_cert_is_self_signed(const x509_cert_t *certificate) {
+    const x509_name_t *issuer, *subject;
+    if (!certificate) return false;
+    issuer = &certificate->tbs.issuer;
+    subject = &certificate->tbs.subject;
+#define STR_EQ(a, b) (((a) == (b)) || ((a) && (b) && strcmp((a), (b)) == 0))
     return STR_EQ(issuer->common_name, subject->common_name) &&
            STR_EQ(issuer->organization, subject->organization) &&
            STR_EQ(issuer->country, subject->country);
-
-    #undef STR_EQ
+#undef STR_EQ
 }
 
-x509_pubkey_type_t x509_cert_get_pubkey_type(const x509_cert_t *cert) {
-    if (!cert) return X509_PUBKEY_UNKNOWN;
-    return cert->tbs.public_key.key_type;
+x509_pubkey_type_t x509_cert_get_pubkey_type(const x509_cert_t *certificate) {
+    return certificate ? certificate->tbs.public_key.key_type
+                       : X509_PUBKEY_UNKNOWN;
 }

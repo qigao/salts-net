@@ -3,7 +3,7 @@
 # Unit tests
 add_executable(test_ldap test_ldap.c)
 
-target_link_libraries(test_ldap PRIVATE ldap_client SaltsNet::Asn1Parser
+target_link_libraries(test_ldap PRIVATE ldap_client Salts::ASN1
                                         Salts::Core Salts::TinyTest)
 
 target_include_directories(test_ldap
@@ -30,7 +30,7 @@ set_target_properties(test_ldap_cnet PROPERTIES FOLDER ldap)
 # Integration tests (requires network)
 add_executable(test_ldap_integration test_ldap_integration.c)
 
-target_link_libraries(test_ldap_integration PRIVATE ldap_client SaltsNet::Asn1Parser
+target_link_libraries(test_ldap_integration PRIVATE ldap_client Salts::ASN1
                                                     Salts::Core Salts::TinyTest)
 
 target_include_directories(test_ldap_integration

@@ -15,7 +15,6 @@
 #include "ice/salts_stun.h"
 #include "ice_cnet_datagram.h"
 #include "stun_binding_transaction.h"
-#include <platform.h>
 
 #include <salts/clock.h>
 #include <salts/error_codes.h>

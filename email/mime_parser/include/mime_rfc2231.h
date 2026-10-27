@@ -17,7 +17,6 @@
 #ifndef MIME_RFC2231_H
 #define MIME_RFC2231_H
 
-#include "platform.h"
 #include <stddef.h>
 #include "cmeta_buffer.h"
 

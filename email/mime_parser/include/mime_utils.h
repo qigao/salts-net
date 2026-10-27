@@ -6,7 +6,6 @@
 #ifndef MIME_UTILS_H
 #define MIME_UTILS_H
 
-#include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
 #include "cmeta_buffer.h"

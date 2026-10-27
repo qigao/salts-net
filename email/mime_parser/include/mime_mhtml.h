@@ -21,7 +21,6 @@
 #ifndef MIME_MHTML_H
 #define MIME_MHTML_H
 
-#include "platform.h"
 #include <stddef.h>
 #include "cmeta_buffer.h"
 

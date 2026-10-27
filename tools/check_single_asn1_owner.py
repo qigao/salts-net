@@ -30,6 +30,15 @@ if contents:
         errors.append("Installed SDK must not require retired SNMPSupport")
     if "Salts::ASN1" not in snmp:
         errors.append("SNMP must link the single imported Salts::ASN1")
+# Canonical Salts 3/Core packages do not install legacy platform.h.
+# Remove unused includes rather than shipping a compatibility facade.
+import re
+legacy_header = re.compile(r'^\s*#\s*include\s*[<"]platform\.h[>"]', re.MULTILINE)
+for dirname in ("ice", "snmp", "ldap", "email"):
+    for source in (ROOT / dirname).rglob("*"):
+        if source.is_file() and source.suffix in (".c", ".h", ".hpp", ".cpp"):
+            if legacy_header.search(source.read_text(encoding="utf-8")):
+                errors.append("retired platform.h include: " + str(source.relative_to(ROOT)))
 for error in errors:
     print("FAIL local ASN.1 source-owner leak: " + error, file=sys.stderr)
 if errors:

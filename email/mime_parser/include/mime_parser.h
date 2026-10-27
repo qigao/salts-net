@@ -21,7 +21,6 @@
 #ifndef MIME_PARSER_H
 #define MIME_PARSER_H
 
-#include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
 #include "cmeta_buffer.h"

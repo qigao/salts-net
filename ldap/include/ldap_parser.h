@@ -3,7 +3,6 @@
 
 
 #include "ldap_api.h"
-#include "platform.h"
 #include "ldap_types.h"
 #include "ldap_protocol.h"
 #include <stdint.h>

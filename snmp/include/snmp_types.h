@@ -6,7 +6,6 @@
 #ifndef SNMP_TYPES_H
 #define SNMP_TYPES_H
 
-#include "platform.h"
 #include <cmeta/meta.h>
 #include <stdint.h>
 #include <stddef.h>

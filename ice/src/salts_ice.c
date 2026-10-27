@@ -18,7 +18,6 @@
 #include "ice_cnet_datagram.h"
 #include "salts_ice_internal.h"
 #include "stun_binding_transaction.h"
-#include <platform.h>
 #include <salts/clock.h>
 #include <salts/thread.h>
 

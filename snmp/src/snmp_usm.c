@@ -8,7 +8,6 @@
 #include "memory_pool.h"
 #include <salts/asn1_value.h>
 #include <salts/clock.h>
-#include <platform.h>
 #include <cmeta_crypto.h>
 #include <string.h>
 #include <stdlib.h>

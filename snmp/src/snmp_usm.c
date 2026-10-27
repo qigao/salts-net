@@ -8,6 +8,7 @@
 #include "memory_pool.h"
 #include <salts/asn1_value.h>
 #include <salts/clock.h>
+#include <salts/random.h>
 #include <cmeta_crypto.h>
 #include <string.h>
 #include <stdlib.h>
@@ -39,7 +40,7 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
 
     if (priv_protocol == SNMP_PRIV_DES) {
         if (usm_des_salt_counter == 0u &&
-            cmeta_secure_random(&usm_des_salt_counter,
+            cmeta_platform_secure_random(&usm_des_salt_counter,
                                 sizeof(usm_des_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_des_salt_counter == UINT32_MAX) {
@@ -51,7 +52,7 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
         }
     } else {
         if (usm_aes_salt_counter == 0u &&
-            cmeta_secure_random(&usm_aes_salt_counter,
+            cmeta_platform_secure_random(&usm_aes_salt_counter,
                                 sizeof(usm_aes_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_aes_salt_counter == UINT64_MAX) {

@@ -73,9 +73,16 @@ function Platform-Arguments([string]$Rid) {
       if (-not $ndk -or -not (Test-Path -LiteralPath (Join-Path $ndk 'build/cmake/android.toolchain.cmake'))) {
         throw 'Native Android cross build requires the installed exact NDK'
       }
-      # Vcpkg's arm64-android triplet chainloads the real Android toolchain.
+      # Admit the actual 64-bit Android ABI through CMake's native NDK
+      # variables, not just vcpkg's triplet: find_package() version files
+      # reject 64-bit c-ares when CMake misclassifies the target as 32-bit.
+      # Never spoof CMAKE_SIZEOF_VOID_P or suppress package ABI checks.
       $args += @('-DCMAKE_SYSTEM_NAME=Android',
-                 '-DANDROID_ABI=arm64-v8a','-DANDROID_PLATFORM=android-26')
+                 "-DCMAKE_ANDROID_NDK=$ndk",
+                 '-DCMAKE_ANDROID_ARCH_ABI=arm64-v8a',
+                 '-DCMAKE_SYSTEM_VERSION=26',
+                 '-DANDROID_ABI=arm64-v8a',
+                 '-DANDROID_PLATFORM=android-26')
     } elseif ($Rid -eq 'ios-arm64') {
       if (-not $IsMacOS) { throw 'iOS source build requires a real macOS host' }
       $args += @('-DCMAKE_SYSTEM_NAME=iOS',

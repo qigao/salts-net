@@ -1,8 +1,9 @@
 #include "mime_encoded_word.h"
 #include "mime_utils.h"
-#include "mime_base64.h"
+#include <base64_utils.h>
 #include "mime_scan.h"
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 
 /* ── Detection ─────────────────────────────────────────────────────── */
@@ -98,13 +99,12 @@ char *mime_decode_encoded_word(mem_pool_t *pool, const mime_encoded_word_t *ew) 
   if (!pool || !ew) return NULL;
 
   if (ew->encoding == MIME_EW_ENCODING_BASE64) {
-    uint8_t *decoded = NULL;
+    char *decoded = NULL;
     size_t decoded_len = 0u;
-    /* Decoded MIME data is already pool-owned and NUL-terminated; no
-     * temporary encoded string, malloc allocation or redundant copy. */
-    if (mime_decode_base64(pool, ew->encoded_text, ew->encoded_text_len,
-                           &decoded, &decoded_len) != 0) return NULL;
-    return (char *)decoded;
+    if (mime_decode_body(pool, ew->encoded_text, ew->encoded_text_len,
+                         MIME_ENCODING_BASE64, &decoded, &decoded_len) != 0)
+      return NULL;
+    return decoded;
   } else if (ew->encoding == MIME_EW_ENCODING_QUOTED_PRINTABLE) {
     return decode_qp_encoded_word(pool, ew->encoded_text, ew->encoded_text_len);
   }
@@ -202,8 +202,9 @@ char *mime_encode_header_if_needed(mem_pool_t *pool,
 
   /* Each chunk of up to 45 bytes -> "=?UTF-8?B?" + <=60 b64 chars + "?=" = <=72.
    * Add 1 space separator between words. Upper bound per chunk = 73 chars. */
-  chunks = (len + RFC2047_B_MAX_INPUT - 1) / RFC2047_B_MAX_INPUT;
-  out_size = chunks * 76 + 1;
+  chunks = len / RFC2047_B_MAX_INPUT + (len % RFC2047_B_MAX_INPUT != 0u);
+  if (chunks > (SIZE_MAX - 1u) / 76u) return NULL;
+  out_size = chunks * 76u + 1u;
   out = mem_alloc(pool, out_size);
   if (!out) return NULL;
 
@@ -213,13 +214,13 @@ char *mime_encode_header_if_needed(mem_pool_t *pool,
     char *b64 = NULL;
     size_t b64_len;
     size_t chunk_len = len - i;
+    tn_base64_string_result_t encoded;
     if (chunk_len > RFC2047_B_MAX_INPUT) chunk_len = RFC2047_B_MAX_INPUT;
 
-    if (mime_base64_encoded_size(chunk_len, &b64_len) != 0) return NULL;
-    b64 = mem_alloc(pool, b64_len + 1u);
-    if (!b64 ||
-        mime_base64_encode((const uint8_t *)(value + i), chunk_len,
-                           b64, b64_len + 1u, &b64_len) != 0) return NULL;
+    encoded = tn_base64_encode_ex((const uint8_t *)(value + i), chunk_len);
+    if (!encoded.ok) return NULL;
+    b64 = encoded.value;
+    b64_len = strlen(b64);
 
     /* Space separator between adjacent encoded-words (RFC 2047 §5) */
     if (i > 0 && out_pos < out_size - 1) {
@@ -227,13 +228,15 @@ char *mime_encode_header_if_needed(mem_pool_t *pool,
     }
 
     /* =?UTF-8?B?<b64>?= */
-    if (out_pos + 10 + b64_len + 2 < out_size) {
-      memcpy(out + out_pos, "=?UTF-8?B?", 10); out_pos += 10;
-      memcpy(out + out_pos, b64, b64_len);      out_pos += b64_len;
-      memcpy(out + out_pos, "?=", 2);           out_pos += 2;
+    if (out_pos > out_size || b64_len > out_size - out_pos ||
+        out_size - out_pos - b64_len <= 12u) {
+      free(b64);
+      return NULL;
     }
-
-    /* b64 belongs to the same caller-owned MIME pool, never free(). */
+    memcpy(out + out_pos, "=?UTF-8?B?", 10); out_pos += 10;
+    memcpy(out + out_pos, b64, b64_len);      out_pos += b64_len;
+    memcpy(out + out_pos, "?=", 2);           out_pos += 2;
+    free(b64);
     i += chunk_len;
   }
 

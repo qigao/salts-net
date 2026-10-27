@@ -1,7 +1,6 @@
 #include "mime_rfc2822.h"
 #include "mime_encoded_word.h"
 #include "mime_scan.h"
-#include "tstr.h"
 #include <string.h>
 #include <ctype.h>
 

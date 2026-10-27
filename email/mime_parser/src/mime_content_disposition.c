@@ -1,6 +1,5 @@
 #include "mime_content_disposition.h"
 #include "mime_scan.h"
-#include "tstr.h"
 #include <string.h>
 
 /* ── Type name mapping ─────────────────────────────────────────────── */
@@ -21,13 +20,13 @@ static void skip_whitespace(const char **ptr, const char *end) {
 }
 
 static mime_disposition_type_t parse_disposition_type(const char *type_str, size_t len) {
-  if (len == 6 && tstr_ncasecmp(type_str, "inline", 6) == 0) {
+  if (len == 6 && mime_scan_ascii_equal_ci(type_str, "inline", 6)) {
     return MIME_DISPOSITION_INLINE;
   }
-  if (len == 10 && tstr_ncasecmp(type_str, "attachment", 10) == 0) {
+  if (len == 10 && mime_scan_ascii_equal_ci(type_str, "attachment", 10)) {
     return MIME_DISPOSITION_ATTACHMENT;
   }
-  if (len == 9 && tstr_ncasecmp(type_str, "form-data", 9) == 0) {
+  if (len == 9 && mime_scan_ascii_equal_ci(type_str, "form-data", 9)) {
     return MIME_DISPOSITION_FORM_DATA;
   }
   return MIME_DISPOSITION_UNKNOWN;
@@ -48,7 +47,7 @@ static const char *find_param_value(const char *start, const char *end,
 
     size_t name_len = ptr - name_start;
 
-    if (name_len == param_len && tstr_ncasecmp(name_start, param_name, param_len) == 0) {
+    if (name_len == param_len && mime_scan_ascii_equal_ci(name_start, param_name, param_len)) {
       skip_whitespace(&ptr, end);
 
       if (ptr < end && *ptr == '=') {

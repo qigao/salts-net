@@ -45,6 +45,22 @@ static inline const char *mime_scan_skip_sp_tab_cr_lf(const char *p, const char 
   return p;
 }
 
+/* Equal-length ASCII protocol tokens; never uses locale-dependent folding.
+ * The caller supplies a validated counted range, and no NUL terminator is
+ * required for either sequence. */
+static inline int mime_scan_ascii_equal_ci(const char *left, const char *right,
+                                           size_t length) {
+  if ((!left || !right) && length != 0u) return 0;
+  for (size_t i = 0; i < length; ++i) {
+    const unsigned char a = (unsigned char)left[i];
+    const unsigned char b = (unsigned char)right[i];
+    const unsigned char folded_a = (a >= 'A' && a <= 'Z') ? (unsigned char)(a + ('a' - 'A')) : a;
+    const unsigned char folded_b = (b >= 'A' && b <= 'Z') ? (unsigned char)(b + ('a' - 'A')) : b;
+    if (folded_a != folded_b) return 0;
+  }
+  return 1;
+}
+
 /* Finds a counted byte sequence without reading beyond haystack length. */
 static inline const char *mime_scan_mem(const char *haystack, size_t haystack_len,
                                         const char *needle, size_t needle_len) {

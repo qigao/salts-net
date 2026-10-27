@@ -67,11 +67,16 @@ The **ASN.1 MIB schema grammar** is a different domain and remains under
 `SaltsNet::SNMPSupport`. ECDSA/RFC8410 crypto-specific key formats remain
 in `Salts::Crypto`, separate from protocol SNMP/LDAP wire handling.
 
-The canonical standalone package is currently staged at
-[qigao/crypto export branch](https://github.com/qigao/crypto/tree/export/standalone-asn1-owner);
-do not merge or release this consumer change until `qigao/asn1` exists and
-installed SDK / wire-equivalence CI passes. This is a breaking source ownership
-change without old API aliases or fallbacks.
+The ASN.1 module is located in the **same** repository,
+[qigao/crypto/asn1](https://github.com/qigao/crypto/tree/refactor/use-standalone-asn1/asn1),
+as a sibling of `qigao/crypto/crypto`. Each module has its own source,
+CMake target, archive, package export and installed tests. ASN.1 can build
+and install independently without GmSSL. SaltsNet imports only `Salts::ASN1`.
+
+Do not merge or release this consumer change until the two-module
+Crypto PR #39 and the SaltsNet installed SDK/wire-equivalence CI pass.
+This is a deliberate breaking source ownership change, with no old
+API aliases or fallbacks. No separate `qigao/asn1` repository is planned.
 
 ## Runtime model
 

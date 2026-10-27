@@ -4,7 +4,7 @@
 #include "mime_encoded_word.h"
 #include "mime_rfc2231.h"
 #include "mime_content_disposition.h"
-#include "base64_utils.h"
+#include "mime_base64.h"
 #include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -611,11 +611,24 @@ tstr email_message_to_string(email_message_t *msg) {
 
       // Base64 encode attachment data with line folding
       char *encoded = NULL;
-      if (tn_base64_encode((uint8_t *)att->data, att->data_len, &encoded) == 0) {
-        char *folded = mime_base64_fold(msg->pool, encoded, strlen(encoded));
-        result = tstr_cat(result, folded ? folded : encoded);
-        free(encoded);
+      size_t encoded_len = 0u;
+      if (mime_base64_encoded_size(att->data_len, &encoded_len) != 0) {
+        tstr_free(result);
+        return NULL;
       }
+      encoded = malloc(encoded_len + 1u);
+      if (!encoded || mime_base64_encode(
+          (const uint8_t *)att->data, att->data_len, encoded,
+          encoded_len + 1u, &encoded_len) != 0) {
+        free(encoded);
+        tstr_free(result);
+        return NULL;
+      }
+      {
+        char *folded = mime_base64_fold(msg->pool, encoded, encoded_len);
+        result = tstr_cat(result, folded ? folded : encoded);
+      }
+      free(encoded);
       result = tstr_cat(result, "\r\n");
 
       att = att->next;

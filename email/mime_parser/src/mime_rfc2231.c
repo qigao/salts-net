@@ -1,6 +1,5 @@
 #include "mime_rfc2231.h"
 #include "mime_scan.h"
-#include "tstr.h"
 #include <string.h>
 #include <ctype.h>
 

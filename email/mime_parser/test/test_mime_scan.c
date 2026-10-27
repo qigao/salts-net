@@ -46,6 +46,22 @@ spec("mime_scan") {
       check(mime_scan_mem(data, 1, "long", 4) == NULL);
     }
 
+    it("matches ASCII header tokens case-insensitively within exact bounds") {
+      const char counted[] = {'C', 'o', 'N', 't', 'e', 'n', 't', '-', 'I', 'D', ':'};
+      check(mime_scan_ascii_equal_ci(counted, "content-id:", sizeof(counted)));
+      check(!mime_scan_ascii_equal_ci(counted, "content-Id?", sizeof(counted)));
+      check(mime_scan_ascii_equal_ci("x", "X", 1));
+      check(!mime_scan_ascii_equal_ci("x", "y", 1));
+      check(mime_scan_ascii_equal_ci(NULL, NULL, 0));
+      check(!mime_scan_ascii_equal_ci(NULL, "A", 1));
+      const char binary[] = {'A', '\0', 'B'};
+      const char other[] = {'a', '\0', 'b'};
+      check(mime_scan_ascii_equal_ci(binary, other, sizeof(binary)));
+      const char high[] = {'\xC0'};
+      const char other_high[] = {'\xE0'};
+      check(!mime_scan_ascii_equal_ci(high, other_high, 1));
+    }
+
     it("does not claim a non-empty input with absent pointers") {
       check(mime_scan_char(NULL, NULL, 'x') == NULL);
       check(mime_scan_mem(NULL, 2, "x", 1) == NULL);

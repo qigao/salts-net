@@ -44,7 +44,8 @@ if (-not $env:RE2C_ROOT -or
     -not (Test-Path -LiteralPath (Join-Path $env:RE2C_ROOT "bin/$(if ($IsWindows) { 're2c.exe' } else { 're2c' })"))) {
   throw 'Exact host re2c tool and Unicode property database are required'
 }
-if (-not $env:VCPKG_OVERLAY_PORTS) {
+if (-not $env:VCPKG_OVERLAY_PORTS -or
+    -not (Test-Path -LiteralPath $env:VCPKG_OVERLAY_PORTS -PathType Container)) {
   throw 'Canonical vcpkg-cache overlay ports are required'
 }
 $roots = Join-Path $repo 'stage/master-source'

@@ -2,7 +2,6 @@
 #include "mime_utils.h"
 #include "base64_utils.h"
 #include "mime_scan.h"
-#include "tstr.h"
 #include <string.h>
 #include <ctype.h>
 

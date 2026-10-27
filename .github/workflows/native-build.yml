@@ -75,6 +75,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout merged canonical ASN1 module from Crypto
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/crypto
+          ref: 57e03d9ebefc3b9348764edaddb834862e669a45
+          path: build/crypto-upstream
+          persist-credentials: false
       - name: Select iOS cache namespace
         if: matrix.preset == 'ci-ios-sdk-release-user'
         shell: bash
@@ -122,6 +129,9 @@ jobs:
           "QIGAO_VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
           "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
           "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+      - name: Build merged ASN1 static SDK for exact host and target RID
+        shell: pwsh
+        run: ./cmake/ci/build-asn1-sdk.ps1 -TargetRid '${{ matrix.rid }}' -HostRid '${{ matrix.host }}'
       - name: Configure ccache for this compiler and ABI
         shell: pwsh
         run: |
@@ -146,26 +156,23 @@ jobs:
       - name: Begin ccache accounting
         shell: pwsh
         run: ccache --zero-stats
-      - name: Restore prerelease Salts 2.3, SaltsUtils 4.3 and re2c
+      - name: Restore published Salts 3.0, SaltsUtils 4.3 and re2c
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: ./cmake/ci/restore-native-sdk.ps1 -SaltsRid '${{ matrix.rid }}' -HostRid '${{ matrix.host }}'
-      - name: Verify CNet 2.3 strategy SDK and SaltsUtils 4.3 surface
+      - name: Verify exact Salts 3.0 SDK graph and SaltsUtils 4.3 surface
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           foreach ($file in @(
-            (Join-Path $env:SALTS_ROOT 'include/cnet/client_pool.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/destination_policy.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/owner_placement.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/managed_dial.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/recovery_policy.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/sg_host.h'),
-            (Join-Path $env:SALTS_UTILS_ROOT 'lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake')
+            (Join-Path $env:SALTS_ROOT 'lib/cmake/Salts/SaltsConfig.cmake'),
+            (Join-Path $env:SALTS_UTILS_ROOT 'lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake'),
+            (Join-Path $env:SALTS_ASN1_ROOT 'lib/cmake/ASN1/ASN1Config.cmake'),
+            (Join-Path $env:SALTS_ASN1_HOST_ROOT 'lib/cmake/ASN1/ASN1Config.cmake')
           )) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-              throw "Missing CNet 2.3 / SaltsUtils 4.3 installed SDK contract: $file"
+              throw "Missing canonical Salts 3.0 / SaltsUtils 4.3 / ASN1 installed SDK contract: $file"
             }
           }
       - name: Build host tools for cross compilation
@@ -242,7 +249,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not read source commit' }
           @("version=$env:PACKAGE_VERSION", "commit=$commit", "rid=$env:QIGAO_SDK_RID",
             "triplet=$env:QIGAO_TARGET_TRIPLET", 'build_type=Release',
-            "salts=$env:SALTS_VERSION", "salts_utils=$env:SALTS_UTILS_VERSION", "re2c=$env:RE2C_VERSION") |
+            "salts=$env:SALTS_VERSION", "salts_utils=$env:SALTS_UTILS_VERSION", "re2c=$env:RE2C_VERSION",
+            "asn1_source=$env:SALTS_ASN1_SOURCE_SHA") |
             Set-Content -LiteralPath (Join-Path $prefix 'saltsnet-sdk-manifest.txt')
       - name: Report compiler cache results
         if: always()

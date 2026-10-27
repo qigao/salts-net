@@ -1,3 +1,10 @@
+# SNMP MIB textual schema compiler is an executable-only development tool.
+# It never exports a second ASN.1 protocol or X.509 native library.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  cmake_minimum_required(VERSION 3.21)
+  project(SaltsNetMIBTool LANGUAGES C)
+  include(CTest)
+endif()
 # SNMP-specific MIB textual schema compiler. NOT an ASN.1 runtime/library.
 # BER/DER and X.509 are exclusively provided by qigao/crypto.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")

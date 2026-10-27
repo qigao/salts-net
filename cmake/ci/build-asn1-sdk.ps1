@@ -22,11 +22,11 @@ $builds = Join-Path $root 'build/asn1-sdk'
 New-Item -ItemType Directory -Force -Path $roots, $builds | Out-Null
 
 function Invoke-Cmake([string[]]$Arguments, [string]$Context) {
-  & cmake @Arguments
+  & cmake @Arguments | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "ASN1 $Context failed for $TargetRid" }
 }
 function Invoke-CTest([string[]]$Arguments) {
-  & ctest @Arguments
+  & ctest @Arguments | Out-Host
   if ($LASTEXITCODE -ne 0) { throw "ASN1 CTest failed for $TargetRid" }
 }
 

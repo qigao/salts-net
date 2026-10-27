@@ -1,9 +1,9 @@
 #include "mime_mhtml.h"
-#include "base64_utils.h"
+#include <base64_utils.h>
 #include "mime_parser.h"
 #include "mime_utils.h"
 #include "cmeta_buffer.h"
-#include "cmeta_simd_scan.h"
+#include "mime_scan.h"
 #include "tstr.h"
 #include "uri_parser.h"
 #include <stdio.h>
@@ -22,18 +22,18 @@ int mime_is_mhtml(const char *content_type, size_t len) {
   if (!content_type || len < 15) return 0;
 
   // Check for multipart/related
-  if (!cmeta_scan_mem(content_type, len, "multipart/related", 17)) return 0;
+  if (!mime_scan_mem(content_type, len, "multipart/related", 17)) return 0;
 
   // Check for type="text/html" or type=text/html
-  const char *type_param = cmeta_scan_mem(content_type, len, "type=", 5);
+  const char *type_param = mime_scan_mem(content_type, len, "type=", 5);
   if (!type_param) return 0;
 
-  return cmeta_scan_mem(type_param, (size_t)(content_type + len - type_param), "text/html", 9) !=
+  return mime_scan_mem(type_param, (size_t)(content_type + len - type_param), "text/html", 9) !=
          NULL;
 }
 
 static void skip_whitespace(const char **ptr, const char *end) {
-  *ptr = cmeta_scan_skip_sp_tab_cr_lf(*ptr, end);
+  *ptr = mime_scan_skip_sp_tab_cr_lf(*ptr, end);
 }
 
 char *mime_extract_content_location(mem_pool_t *pool, const char *headers, size_t len) {
@@ -44,12 +44,12 @@ char *mime_extract_content_location(mem_pool_t *pool, const char *headers, size_
 
   // Find "Content-Location:" header
   while (ptr < end) {
-    if (tstr_ncasecmp(ptr, "Content-Location:", 17) == 0) {
+    if ((size_t)(end - ptr) >= 17u && mime_scan_ascii_equal_ci(ptr, "Content-Location:", 17u)) {
       ptr += 17;
       skip_whitespace(&ptr, end);
 
       const char *value_start = ptr;
-      ptr = cmeta_scan_to_any2(ptr, end, '\r', '\n');
+      ptr = mime_scan_to_any2(ptr, end, '\r', '\n');
 
       size_t value_len = ptr - value_start;
       if (value_len > 0) {
@@ -62,7 +62,7 @@ char *mime_extract_content_location(mem_pool_t *pool, const char *headers, size_
     }
 
     // Move to next line
-    ptr = cmeta_scan_to_char(ptr, end, '\n');
+    ptr = mime_scan_to_char(ptr, end, '\n');
     if (ptr < end) ptr++;
   }
 
@@ -77,7 +77,7 @@ char *mime_extract_content_id(mem_pool_t *pool, const char *headers, size_t len)
 
   // Find "Content-ID:" header
   while (ptr < end) {
-    if (tstr_ncasecmp(ptr, "Content-ID:", 11) == 0) {
+    if ((size_t)(end - ptr) >= 11u && mime_scan_ascii_equal_ci(ptr, "Content-ID:", 11u)) {
       ptr += 11;
       skip_whitespace(&ptr, end);
 
@@ -87,9 +87,9 @@ char *mime_extract_content_id(mem_pool_t *pool, const char *headers, size_t len)
       if (*ptr == '<') {
         ptr++;
         value_start = ptr;
-        ptr = cmeta_scan_to_char(ptr, end, '>');
+        ptr = mime_scan_to_char(ptr, end, '>');
       } else {
-        ptr = cmeta_scan_to_any2(ptr, end, '\r', '\n');
+        ptr = mime_scan_to_any2(ptr, end, '\r', '\n');
       }
 
       size_t value_len = ptr - value_start;
@@ -103,7 +103,7 @@ char *mime_extract_content_id(mem_pool_t *pool, const char *headers, size_t len)
     }
 
     // Move to next line
-    ptr = cmeta_scan_to_char(ptr, end, '\n');
+    ptr = mime_scan_to_char(ptr, end, '\n');
     if (ptr < end) ptr++;
   }
 
@@ -389,10 +389,14 @@ char *mime_mhtml_serialize(mime_mhtml_document_t *doc, size_t *output_len) {
     char *encoded = NULL;
     size_t encoded_len;
     size_t offset;
-    if (tn_base64_encode((const uint8_t *)res->data, res->data_len, &encoded) != 0) {
+    tn_base64_string_result_t b64 =
+        tn_base64_encode_ex((const uint8_t *)res->data, res->data_len);
+    if (!b64.ok) {
       tstr_free(result);
       return NULL;
     }
+    encoded = b64.value; /* Single Salts::Core allocator: release with free(). */
+    encoded_len = strlen(encoded);
     result = tstr_cat_fmt(result, "--%s\r\nContent-Type: %s\r\n", doc->boundary,
                           res->content_type ? res->content_type : "application/octet-stream");
     if (res->content_location) {
@@ -402,7 +406,6 @@ char *mime_mhtml_serialize(mime_mhtml_document_t *doc, size_t *output_len) {
       result = tstr_cat_fmt(result, "Content-ID: <%s>\r\n", res->content_id);
     }
     result = tstr_cat(result, "Content-Transfer-Encoding: base64\r\n\r\n");
-    encoded_len = strlen(encoded);
     for (offset = 0; offset < encoded_len; offset += MIME_BASE64_LINE_LENGTH) {
       size_t chunk = encoded_len - offset;
       if (chunk > MIME_BASE64_LINE_LENGTH) chunk = MIME_BASE64_LINE_LENGTH;

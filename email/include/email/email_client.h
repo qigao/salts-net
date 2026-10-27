@@ -8,7 +8,6 @@
 #ifndef EMAIL_CLIENT_H
 #define EMAIL_CLIENT_H
 
-#include "platform.h"
 #include "email_imap.h"
 #include "email_message.h"
 #include "email_pop3.h"

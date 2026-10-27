@@ -6,7 +6,6 @@
 #ifndef MIME_UTILS_H
 #define MIME_UTILS_H
 
-#include "platform.h"
 #include <stddef.h>
 #include <stdint.h>
 #include "cmeta_buffer.h"
@@ -49,13 +48,6 @@ int mime_decode_body(mem_pool_t *pool,
                                 const char *input, size_t input_len,
                                 mime_encoding_t encoding,
                                 char **output, size_t *output_len);
-
-/**
- * Decode Base64 content (wrapper around base64_utils)
- */
-int mime_decode_base64(mem_pool_t *pool,
-                                  const char *input, size_t input_len,
-                                  uint8_t **output, size_t *output_len);
 
 /**
  * Decode Quoted-Printable content

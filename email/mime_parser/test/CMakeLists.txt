@@ -1,4 +1,5 @@
 set(MIME_TESTS
+    test_mime_scan
     test_mime_content_disposition
     test_mime_encoded_word
     test_mime_mhtml

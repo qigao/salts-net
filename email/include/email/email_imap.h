@@ -15,7 +15,6 @@
 #ifndef EMAIL_IMAP_H
 #define EMAIL_IMAP_H
 
-#include "platform.h"
 #include "email_message.h"
 #include "tstr.h"
 #include <stddef.h>

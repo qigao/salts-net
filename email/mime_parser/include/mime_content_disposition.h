@@ -11,7 +11,6 @@
 #ifndef MIME_CONTENT_DISPOSITION_H
 #define MIME_CONTENT_DISPOSITION_H
 
-#include "platform.h"
 #include <stddef.h>
 #include "cmeta_buffer.h"
 

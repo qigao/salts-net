@@ -6,7 +6,6 @@
 #ifndef SNMP_TYPES_H
 #define SNMP_TYPES_H
 
-#include "platform.h"
 #include <cmeta/meta.h>
 #include <stdint.h>
 #include <stddef.h>
@@ -133,7 +132,7 @@ typedef enum {
  * ============================================================================ */
 
 typedef enum {
-    /* Universal ASN.1 types (handled by asn1_der.h) */
+    /* Universal ASN.1 types (handled by Salts::ASN1) */
     SNMP_TYPE_INTEGER      = 0x02,  /* INTEGER */
     SNMP_TYPE_OCTET_STRING = 0x04,  /* OCTET STRING */
     SNMP_TYPE_NULL         = 0x05,  /* NULL */

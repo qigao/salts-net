@@ -24,7 +24,6 @@
 #include <cmeta/meta.h>
 #include <stdint.h>
 #include <stddef.h>
-#include <platform.h>
 
 #ifdef __cplusplus
 extern "C" {

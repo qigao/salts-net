@@ -15,9 +15,9 @@
 #include "ice/salts_stun.h"
 #include "ice_cnet_datagram.h"
 #include "stun_binding_transaction.h"
-#include <platform.h>
 
 #include <salts/clock.h>
+#include <salts/random.h>
 #include <salts/error_codes.h>
 #include <cmeta_crypto.h>
 
@@ -100,7 +100,7 @@ static uint32_t stun_crc32(const uint8_t *data, size_t len) {
 int stun_generate_transaction_id(stun_transaction_id_t *txn_id) {
   if (!txn_id)
     return -1;
-  return cmeta_secure_random(txn_id->id, sizeof(txn_id->id));
+  return cmeta_platform_secure_random(txn_id->id, sizeof(txn_id->id));
 }
 
 static int txn_id_matches(const stun_transaction_id_t *a, const stun_transaction_id_t *b) {

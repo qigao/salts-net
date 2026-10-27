@@ -3,7 +3,16 @@ name: Build and test SaltsNet native SDKs
 on:
   workflow_call:
     inputs:
-      version:
+      core_sha:
+        description: Resolved HEAD of qigao/salts-core master
+        type: string
+        required: true
+      salts_sha:
+        description: Resolved HEAD of qigao/salts master
+        type: string
+        required: true
+      crypto_sha:
+        description: Resolved HEAD of qigao/crypto master
         type: string
         required: true
 
@@ -58,7 +67,7 @@ jobs:
             host_preset: ci-macos-host-release-user
             sysroot: iphoneos
             cross: true
-          # Published upstream RC packages ship linux-arm64, not iOS simulator.
+          # Real linux-arm64 host runner; no release RID substitution.
           - runner: ubuntu-24.04-arm
             rid: linux-arm64
             host: linux-arm64
@@ -71,10 +80,35 @@ jobs:
       QIGAO_TARGET_TRIPLET: ${{ matrix.triplet }}
       QIGAO_HOST_TRIPLET: ${{ matrix.host_triplet }}
       QIGAO_IOS_SYSROOT: ${{ matrix.sysroot }}
+      SALTS_CORE_SOURCE_SHA: ${{ inputs.core_sha }}
+      SALTS_SOURCE_SHA: ${{ inputs.salts_sha }}
+      CRYPTO_SOURCE_SHA: ${{ inputs.crypto_sha }}
+      VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/build/vcpkg-cache-contract/ports
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Checkout SaltsCore master snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts-core
+          ref: ${{ inputs.core_sha }}
+          path: build/upstream/salts-core
+          persist-credentials: false
+      - name: Checkout Salts master snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/salts
+          ref: ${{ inputs.salts_sha }}
+          path: build/upstream/salts
+          persist-credentials: false
+      - name: Checkout canonical ASN1 from resolved Crypto master snapshot
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/crypto
+          ref: ${{ inputs.crypto_sha }}
+          path: build/crypto-upstream
+          persist-credentials: false
       - name: Select iOS cache namespace
         if: matrix.preset == 'ci-ios-sdk-release-user'
         shell: bash
@@ -122,6 +156,12 @@ jobs:
           "QIGAO_VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
           "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
           "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+      - name: Build merged ASN1 static SDK for exact host and target RID
+        shell: pwsh
+        run: ./cmake/ci/build-asn1-sdk.ps1 -TargetRid '${{ matrix.rid }}' -HostRid '${{ matrix.host }}'
+      - name: Build Core CNet and Salts CMeta directly from exact master sources
+        shell: pwsh
+        run: ./cmake/ci/build-upstream-master.ps1 -TargetRid '${{ matrix.rid }}' -HostRid '${{ matrix.host }}'
       - name: Configure ccache for this compiler and ABI
         shell: pwsh
         run: |
@@ -146,27 +186,26 @@ jobs:
       - name: Begin ccache accounting
         shell: pwsh
         run: ccache --zero-stats
-      - name: Restore prerelease Salts 2.3, SaltsUtils 4.3 and re2c
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: ./cmake/ci/restore-native-sdk.ps1 -SaltsRid '${{ matrix.rid }}' -HostRid '${{ matrix.host }}'
-      - name: Verify CNet 2.3 strategy SDK and SaltsUtils 4.3 surface
+      - name: Verify exact master source-owner targets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           foreach ($file in @(
-            (Join-Path $env:SALTS_ROOT 'include/cnet/client_pool.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/destination_policy.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/owner_placement.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/managed_dial.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/recovery_policy.h'),
-            (Join-Path $env:SALTS_ROOT 'include/cnet/sg_host.h'),
-            (Join-Path $env:SALTS_UTILS_ROOT 'lib/cmake/SaltsUtils/SaltsUtilsConfig.cmake')
+            (Join-Path $env:SALTS_CORE_ROOT 'lib/cmake/SaltsCore/SaltsCoreConfig.cmake'),
+            (Join-Path $env:SALTS_ROOT 'lib/cmake/Salts/SaltsConfig.cmake'),
+            (Join-Path $env:SALTS_ASN1_ROOT 'lib/cmake/ASN1/ASN1Config.cmake'),
+            (Join-Path $env:SALTS_CORE_HOST_ROOT 'lib/cmake/SaltsCore/SaltsCoreConfig.cmake'),
+            (Join-Path $env:SALTS_HOST_ROOT 'lib/cmake/Salts/SaltsConfig.cmake')
           )) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
-              throw "Missing CNet 2.3 / SaltsUtils 4.3 installed SDK contract: $file"
+              throw "Missing source-built canonical dependency: $file"
             }
+          }
+          $core = (& git -C build/upstream/salts-core rev-parse HEAD | Out-String).Trim()
+          $salts = (& git -C build/upstream/salts rev-parse HEAD | Out-String).Trim()
+          if ($core -cne $env:SALTS_CORE_SOURCE_SHA -or
+              $salts -cne $env:SALTS_SOURCE_SHA) {
+            throw "Upstream master SHA moved during CI source qualification"
           }
       - name: Build host tools for cross compilation
         if: matrix.cross
@@ -242,7 +281,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not read source commit' }
           @("version=$env:PACKAGE_VERSION", "commit=$commit", "rid=$env:QIGAO_SDK_RID",
             "triplet=$env:QIGAO_TARGET_TRIPLET", 'build_type=Release',
-            "salts=$env:SALTS_VERSION", "salts_utils=$env:SALTS_UTILS_VERSION", "re2c=$env:RE2C_VERSION") |
+            "salts_version=$env:SALTS_VERSION", "salts_core_sha=$env:SALTS_CORE_SOURCE_SHA",
+            "salts_sha=$env:SALTS_SOURCE_SHA", "crypto_sha=$env:CRYPTO_SOURCE_SHA",
+            "re2c=$env:RE2C_VERSION", "asn1_source=$env:SALTS_ASN1_SOURCE_SHA") |
             Set-Content -LiteralPath (Join-Path $prefix 'saltsnet-sdk-manifest.txt')
       - name: Report compiler cache results
         if: always()

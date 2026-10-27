@@ -1,6 +1,8 @@
 {
   "version": 6,
-  "include": ["CMakePresets.json"],
+  "include": [
+    "CMakePresets.json"
+  ],
   "configurePresets": [
     {
       "name": "consumer-paths",
@@ -11,28 +13,87 @@
       "cacheVariables": {
         "VCPKG_TARGET_TRIPLET": "$env{QIGAO_TARGET_TRIPLET}",
         "VCPKG_HOST_TRIPLET": "$env{QIGAO_HOST_TRIPLET}",
-        "VCPKG_INSTALLED_DIR": "$env{GITHUB_WORKSPACE}/build/ci-installed/$env{QIGAO_SDK_RID}/vcpkg_installed"
+        "ASN1_DIR": "$env{SALTS_ASN1_ROOT}/lib/cmake/ASN1",
+        "VCPKG_INSTALLED_DIR": "$env{GITHUB_WORKSPACE}/build/ci-installed/$env{QIGAO_SDK_RID}/vcpkg_installed",
+        "SaltsCore_DIR": "$env{SALTS_CORE_ROOT}/lib/cmake/SaltsCore"
       },
       "environment": {
         "SALTSNET_ROOT": "$penv{SALTSNET_ROOT}",
         "SALTS_ROOT": "$penv{SALTS_ROOT}",
-        "SALTS_UTILS_ROOT": "$penv{SALTS_UTILS_ROOT}",
+        "SALTS_ASN1_ROOT": "$penv{SALTS_ASN1_ROOT}",
         "VCPKG_BINARY_SOURCES": "$penv{VCPKG_BINARY_SOURCES}",
-        "PATH": "$penv{PATH}"
+        "SALTS_CORE_ROOT": "$penv{SALTS_CORE_ROOT}"
       }
     },
-    {"name": "win-release-user", "inherits": ["consumer-paths", "Msvc"]},
-    {"name": "linux-release-user", "inherits": ["consumer-paths", "Gcc"]},
-    {"name": "macos-release-user", "inherits": ["consumer-paths", "AppleClang"]}
+    {
+      "name": "win-release-user",
+      "inherits": [
+        "consumer-paths",
+        "Msvc"
+      ]
+    },
+    {
+      "name": "linux-release-user",
+      "inherits": [
+        "consumer-paths",
+        "Gcc"
+      ]
+    },
+    {
+      "name": "macos-release-user",
+      "inherits": [
+        "consumer-paths",
+        "AppleClang"
+      ]
+    }
   ],
   "buildPresets": [
-    {"name": "win-release-user", "configurePreset": "win-release-user"},
-    {"name": "linux-release-user", "configurePreset": "linux-release-user"},
-    {"name": "macos-release-user", "configurePreset": "macos-release-user"}
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user"
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user"
+    },
+    {
+      "name": "macos-release-user",
+      "configurePreset": "macos-release-user"
+    }
   ],
   "testPresets": [
-    {"name": "win-release-user", "configurePreset": "win-release-user", "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error", "timeout": 90}},
-    {"name": "linux-release-user", "configurePreset": "linux-release-user", "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error", "timeout": 90}},
-    {"name": "macos-release-user", "configurePreset": "macos-release-user", "output": {"outputOnFailure": true}, "execution": {"noTestsAction": "error", "timeout": 90}}
+    {
+      "name": "win-release-user",
+      "configurePreset": "win-release-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 90
+      }
+    },
+    {
+      "name": "linux-release-user",
+      "configurePreset": "linux-release-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 90
+      }
+    },
+    {
+      "name": "macos-release-user",
+      "configurePreset": "macos-release-user",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "timeout": 90
+      }
+    }
   ]
 }

@@ -1,5 +1,5 @@
 #include "email/email_smtp.h"
-#include "base64_utils.h"
+#include <base64_utils.h>
 #include "email_cnet_transport.h"
 #include <ctype.h>
 #include <fmt.h>
@@ -355,7 +355,7 @@ int smtp_connect(smtp_client_t *client) {
       memcpy(auth_str + 1 + username_len + 1, client->config.password, password_len);
 
       char *auth_b64 = NULL;
-      if (tn_base64_encode((uint8_t *)auth_str, auth_len, &auth_b64) != 0) {
+      if (tn_base64_encode((const uint8_t *)auth_str, auth_len, &auth_b64) != 0) {
         smtp_disconnect(client);
         return -1;
       }
@@ -392,8 +392,8 @@ int smtp_connect(smtp_client_t *client) {
 
       // Send username (base64)
       char *user_b64 = NULL;
-      if (tn_base64_encode((uint8_t *)client->config.username, strlen(client->config.username),
-                           &user_b64) != 0) {
+      if (tn_base64_encode((const uint8_t *)client->config.username,
+                           strlen(client->config.username), &user_b64) != 0) {
         smtp_disconnect(client);
         return -1;
       }
@@ -412,8 +412,8 @@ int smtp_connect(smtp_client_t *client) {
 
       // Send password (base64)
       char *pass_b64 = NULL;
-      if (tn_base64_encode((uint8_t *)client->config.password, strlen(client->config.password),
-                           &pass_b64) != 0) {
+      if (tn_base64_encode((const uint8_t *)client->config.password,
+                           strlen(client->config.password), &pass_b64) != 0) {
         smtp_disconnect(client);
         return -1;
       }

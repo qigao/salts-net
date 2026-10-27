@@ -5,10 +5,10 @@
 
 #include "snmp_usm.h"
 #include "snmp_usm_wire.h"
-#include "asn1_types.h"
 #include "memory_pool.h"
+#include <salts/asn1_value.h>
 #include <salts/clock.h>
-#include <platform.h>
+#include <salts/random.h>
 #include <cmeta_crypto.h>
 #include <string.h>
 #include <stdlib.h>
@@ -40,7 +40,7 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
 
     if (priv_protocol == SNMP_PRIV_DES) {
         if (usm_des_salt_counter == 0u &&
-            cmeta_secure_random(&usm_des_salt_counter,
+            cmeta_platform_secure_random(&usm_des_salt_counter,
                                 sizeof(usm_des_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_des_salt_counter == UINT32_MAX) {
@@ -52,7 +52,7 @@ static int usm_generate_salt(snmp_priv_protocol_t priv_protocol,
         }
     } else {
         if (usm_aes_salt_counter == 0u &&
-            cmeta_secure_random(&usm_aes_salt_counter,
+            cmeta_platform_secure_random(&usm_aes_salt_counter,
                                 sizeof(usm_aes_salt_counter)) != SALTS_OK) {
             status = USM_ERROR_INVALID;
         } else if (usm_aes_salt_counter == UINT64_MAX) {
@@ -539,78 +539,56 @@ int snmp_usm_encode_security_params_sized(
         return USM_ERROR_INVALID;
     }
 
-    /* Build SEQUENCE */
-    asn1_value_t *seq = asn1_create_sequence();
-    if (!seq) {
-        return USM_ERROR_INVALID;
+    salts_asn1_value *seq = NULL;
+    salts_asn1_value *field = NULL;
+    size_t written = 0u;
+    size_t user_name_len = params->user_name ? strlen(params->user_name) : 0u;
+    if (salts_asn1_value_create_sequence(&seq) != SALTS_ASN1_OK ||
+        salts_asn1_value_create_octet_string(params->authoritative_engine_id,
+                                             params->engine_id_len,
+                                             &field) != SALTS_ASN1_OK ||
+        salts_asn1_value_add_child(seq, field) != SALTS_ASN1_OK)
+        goto invalid;
+    field = NULL;
+    if (salts_asn1_value_create_integer(params->engine_boots, &field) !=
+            SALTS_ASN1_OK ||
+        salts_asn1_value_add_child(seq, field) != SALTS_ASN1_OK)
+        goto invalid;
+    field = NULL;
+    if (salts_asn1_value_create_integer(params->engine_time, &field) !=
+            SALTS_ASN1_OK ||
+        salts_asn1_value_add_child(seq, field) != SALTS_ASN1_OK)
+        goto invalid;
+    field = NULL;
+    if (salts_asn1_value_create_octet_string(params->user_name, user_name_len,
+                                             &field) != SALTS_ASN1_OK ||
+        salts_asn1_value_add_child(seq, field) != SALTS_ASN1_OK)
+        goto invalid;
+    field = NULL;
+    if (salts_asn1_value_create_octet_string(params->auth_params,
+                                             auth_params_len,
+                                             &field) != SALTS_ASN1_OK ||
+        salts_asn1_value_add_child(seq, field) != SALTS_ASN1_OK)
+        goto invalid;
+    field = NULL;
+    if (salts_asn1_value_create_octet_string(params->priv_params,
+                                             priv_params_len,
+                                             &field) != SALTS_ASN1_OK ||
+        salts_asn1_value_add_child(seq, field) != SALTS_ASN1_OK)
+        goto invalid;
+    field = NULL;
+    if (salts_asn1_value_encode(seq, SALTS_ASN1_DER, 0u, out, *out_len,
+                                &written) != SALTS_ASN1_OK) {
+        *out_len = written;
+        goto invalid;
     }
-
-    /* 1. msgAuthoritativeEngineID - OCTET STRING */
-    asn1_value_t *engine_id = asn1_create_octet_string(
-        params->authoritative_engine_id,
-        params->engine_id_len
-    );
-    if (!engine_id) {
-        asn1_free(seq);
-        return USM_ERROR_INVALID;
-    }
-    asn1_sequence_add_child(seq, engine_id);
-
-    /* 2. msgAuthoritativeEngineBoots - INTEGER */
-    asn1_value_t *boots = asn1_create_integer((int64_t)params->engine_boots);
-    if (!boots) {
-        asn1_free(seq);
-        return USM_ERROR_INVALID;
-    }
-    asn1_sequence_add_child(seq, boots);
-
-    /* 3. msgAuthoritativeEngineTime - INTEGER */
-    asn1_value_t *time = asn1_create_integer((int64_t)params->engine_time);
-    if (!time) {
-        asn1_free(seq);
-        return USM_ERROR_INVALID;
-    }
-    asn1_sequence_add_child(seq, time);
-
-    /* 4. msgUserName - OCTET STRING */
-    size_t user_name_len = params->user_name ? strlen(params->user_name) : 0;
-    asn1_value_t *user_name = asn1_create_octet_string(
-        (const uint8_t *)params->user_name,
-        user_name_len
-    );
-    if (!user_name) {
-        asn1_free(seq);
-        return USM_ERROR_INVALID;
-    }
-    asn1_sequence_add_child(seq, user_name);
-
-    /* 5. msgAuthenticationParameters - OCTET STRING (12 bytes) */
-    asn1_value_t *auth_params = asn1_create_octet_string(
-        params->auth_params,
-        auth_params_len
-    );
-    if (!auth_params) {
-        asn1_free(seq);
-        return USM_ERROR_INVALID;
-    }
-    asn1_sequence_add_child(seq, auth_params);
-
-    /* 6. msgPrivacyParameters - OCTET STRING (8 bytes) */
-    asn1_value_t *priv_params = asn1_create_octet_string(
-        params->priv_params,
-        priv_params_len
-    );
-    if (!priv_params) {
-        asn1_free(seq);
-        return USM_ERROR_INVALID;
-    }
-    asn1_sequence_add_child(seq, priv_params);
-
-    /* Encode to BER */
-    int result = asn1_der_encode(seq, out, out_len);
-    asn1_free(seq);
-
-    return (result == 0) ? USM_OK : USM_ERROR_INVALID;
+    *out_len = written;
+    salts_asn1_value_free(seq);
+    return USM_OK;
+invalid:
+    salts_asn1_value_free(field);
+    salts_asn1_value_free(seq);
+    return USM_ERROR_INVALID;
 }
 
 int usm_encode_security_params(
@@ -632,101 +610,116 @@ int usm_decode_security_params(
     void *pool
 ) {
     uint8_t *engine_id_copy = NULL;
+    salts_asn1_value *root = NULL;
+    const salts_asn1_value *children[6];
+    const uint8_t *content = NULL;
+    size_t content_size = 0u;
+    int64_t integer = 0;
+    uint8_t tag_class = 0u, constructed = 0u;
+    uint32_t tag_number = 0u;
     if (!data || !params) {
         return USM_ERROR_INVALID;
     }
 
     MemoryPool *mem_pool = (MemoryPool *)pool;
 
-    /* Decode SEQUENCE */
-    asn1_value_t *root = NULL;
-    int result = scan_binary_asn1(data, len, &root);
-    if (result != 0 || !root || root->tag != 0x30) {
-        if (root) {
-            asn1_free(root);
-        }
+    if (salts_asn1_value_decode(data, len, SALTS_ASN1_BER, &root) !=
+            SALTS_ASN1_OK ||
+        salts_asn1_value_get_tag(root, &tag_class, &constructed, &tag_number) !=
+            SALTS_ASN1_OK ||
+        tag_class != 0u || !constructed || tag_number != 16u ||
+        salts_asn1_value_child_count(root) != 6u) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
-
-    /* Must have 6 children */
-    if (root->value.sequence.count != 6) {
-        asn1_free(root);
-        return USM_ERROR_INVALID;
-    }
-
-    asn1_value_t **children = root->value.sequence.children;
+    for (size_t i = 0u; i < 6u; ++i)
+        children[i] = salts_asn1_value_child_at(root, i);
 
     /* 1. msgAuthoritativeEngineID - OCTET STRING */
-    if (children[0]->tag != 0x04) {
-        asn1_free(root);
+    if (salts_asn1_value_get_tag(children[0], &tag_class, &constructed,
+                                 &tag_number) != SALTS_ASN1_OK ||
+        tag_class != 0u || constructed || tag_number != 4u ||
+        salts_asn1_value_get_content(children[0], &content, &content_size) !=
+            SALTS_ASN1_OK) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
-    params->engine_id_len = children[0]->value.octet_string.length;
+    params->engine_id_len = content_size;
     if (params->engine_id_len > 0) {
         engine_id_copy = mem_pool ? (uint8_t *)pool_alloc(mem_pool, params->engine_id_len)
                                   : (uint8_t *)malloc(params->engine_id_len);
         if (!engine_id_copy) {
-            asn1_free(root);
+            salts_asn1_value_free(root);
             return USM_ERROR_INVALID;
         }
-        memcpy(engine_id_copy, children[0]->value.octet_string.data, params->engine_id_len);
+        memcpy(engine_id_copy, content, params->engine_id_len);
     }
     params->authoritative_engine_id = engine_id_copy;
 
     /* 2. msgAuthoritativeEngineBoots - INTEGER */
-    if (children[1]->tag != 0x02) {
-        asn1_free(root);
+    if (salts_asn1_value_get_integer_i64(children[1], &integer) !=
+            SALTS_ASN1_OK ||
+        integer < 0 || integer > INT32_MAX) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
-    params->engine_boots = (uint32_t)children[1]->value.integer;
+    params->engine_boots = (uint32_t)integer;
 
     /* 3. msgAuthoritativeEngineTime - INTEGER */
-    if (children[2]->tag != 0x02) {
-        asn1_free(root);
+    if (salts_asn1_value_get_integer_i64(children[2], &integer) !=
+            SALTS_ASN1_OK ||
+        integer < 0 || integer > INT32_MAX) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
-    params->engine_time = (uint32_t)children[2]->value.integer;
+    params->engine_time = (uint32_t)integer;
 
     /* 4. msgUserName - OCTET STRING */
-    if (children[3]->tag != 0x04) {
-        asn1_free(root);
+    if (salts_asn1_value_get_tag(children[3], &tag_class, &constructed,
+                                 &tag_number) != SALTS_ASN1_OK ||
+        tag_class != 0u || constructed || tag_number != 4u ||
+        salts_asn1_value_get_content(children[3], &content, &content_size) !=
+            SALTS_ASN1_OK || content_size > 32u) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
     /* Need null-terminated string */
-    size_t user_name_len = children[3]->value.octet_string.length;
+    size_t user_name_len = content_size;
     char *user_name_str =
         mem_pool ? (char *)pool_alloc(mem_pool, user_name_len + 1) : (char *)malloc(user_name_len + 1);
     if (!user_name_str) {
-        asn1_free(root);
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
-    memcpy(user_name_str, children[3]->value.octet_string.data, user_name_len);
+    memcpy(user_name_str, content, user_name_len);
     user_name_str[user_name_len] = '\0';
     params->user_name = user_name_str;
 
     /* 5. msgAuthenticationParameters - OCTET STRING */
-    if (children[4]->tag != 0x04 || children[4]->value.octet_string.length > 12) {
-        asn1_free(root);
+    if (salts_asn1_value_get_tag(children[4], &tag_class, &constructed,
+                                 &tag_number) != SALTS_ASN1_OK ||
+        tag_class != 0u || constructed || tag_number != 4u ||
+        salts_asn1_value_get_content(children[4], &content, &content_size) !=
+            SALTS_ASN1_OK || content_size > sizeof(params->auth_params)) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
     memset(params->auth_params, 0, sizeof(params->auth_params));
-    if (children[4]->value.octet_string.length > 0u) {
-        memcpy(params->auth_params, children[4]->value.octet_string.data,
-               children[4]->value.octet_string.length);
-    }
+    if (content_size > 0u) memcpy(params->auth_params, content, content_size);
 
     /* 6. msgPrivacyParameters - OCTET STRING */
-    if (children[5]->tag != 0x04 || children[5]->value.octet_string.length > 8) {
-        asn1_free(root);
+    if (salts_asn1_value_get_tag(children[5], &tag_class, &constructed,
+                                 &tag_number) != SALTS_ASN1_OK ||
+        tag_class != 0u || constructed || tag_number != 4u ||
+        salts_asn1_value_get_content(children[5], &content, &content_size) !=
+            SALTS_ASN1_OK || content_size > sizeof(params->priv_params)) {
+        salts_asn1_value_free(root);
         return USM_ERROR_INVALID;
     }
     memset(params->priv_params, 0, sizeof(params->priv_params));
-    if (children[5]->value.octet_string.length > 0u) {
-        memcpy(params->priv_params, children[5]->value.octet_string.data,
-               children[5]->value.octet_string.length);
-    }
+    if (content_size > 0u) memcpy(params->priv_params, content, content_size);
 
-    asn1_free(root);
+    salts_asn1_value_free(root);
     return USM_OK;
 }
 

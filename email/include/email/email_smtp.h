@@ -13,7 +13,6 @@
 #ifndef EMAIL_SMTP_H
 #define EMAIL_SMTP_H
 
-#include "platform.h"
 #include "email_message.h"
 #include "tstr.h"
 #include <salts/error_codes.h>

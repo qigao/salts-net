@@ -1,9 +1,9 @@
 #include "mime_encoded_word.h"
 #include "mime_utils.h"
-#include "base64_utils.h"
-#include "cmeta_simd_scan.h"
-#include "tstr.h"
+#include <base64_utils.h>
+#include "mime_scan.h"
 #include <string.h>
+#include <stdlib.h>
 #include <ctype.h>
 
 /* ── Detection ─────────────────────────────────────────────────────── */
@@ -27,7 +27,7 @@ size_t mime_parse_encoded_word(const char *str, size_t len,
 
   // Parse charset
   result->charset = ptr;
-  ptr = cmeta_scan_to_char(ptr, end, '?');
+  ptr = mime_scan_to_char(ptr, end, '?');
   if (ptr >= end) return 0;
   result->charset_len = ptr - result->charset;
   ptr++; // Skip '?'
@@ -50,7 +50,7 @@ size_t mime_parse_encoded_word(const char *str, size_t len,
   // Parse encoded text
   result->encoded_text = ptr;
   while (ptr < end - 1) {
-    ptr = cmeta_scan_to_char(ptr, end - 1, '?');
+    ptr = mime_scan_to_char(ptr, end - 1, '?');
     if (ptr < end - 1 && ptr[1] == '=') {
       result->encoded_text_len = ptr - result->encoded_text;
       return (ptr + 2) - str; // Total length including ?=
@@ -99,24 +99,12 @@ char *mime_decode_encoded_word(mem_pool_t *pool, const mime_encoded_word_t *ew) 
   if (!pool || !ew) return NULL;
 
   if (ew->encoding == MIME_EW_ENCODING_BASE64) {
-    // tn_base64_decode needs null-terminated string, copy first
-    char *encoded_copy = mem_alloc(pool, ew->encoded_text_len + 1);
-    if (!encoded_copy) return NULL;
-    memcpy(encoded_copy, ew->encoded_text, ew->encoded_text_len);
-    encoded_copy[ew->encoded_text_len] = '\0';
-
-    uint8_t *decoded = NULL;
-    size_t decoded_len = 0;
-    if (mime_decode_base64(pool, encoded_copy, ew->encoded_text_len,
-                           &decoded, &decoded_len) != 0) {
+    char *decoded = NULL;
+    size_t decoded_len = 0u;
+    if (mime_decode_body(pool, ew->encoded_text, ew->encoded_text_len,
+                         MIME_ENCODING_BASE64, &decoded, &decoded_len) != 0)
       return NULL;
-    }
-    // Ensure null termination
-    char *result = mem_alloc(pool, decoded_len + 1);
-    if (!result) return NULL;
-    memcpy(result, decoded, decoded_len);
-    result[decoded_len] = '\0';
-    return result;
+    return decoded;
   } else if (ew->encoding == MIME_EW_ENCODING_QUOTED_PRINTABLE) {
     return decode_qp_encoded_word(pool, ew->encoded_text, ew->encoded_text_len);
   }
@@ -214,8 +202,9 @@ char *mime_encode_header_if_needed(mem_pool_t *pool,
 
   /* Each chunk of up to 45 bytes -> "=?UTF-8?B?" + <=60 b64 chars + "?=" = <=72.
    * Add 1 space separator between words. Upper bound per chunk = 73 chars. */
-  chunks = (len + RFC2047_B_MAX_INPUT - 1) / RFC2047_B_MAX_INPUT;
-  out_size = chunks * 76 + 1;
+  chunks = len / RFC2047_B_MAX_INPUT + (len % RFC2047_B_MAX_INPUT != 0u);
+  if (chunks > (SIZE_MAX - 1u) / 76u) return NULL;
+  out_size = chunks * 76u + 1u;
   out = mem_alloc(pool, out_size);
   if (!out) return NULL;
 
@@ -225,12 +214,12 @@ char *mime_encode_header_if_needed(mem_pool_t *pool,
     char *b64 = NULL;
     size_t b64_len;
     size_t chunk_len = len - i;
+    tn_base64_string_result_t encoded;
     if (chunk_len > RFC2047_B_MAX_INPUT) chunk_len = RFC2047_B_MAX_INPUT;
 
-    if (tn_base64_encode((const uint8_t *)(value + i), chunk_len, &b64) != 0 ||
-        !b64) {
-      return NULL;
-    }
+    encoded = tn_base64_encode_ex((const uint8_t *)(value + i), chunk_len);
+    if (!encoded.ok) return NULL;
+    b64 = encoded.value;
     b64_len = strlen(b64);
 
     /* Space separator between adjacent encoded-words (RFC 2047 §5) */
@@ -239,12 +228,14 @@ char *mime_encode_header_if_needed(mem_pool_t *pool,
     }
 
     /* =?UTF-8?B?<b64>?= */
-    if (out_pos + 10 + b64_len + 2 < out_size) {
-      memcpy(out + out_pos, "=?UTF-8?B?", 10); out_pos += 10;
-      memcpy(out + out_pos, b64, b64_len);      out_pos += b64_len;
-      memcpy(out + out_pos, "?=", 2);           out_pos += 2;
+    if (out_pos > out_size || b64_len > out_size - out_pos ||
+        out_size - out_pos - b64_len <= 12u) {
+      free(b64);
+      return NULL;
     }
-
+    memcpy(out + out_pos, "=?UTF-8?B?", 10); out_pos += 10;
+    memcpy(out + out_pos, b64, b64_len);      out_pos += b64_len;
+    memcpy(out + out_pos, "?=", 2);           out_pos += 2;
     free(b64);
     i += chunk_len;
   }

@@ -18,8 +18,8 @@
 #include "ice_cnet_datagram.h"
 #include "salts_ice_internal.h"
 #include "stun_binding_transaction.h"
-#include <platform.h>
 #include <salts/clock.h>
+#include <salts/random.h>
 #include <salts/thread.h>
 
 #include "tstr.h"
@@ -76,7 +76,7 @@ static void ice_tracef(const char *fmt, ...) {
 static int generate_random_u64(uint64_t *value) {
   if (!value)
     return -1;
-  return cmeta_secure_random(value, sizeof(*value));
+  return cmeta_platform_secure_random(value, sizeof(*value));
 }
 
 static int resolve_mdns_hostname(ice_candidate_t *candidate) {
@@ -176,7 +176,7 @@ static int generate_random_string(char *buf, size_t len) {
 
   while (i + 1 < len) {
     uint8_t random_byte;
-    if (cmeta_secure_random(&random_byte, sizeof(random_byte)) != 0)
+    if (cmeta_platform_secure_random(&random_byte, sizeof(random_byte)) != 0)
       return -1;
     if (random_byte >= uniform_limit)
       continue;
@@ -2202,7 +2202,7 @@ static int schedule_next_consent_check(salts_ice_agent_t *agent, uint64_t now) {
   uint64_t minimum_interval;
   uint64_t jitter_span;
 
-  if (!agent || cmeta_secure_random(&random_byte, sizeof(random_byte)) != 0)
+  if (!agent || cmeta_platform_secure_random(&random_byte, sizeof(random_byte)) != 0)
     return -1;
 
   base_interval = (uint64_t)agent->config.keepalive_interval_ms;

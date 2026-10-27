@@ -1,6 +1,5 @@
 #include "mime_content_disposition.h"
-#include "cmeta_simd_scan.h"
-#include "tstr.h"
+#include "mime_scan.h"
 #include <string.h>
 
 /* ── Type name mapping ─────────────────────────────────────────────── */
@@ -17,17 +16,17 @@ const char *mime_disposition_type_name(mime_disposition_type_t type) {
 /* ── Parsing helpers ───────────────────────────────────────────────── */
 
 static void skip_whitespace(const char **ptr, const char *end) {
-  *ptr = cmeta_scan_skip_sp_tab(*ptr, end);
+  *ptr = mime_scan_skip_sp_tab(*ptr, end);
 }
 
 static mime_disposition_type_t parse_disposition_type(const char *type_str, size_t len) {
-  if (len == 6 && tstr_ncasecmp(type_str, "inline", 6) == 0) {
+  if (len == 6 && mime_scan_ascii_equal_ci(type_str, "inline", 6)) {
     return MIME_DISPOSITION_INLINE;
   }
-  if (len == 10 && tstr_ncasecmp(type_str, "attachment", 10) == 0) {
+  if (len == 10 && mime_scan_ascii_equal_ci(type_str, "attachment", 10)) {
     return MIME_DISPOSITION_ATTACHMENT;
   }
-  if (len == 9 && tstr_ncasecmp(type_str, "form-data", 9) == 0) {
+  if (len == 9 && mime_scan_ascii_equal_ci(type_str, "form-data", 9)) {
     return MIME_DISPOSITION_FORM_DATA;
   }
   return MIME_DISPOSITION_UNKNOWN;
@@ -44,11 +43,11 @@ static const char *find_param_value(const char *start, const char *end,
 
     // Check if matches param_name
     const char *name_start = ptr;
-    ptr = cmeta_scan_to_any3(ptr, end, '=', ';', ' ');
+    ptr = mime_scan_to_any3(ptr, end, '=', ';', ' ');
 
     size_t name_len = ptr - name_start;
 
-    if (name_len == param_len && tstr_ncasecmp(name_start, param_name, param_len) == 0) {
+    if (name_len == param_len && mime_scan_ascii_equal_ci(name_start, param_name, param_len)) {
       skip_whitespace(&ptr, end);
 
       if (ptr < end && *ptr == '=') {
@@ -62,7 +61,7 @@ static const char *find_param_value(const char *start, const char *end,
           ptr++;
           value_start = ptr;
           while (ptr < end) {
-            ptr = cmeta_scan_to_any2(ptr, end, '"', '\\');
+            ptr = mime_scan_to_any2(ptr, end, '"', '\\');
             if (ptr >= end || *ptr == '"') {
               break;
             }
@@ -73,7 +72,7 @@ static const char *find_param_value(const char *start, const char *end,
           return value_start;
         } else {
           // Unquoted value (until semicolon or end)
-          ptr = cmeta_scan_to_char(ptr, end, ';');
+          ptr = mime_scan_to_char(ptr, end, ';');
           *value_len = ptr - value_start;
           // Trim trailing whitespace
           while (*value_len > 0 && (value_start[*value_len - 1] == ' ' ||
@@ -86,7 +85,7 @@ static const char *find_param_value(const char *start, const char *end,
     }
 
     // Skip to next parameter
-    ptr = cmeta_scan_to_char(ptr, end, ';');
+    ptr = mime_scan_to_char(ptr, end, ';');
     if (ptr < end) ptr++; // Skip semicolon
   }
 
@@ -124,7 +123,7 @@ int mime_parse_content_disposition(const char *value, size_t len,
 
   // Parse disposition type
   const char *type_start = ptr;
-  ptr = cmeta_scan_to_any2(ptr, end, ';', ' ');
+  ptr = mime_scan_to_any2(ptr, end, ';', ' ');
 
   size_t type_len = ptr - type_start;
   result->type = parse_disposition_type(type_start, type_len);

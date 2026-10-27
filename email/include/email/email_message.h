@@ -12,7 +12,6 @@
 #ifndef EMAIL_MESSAGE_H
 #define EMAIL_MESSAGE_H
 
-#include "platform.h"
 #include "cmeta_buffer.h"
 #include "tstr.h"
 #include "mime_parser.h"

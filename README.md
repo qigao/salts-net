@@ -52,6 +52,38 @@ Cryptographic and certificate support is recorded per protocol in the
 [cryptographic compatibility matrix](docs/CRYPTO_COMPATIBILITY_MATRIX.md).
 Primitive availability is not treated as proof of TLS, X.509, or S/MIME support.
 
+### ASN.1 ownership (independent provider-neutral library)
+
+SNMP v1/v2c/v3 and LDAP use the **same installed static `Salts::ASN1`**
+target, supplied by independent package `find_package(ASN1 0.1 CONFIG REQUIRED)`.
+The generic BER/DER Reader, Validator, Encoder, OID and Owned Value Tree are
+not compiled by SaltsNet or Crypto. The ABI is `salts_asn1_*` from
+`<salts/asn1.h>` and `<salts/asn1_value.h>`.
+
+SaltsNet does **not** compile, export or install any ASN.1 or X.509
+native library. Its previous binary scanner, encoder, owned Value Tree,
+`SaltsNet::Asn1Parser`, `SaltsNet::SNMPSupport`, X.509 parser, old CSPRNG
+wrapper and compatibility headers have been physically retired.
+
+The SNMP-specific MIB textual schema compiler lives under
+`snmp/mib/` and produces **only a command-line tool**,
+`mib_compiler`. It is not an ASN.1 runtime, SDK library, independent
+codegen target or alternate BER/DER implementation. Certificate DER
+inspection and PKI metadata are implemented in the Crypto module
+([Crypto X.509 PR #41](https://github.com/qigao/crypto/pull/41)),
+rather than in SaltsNet.
+
+The ASN.1 module is located in the **same** repository,
+[qigao/crypto/asn1](https://github.com/qigao/crypto/tree/refactor/use-standalone-asn1/asn1),
+as a sibling of `qigao/crypto/crypto`. Each module has its own source,
+CMake target, archive, package export and installed tests. ASN.1 can build
+and install independently without GmSSL. SaltsNet imports only `Salts::ASN1`.
+
+Do not merge or release this consumer change until the two-module
+Crypto PR #39 and the SaltsNet installed SDK/wire-equivalence CI pass.
+This is a deliberate breaking source ownership change, with no old
+API aliases or fallbacks. No separate `qigao/asn1` repository is planned.
+
 ## Runtime model
 
 SaltsNet keeps CNet's explicit caller-driven ownership model:

@@ -3,6 +3,20 @@
 include(CMakeFindDependencyMacro)
 
 find_dependency(Threads)
+if(NOT DEFINED ENV{SALTS_ASN1_ROOT} OR
+   NOT IS_DIRECTORY "$ENV{SALTS_ASN1_ROOT}")
+  message(FATAL_ERROR "Installed SaltsNet requires exact SALTS_ASN1_ROOT from qigao/crypto")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ASN1_ROOT}" _saltsnet_asn1_prefix)
+unset(ASN1_DIR CACHE)
+unset(ASN1_DIR)
+find_dependency(ASN1 0.1 CONFIG REQUIRED
+  PATHS "${_saltsnet_asn1_prefix}"
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+unset(_saltsnet_asn1_prefix)
+if(NOT TARGET Salts::ASN1)
+  message(FATAL_ERROR "SaltsNet installed package requires canonical standalone Salts::ASN1")
+endif()
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "Required dependency root is not defined: SALTS_ROOT")
 endif()
@@ -12,22 +26,11 @@ endif()
 file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" _saltsnet_salts_root)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
-find_dependency(Salts 2.3 CONFIG REQUIRED
+find_dependency(Salts 3.0 CONFIG REQUIRED
                 PATHS "${_saltsnet_salts_root}"
                 NO_DEFAULT_PATH
                 NO_CMAKE_FIND_ROOT_PATH)
 unset(_saltsnet_salts_root)
-if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
-  message(FATAL_ERROR "Required dependency root is not defined: SALTS_UTILS_ROOT")
-endif()
-file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" _saltsnet_salts_utils_root)
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
-find_dependency(SaltsUtils 4.3 CONFIG REQUIRED
-                PATHS "${_saltsnet_salts_utils_root}"
-                NO_DEFAULT_PATH
-                NO_CMAKE_FIND_ROOT_PATH)
-unset(_saltsnet_salts_utils_root)
 include("${CMAKE_CURRENT_LIST_DIR}/SaltsNetTargets.cmake")
 
 check_required_components(SaltsNet)

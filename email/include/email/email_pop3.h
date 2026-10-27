@@ -13,7 +13,6 @@
 #ifndef EMAIL_POP3_H
 #define EMAIL_POP3_H
 
-#include "platform.h"
 #include "email_message.h"
 #include "tstr.h"
 #include <salts/error_codes.h>

@@ -1,5 +1,6 @@
 set(TARGET_NAME SaltsSNMP)
-add_subdirectory(asn1)
+add_subdirectory(mib)
+# BER/DER supplied only by qigao/crypto/asn1; X.509 supplied by Crypto.
 
 # =============================================================================
 # SNMP Parser Library (respects BUILD_SHARED_LIBS)
@@ -26,7 +27,7 @@ target_include_directories(
 target_link_libraries(
   ${TARGET_NAME}
   PUBLIC Salts::Core Salts::CMeta
-  PRIVATE Salts::CNet asn1_parser)
+  PRIVATE Salts::CNet Salts::ASN1)
 
 set_target_properties(
   ${TARGET_NAME}

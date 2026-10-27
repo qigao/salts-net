@@ -18,7 +18,6 @@
 #ifndef MIME_RFC2822_H
 #define MIME_RFC2822_H
 
-#include "platform.h"
 #include <stddef.h>
 #include "cmeta_buffer.h"
 

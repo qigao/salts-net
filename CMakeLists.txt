@@ -33,7 +33,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 if(MSVC)
-  # Align with Salts 2.3: the dash spelling is compatible with the MSVC ccache launcher.
+  # Keep MSVC C11 atomics as required by native SaltsNet source.
   add_compile_options("$<$<COMPILE_LANGUAGE:C>:-experimental:c11atomics>")
 endif()
 # Enable folder organization in IDEs
@@ -51,6 +51,21 @@ include(Sanitizers)
 include(CmakeUtils)
 
 find_package(Threads REQUIRED)
+# Binary ASN.1 is a standalone provider-neutral static codec, not SaltsCore or Crypto.
+if(NOT DEFINED ENV{SALTS_ASN1_ROOT} OR
+   NOT IS_DIRECTORY "$ENV{SALTS_ASN1_ROOT}")
+  message(FATAL_ERROR "SALTS_ASN1_ROOT must name the exact independently installed qigao/crypto/asn1 SDK")
+endif()
+file(TO_CMAKE_PATH "$ENV{SALTS_ASN1_ROOT}" _saltsnet_asn1_prefix)
+unset(ASN1_DIR CACHE)
+unset(ASN1_DIR)
+find_package(ASN1 0.1 CONFIG REQUIRED
+  PATHS "${_saltsnet_asn1_prefix}"
+  NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+unset(_saltsnet_asn1_prefix)
+if(NOT TARGET Salts::ASN1)
+  message(FATAL_ERROR "Standalone static Salts::ASN1 is required")
+endif()
 
 if(NOT DEFINED ENV{SALTS_ROOT} OR "$ENV{SALTS_ROOT}" STREQUAL "")
   message(FATAL_ERROR "Required dependency root is not defined: SALTS_ROOT")
@@ -63,22 +78,11 @@ file(TO_CMAKE_PATH "$ENV{SALTS_ROOT}" SALTSNET_SALTS_ROOT_PATH)
 unset(Salts_DIR CACHE)
 unset(Salts_DIR)
 find_package(
-  Salts 2.3 CONFIG REQUIRED
+  Salts 3.0 CONFIG REQUIRED
   PATHS "${SALTSNET_SALTS_ROOT_PATH}"
   NO_DEFAULT_PATH
   NO_CMAKE_FIND_ROOT_PATH)
 
-if(NOT DEFINED ENV{SALTS_UTILS_ROOT} OR NOT IS_DIRECTORY "$ENV{SALTS_UTILS_ROOT}")
-  message(FATAL_ERROR "SALTS_UTILS_ROOT must name the restored SaltsUtils 4.3 SDK")
-endif()
-file(TO_CMAKE_PATH "$ENV{SALTS_UTILS_ROOT}" SALTSNET_SALTS_UTILS_ROOT_PATH)
-unset(SaltsUtils_DIR CACHE)
-unset(SaltsUtils_DIR)
-find_package(
-  SaltsUtils 4.3 CONFIG REQUIRED
-  PATHS "${SALTSNET_SALTS_UTILS_ROOT_PATH}"
-  NO_DEFAULT_PATH
-  NO_CMAKE_FIND_ROOT_PATH)
 # Additional components
 add_subdirectory(tools)
 include(FindTools)

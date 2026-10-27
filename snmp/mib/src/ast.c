@@ -11,7 +11,13 @@ AstNode *new_node(ast_node_type_t type, const char *value, AstNode *left, AstNod
     if (!node) return NULL;
     
     node->type = type;
-    node->value = value ? strdup(value) : NULL;
+    node->value = NULL;
+    if (value) {
+        size_t n = strlen(value) + 1u;
+        node->value = (char *)malloc(n);
+        if (!node->value) { free(node); return NULL; }
+        memcpy(node->value, value, n);
+    }
     node->left = left;
     node->right = right;
     

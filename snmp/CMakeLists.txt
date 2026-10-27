@@ -1,5 +1,6 @@
 set(TARGET_NAME SaltsSNMP)
-add_subdirectory(asn1)
+add_subdirectory(mib)
+# BER/DER supplied only by qigao/crypto/asn1; X.509 supplied by Crypto.
 
 # =============================================================================
 # SNMP Parser Library (respects BUILD_SHARED_LIBS)

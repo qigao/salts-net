@@ -19,9 +19,14 @@ find_package(SaltsNet CONFIG REQUIRED
   PATHS "${saltsnet_prefix}"
   NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
-foreach(component ICE LB TCPProxy Email LDAP SNMP SNMPSupport)
+foreach(component ICE LB TCPProxy Email LDAP SNMP)
   if(NOT TARGET "SaltsNet::${component}")
     message(FATAL_ERROR "Missing installed public target: SaltsNet::${component}")
+  endif()
+endforeach()
+foreach(removed_target IN ITEMS SaltsNet::Asn1Parser SaltsNet::SNMPSupport)
+  if(TARGET "${removed_target}")
+    message(FATAL_ERROR "Retired duplicate ASN.1/PKI target: ${removed_target}")
   endif()
 endforeach()
 

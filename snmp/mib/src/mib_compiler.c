@@ -1,9 +1,18 @@
 #include "mib_compiler.h"
 #include "ast.h"
-#include <fmt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+static char *mib_strdup(const char *source) {
+    size_t size;
+    char *out;
+    if (!source) return NULL;
+    size = strlen(source) + 1u;
+    out = (char *)malloc(size);
+    if (out) memcpy(out, source, size);
+    return out;
+}
 
 // Forward declaration from scanner.re
 void scan(const char *cursor);
@@ -59,7 +68,7 @@ int mib_compile_string(const char *mib_content, const char *output_dir) {
     mib_compile_context_t *ctx = mib_compile_create_context();
     if (!ctx) return -1;
     
-    ctx->output_dir = strdup(output_dir);
+    ctx->output_dir = mib_strdup(output_dir);
     
     // Parse the MIB content
     printf("Parsing MIB content...\n");
@@ -77,22 +86,22 @@ int mib_compile_string(const char *mib_content, const char *output_dir) {
     
     // Extract module name from AST
     if (ctx->root->type == NODE_MODULE && ctx->root->value) {
-        ctx->module_name = strdup(ctx->root->value);
+        ctx->module_name = mib_strdup(ctx->root->value);
     }
     
     // Generate outputs
     char filename[512];
     
     if (ctx->generate_c_code) {
-        fmt(filename, sizeof(filename), "{}/{}.h", output_dir, ctx->module_name);
+        snprintf(filename, sizeof(filename), "%s/%s.h", output_dir, ctx->module_name);
         mib_generate_c_header(ctx, filename);
         
-        fmt(filename, sizeof(filename), "{}/{}.c", output_dir, ctx->module_name);
+        snprintf(filename, sizeof(filename), "%s/%s.c", output_dir, ctx->module_name);
         mib_generate_c_source(ctx, filename);
     }
     
     if (ctx->generate_runtime_tables) {
-        fmt(filename, sizeof(filename), "{}/{}_runtime.c", output_dir, ctx->module_name);
+        snprintf(filename, sizeof(filename), "%s/%s_runtime.c", output_dir, ctx->module_name);
         mib_generate_runtime_table(ctx, filename);
     }
     

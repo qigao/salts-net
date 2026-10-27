@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fmt.h>
+#include <sys/stat.h>
 #include "mib_compiler.h"
 
 void print_usage(const char *program_name) {
@@ -65,17 +65,15 @@ int main(int argc, char *argv[]) {
     printf("Generate runtime tables: %s\n", generate_runtime ? "yes" : "no");
     printf("\n");
     
-    // Create output directory if it doesn't exist
-#ifdef _WIN32
-    char mkdir_cmd[512];
-    fmt(mkdir_cmd, sizeof(mkdir_cmd), "mkdir \"{}\" 2>nul", output_dir);
-    system(mkdir_cmd);
-#else
-    char mkdir_cmd[512];
-    fmt(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"{}\"", output_dir);
-    system(mkdir_cmd);
-#endif
-    
+    /* This CLI compiles MIB source; its output directory is explicit.
+     * Do not execute a shell or reinterpret a user-controlled path. */
+    { struct stat directory_info;
+      if (stat(output_dir, &directory_info) != 0) {
+          fprintf(stderr, "MIB output directory must already exist: %s\n", output_dir);
+          return 1;
+      }
+    }
+
     // Compile the MIB
     int result = mib_compile_file(mib_file, output_dir);
     if (result != 0) {

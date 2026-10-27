@@ -39,7 +39,6 @@ SaltsNet is the **network extension layer**. It is intentionally separate from H
 | --- | --- |
 | `SaltsNet::ICE` | STUN, TURN, and ICE |
 | `SaltsNet::SNMP` | SNMP client and protocol codec |
-| `SaltsNet::SNMPSupport` | MIB ASN.1 schema compiler, X.509 metadata and helper APIs |
 | `SaltsNet::LDAP` | LDAP client |
 | `SaltsNet::Email` | SMTP, POP3, and IMAP clients |
 | `SaltsNet::MimeParser` | MIME parsing |
@@ -61,11 +60,18 @@ The generic BER/DER Reader, Validator, Encoder, OID and Owned Value Tree are
 not compiled by SaltsNet or Crypto. The ABI is `salts_asn1_*` from
 `<salts/asn1.h>` and `<salts/asn1_value.h>`.
 
-SaltsNet's previous binary scanner, encoder, owned value tree and compatibility
-target `SaltsNet::Asn1Parser` have been deleted in this migration candidate.
-The **ASN.1 MIB schema grammar** is a different domain and remains under
-`SaltsNet::SNMPSupport`. ECDSA/RFC8410 crypto-specific key formats remain
-in `Salts::Crypto`, separate from protocol SNMP/LDAP wire handling.
+SaltsNet does **not** compile, export or install any ASN.1 or X.509
+native library. Its previous binary scanner, encoder, owned Value Tree,
+`SaltsNet::Asn1Parser`, `SaltsNet::SNMPSupport`, X.509 parser, old CSPRNG
+wrapper and compatibility headers have been physically retired.
+
+The SNMP-specific MIB textual schema compiler lives under
+`snmp/mib/` and produces **only a command-line tool**,
+`mib_compiler`. It is not an ASN.1 runtime, SDK library, independent
+codegen target or alternate BER/DER implementation. Certificate DER
+inspection and PKI metadata are implemented in the Crypto module
+([Crypto X.509 PR #41](https://github.com/qigao/crypto/pull/41)),
+rather than in SaltsNet.
 
 The ASN.1 module is located in the **same** repository,
 [qigao/crypto/asn1](https://github.com/qigao/crypto/tree/refactor/use-standalone-asn1/asn1),

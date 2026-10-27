@@ -1,7 +1,6 @@
 #include "mime_utils.h"
 #include "base64_utils.h"
 #include "mime_scan.h"
-#include "tstr.h"
 #include "cmeta_buffer.h"
 #include <string.h>
 #include <stdlib.h>
@@ -12,19 +11,19 @@ mime_encoding_t mime_parse_encoding(const char *encoding_str, size_t len) {
   if (!encoding_str || len == 0) return MIME_ENCODING_7BIT;
 
   // Normalize: lowercase comparison
-  if (len == 4 && tstr_ncasecmp(encoding_str, "7bit", 4) == 0) {
+  if (len == 4 && mime_scan_ascii_equal_ci(encoding_str, "7bit", 4)) {
     return MIME_ENCODING_7BIT;
   }
-  if (len == 4 && tstr_ncasecmp(encoding_str, "8bit", 4) == 0) {
+  if (len == 4 && mime_scan_ascii_equal_ci(encoding_str, "8bit", 4)) {
     return MIME_ENCODING_8BIT;
   }
-  if (len == 6 && tstr_ncasecmp(encoding_str, "binary", 6) == 0) {
+  if (len == 6 && mime_scan_ascii_equal_ci(encoding_str, "binary", 6)) {
     return MIME_ENCODING_BINARY;
   }
-  if (len == 6 && tstr_ncasecmp(encoding_str, "base64", 6) == 0) {
+  if (len == 6 && mime_scan_ascii_equal_ci(encoding_str, "base64", 6)) {
     return MIME_ENCODING_BASE64;
   }
-  if (len >= 16 && tstr_ncasecmp(encoding_str, "quoted-printable", 16) == 0) {
+  if (len >= 16 && mime_scan_ascii_equal_ci(encoding_str, "quoted-printable", 16)) {
     return MIME_ENCODING_QUOTED_PRINTABLE;
   }
 
@@ -183,7 +182,7 @@ static const char *find_param(const char *start, const char *end,
     if (ptr >= end) break;
 
     // Check if matches param_name
-    if (ptr + param_len <= end && tstr_ncasecmp(ptr, param_name, param_len) == 0) {
+    if (ptr + param_len <= end && mime_scan_ascii_equal_ci(ptr, param_name, param_len)) {
       ptr += param_len;
       skip_whitespace(&ptr, end);
 

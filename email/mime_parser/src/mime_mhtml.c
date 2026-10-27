@@ -1,5 +1,5 @@
 #include "mime_mhtml.h"
-#include "base64_utils.h"
+#include "mime_base64.h"
 #include "mime_parser.h"
 #include "mime_utils.h"
 #include "cmeta_buffer.h"
@@ -389,7 +389,15 @@ char *mime_mhtml_serialize(mime_mhtml_document_t *doc, size_t *output_len) {
     char *encoded = NULL;
     size_t encoded_len;
     size_t offset;
-    if (tn_base64_encode((const uint8_t *)res->data, res->data_len, &encoded) != 0) {
+    if (mime_base64_encoded_size(res->data_len, &encoded_len) != 0) {
+      tstr_free(result);
+      return NULL;
+    }
+    encoded = malloc(encoded_len + 1u);
+    if (!encoded ||
+        mime_base64_encode((const uint8_t *)res->data, res->data_len,
+                           encoded, encoded_len + 1u, &encoded_len) != 0) {
+      free(encoded);
       tstr_free(result);
       return NULL;
     }
@@ -402,7 +410,6 @@ char *mime_mhtml_serialize(mime_mhtml_document_t *doc, size_t *output_len) {
       result = tstr_cat_fmt(result, "Content-ID: <%s>\r\n", res->content_id);
     }
     result = tstr_cat(result, "Content-Transfer-Encoding: base64\r\n\r\n");
-    encoded_len = strlen(encoded);
     for (offset = 0; offset < encoded_len; offset += MIME_BASE64_LINE_LENGTH) {
       size_t chunk = encoded_len - offset;
       if (chunk > MIME_BASE64_LINE_LENGTH) chunk = MIME_BASE64_LINE_LENGTH;

@@ -79,20 +79,21 @@ jobs:
         if: matrix.preset == 'ci-ios-sdk-release-user'
         shell: bash
         run: echo 'X_VCPKG_NUGET_ID_PREFIX=vcpkg-cache' >> "$GITHUB_ENV"
+      - name: Checkout immutable shared curl GitHub Packages client
+        uses: actions/checkout@v4
+        with:
+          repository: qigao/vcpkg-cache
+          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          path: build/vcpkg-cache-contract
+          persist-credentials: false
       - id: vcpkg-cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-cache@fafb1efe5ac2440bfd7a08e493988d0459d89e51
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
         with:
           mode: read
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - name: Cache resolved NuGet native payloads
-        uses: actions/cache@v4
-        with:
-          path: stage/nuget
-          key: saltsnet-nuget-v1-${{ runner.os }}-${{ matrix.rid }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: |
-            saltsnet-nuget-v1-${{ runner.os }}-${{ matrix.rid }}-
+          triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
+          host-triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
+      - name: Restore published re2c using curl NuGet V3
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
       - name: Prepare Linux tools
         if: runner.os == 'Linux'
         shell: bash

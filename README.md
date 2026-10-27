@@ -318,10 +318,9 @@ ranges using `Salts.Native Version="2.3.0-*"` and
 SHA-qualified Linux-only verification snapshots (which can sort *above*
 `rc.1` or `rc.2`), the CI restore dynamically selects the newest **official numeric RC tag**, or
 the **stable release** when available, from GitHub Releases. It
-passes these selected identities into the floating MSBuild projects only for
-qualification, so no fixed RC number is committed. The restore uses
-`--no-cache --force-evaluate`, selects SDK roots from NuGet's actual
-`project.assets.json`, verifies the chosen release identities, and
+fetches the selected official release and exact GitHub Packages NuGet V3
+payloads with authenticated `curl`, compares their SHA256 digests, validates
+the package archive and selects the requested SDK roots; it
 **fails fast** if the requested prerelease
 or target/host SDK is unavailable. It does not fall back to Salts 2.2 or
 SaltsUtils 4.2. Rebuild all linked native dependencies against the same
@@ -517,7 +516,7 @@ and the [shared cache checkout](https://github.com/qigao/vcpkg-cache).
 Set `PROJECT_ROOT` (the parent of `external/pkgs`), `VCPKG_ROOT`, and
 `GITHUB_TOKEN` with `read:packages`. Windows uses the shared cache at
 `%LOCALAPPDATA%/qigao/vcpkg-cache`; Linux reads `VCPKG_CACHE_REPOSITORY_ROOT`
-from the environment and requires Mono for the NuGet binary cache client.
+from the environment and uses the curl-only native vcpkg files cache (no Mono or NuGet client).
 
 Windows Release example, from PowerShell in an x64 `VsDevCmd.bat` environment:
 
@@ -528,9 +527,9 @@ cmake --build --preset win-release-user --parallel
 ctest --preset win-release-user
 ```
 
-The restore command obtains `Qigao.Re2c.Binary` from the GitHub Packages feed
-in [cmake/vcpkg-cache.nuget.config](cmake/vcpkg-cache.nuget.config), also using
-`Version="*"`. It sets `SALTS_ROOT`, `SALTS_UTILS_ROOT`, their resolved versions and host
+The pinned `setup-re2c-tools` action downloads the latest stable
+`Qigao.Re2c.Binary` using authenticated `curl`, verifies its host files,
+and sets `RE2C_ROOT` and `RE2C_PACKAGE_VERSION`. The SDK restore sets `SALTS_ROOT`, `SALTS_UTILS_ROOT`, their resolved versions and host
 SDK roots, plus `RE2C_ROOT` and `RE2C_VERSION`, in the current
 PowerShell session. `RE2C_ROOT` selects `tools/<host RID>` from the restored
 package, including when cross-compiling Android. CMake resolves re2c only from
@@ -556,7 +555,7 @@ GCC on Linux, Homebrew GCC 15 on macOS, and MSVC with UTF-8 on Windows.
 The vcpkg setup action uses the same pinned tool bootstrap as current Salts and
 SaltsUtils; native package restoration re-evaluates the two official release channels
 (RC or stable) on every run. CI uses platform-separated ccache objects (including
-MSVC), read-only shared vcpkg binary caching, and cached NuGet package payloads.
+MSVC), read-only GitHub Packages curl downloads and a local vcpkg files cache.
 Android arm64 uses `ci-android-sdk-release-user` after building host
 tools. Its `LEMON_EXECUTABLE` must point to that completed host build; the
 target toolchain never produces or searches for an executable to run on the host.
@@ -585,7 +584,7 @@ proxy and LB integrations above add opt-in public APIs; further CNet 2.3
 integration in other protocol consumers remains a separate milestone.
 Reconfigure and rebuild consumers together with the selected SDK to avoid
 mixing headers and runtime versions. Local restoration stays under ignored
-`stage/nuget` and does not overwrite installed SDKs. To undo the build migration,
+`stage/github-packages` and does not overwrite installed SDKs. To undo the build migration,
 revert its configuration changes and rebuild with the previous matching SDK;
 automatic fallback to an older package is intentionally unsupported.
 
@@ -651,3 +650,9 @@ on the exact merged commit to build the candidate without publication.
 A separately authorized RC publication consumes
 that successful run via `publish_from_run` on the matching immutable tag; it
 does not rebuild the package. RC branches/tags do not publish automatically.
+
+For local CLI restore, check out the exact pinned `qigao/vcpkg-cache` commit into
+`build/vcpkg-cache-contract`, install Python 3.12 and `curl`, provide
+`GITHUB_TOKEN` with `read:packages`, and establish the platform-specific
+`RE2C_ROOT` and `RE2C_PACKAGE_VERSION` from its curl-based re2c setup.
+CI performs all of these steps from the immutable shared action SHA.

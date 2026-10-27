@@ -1,5 +1,5 @@
 #include "email/email_smtp.h"
-#include "base64_utils.h"
+#include "mime_base64.h"
 #include "email_cnet_transport.h"
 #include <ctype.h>
 #include <fmt.h>
@@ -19,6 +19,23 @@ struct smtp_client_s {
   char response_buffer[4096]; /* last complete SMTP response line (set by smtp_read_response) */
   size_t read_buffer_len;
 };
+
+/* Caller owns malloc result; Base64 algorithm belongs only to MimeParser.
+ * No NUL-terminated input assumption for SMTP AUTH PLAIN's embedded zeros. */
+static char *smtp_encode_auth_bytes(const uint8_t *data, size_t length) {
+  size_t encoded = 0u;
+  size_t written = 0u;
+  char *output;
+  if (mime_base64_encoded_size(length, &encoded) != 0) return NULL;
+  output = malloc(encoded + 1u);
+  if (!output) return NULL;
+  if (mime_base64_encode(data, length, output, encoded + 1u, &written) != 0 ||
+      written != encoded) {
+    free(output);
+    return NULL;
+  }
+  return output;
+}
 
 /* ── Helpers ───────────────────────────────────────────────────────── */
 
@@ -355,7 +372,8 @@ int smtp_connect(smtp_client_t *client) {
       memcpy(auth_str + 1 + username_len + 1, client->config.password, password_len);
 
       char *auth_b64 = NULL;
-      if (tn_base64_encode((uint8_t *)auth_str, auth_len, &auth_b64) != 0) {
+      auth_b64 = smtp_encode_auth_bytes((const uint8_t *)auth_str, auth_len);
+      if (!auth_b64) {
         smtp_disconnect(client);
         return -1;
       }
@@ -392,8 +410,9 @@ int smtp_connect(smtp_client_t *client) {
 
       // Send username (base64)
       char *user_b64 = NULL;
-      if (tn_base64_encode((uint8_t *)client->config.username, strlen(client->config.username),
-                           &user_b64) != 0) {
+      user_b64 = smtp_encode_auth_bytes((const uint8_t *)client->config.username,
+                                        strlen(client->config.username));
+      if (!user_b64) {
         smtp_disconnect(client);
         return -1;
       }
@@ -412,8 +431,9 @@ int smtp_connect(smtp_client_t *client) {
 
       // Send password (base64)
       char *pass_b64 = NULL;
-      if (tn_base64_encode((uint8_t *)client->config.password, strlen(client->config.password),
-                           &pass_b64) != 0) {
+      pass_b64 = smtp_encode_auth_bytes((const uint8_t *)client->config.password,
+                                        strlen(client->config.password));
+      if (!pass_b64) {
         smtp_disconnect(client);
         return -1;
       }

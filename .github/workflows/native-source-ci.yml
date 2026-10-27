@@ -1,0 +1,72 @@
+name: SaltsNet native source qualification (upstream master)
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - "CMakeLists.txt"
+      - "CMakeOptions.cmake"
+      - "CMakePresets.json"
+      - "CMakeUserPresets.json"
+      - "presets/**"
+      - "cmake/**"
+      - "ice/**"
+      - "snmp/**"
+      - "ldap/**"
+      - "email/**"
+      - "lb/**"
+      - "tproxy/**"
+      - "internal/**"
+      - "tools/**"
+      - "vcpkg.json"
+      - ".github/workflows/**"
+      - "tests/**"
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: saltsnet-upstream-master-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    name: Resolve coherent upstream master source snapshot
+    runs-on: ubuntu-24.04
+    outputs:
+      core_sha: ${{ steps.sources.outputs.core_sha }}
+      salts_sha: ${{ steps.sources.outputs.salts_sha }}
+      crypto_sha: ${{ steps.sources.outputs.crypto_sha }}
+    steps:
+      - name: Resolve and record exact source HEADs without release assets
+        id: sources
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for name in salts-core salts crypto; do
+            sha="$(gh api "repos/qigao/$name/git/ref/heads/master" --jq .object.sha)"
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            case "$name" in
+              salts-core) key=core_sha ;;
+              salts) key=salts_sha ;;
+              crypto) key=crypto_sha ;;
+              *) exit 1 ;;
+            esac
+            echo "$key=$sha" >> "$GITHUB_OUTPUT"
+            printf 'master snapshot %-12s %s\n' "$name" "$sha"
+          done
+
+  native:
+    needs: resolve
+    uses: ./.github/workflows/native-build.yml
+    with:
+      core_sha: ${{ needs.resolve.outputs.core_sha }}
+      salts_sha: ${{ needs.resolve.outputs.salts_sha }}
+      crypto_sha: ${{ needs.resolve.outputs.crypto_sha }}
+    secrets: inherit

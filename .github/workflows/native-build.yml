@@ -83,36 +83,38 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: qigao/vcpkg-cache
-          ref: b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+          ref: v0.1.4
           path: build/vcpkg-cache-contract
           persist-credentials: false
       - id: vcpkg-cache
-        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-vcpkg-curl-cache@v0.1.4
         with:
           mode: read
           triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.triplet }}
           host-triplet: ${{ matrix.runner == 'windows-2025' && 'qigao-x64-windows-v145' || matrix.host_triplet }}
       - name: Restore published re2c using curl NuGet V3
-        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@b4952760bf85d666d834c5b0c75ff4d9d0f8ddad
+        uses: qigao/vcpkg-cache/.github/actions/setup-re2c-tools@v0.1.4
+      - name: Install pinned native ccache
+        uses: qigao/vcpkg-cache/.github/actions/setup-ccache@v0.1.4
       - name: Prepare Linux tools
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm perl ccache
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config nasm perl
       - name: Prepare macOS tools
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          brew install ninja nasm ccache
+          brew install ninja nasm
       - name: Prepare Windows tools
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          choco install ninja nasm strawberryperl ccache -y --no-progress
+          choco install ninja nasm strawberryperl -y --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'Build tool installation failed' }
           $vswhere = "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe"
           $vsInstall = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
@@ -120,8 +122,8 @@ jobs:
           "VSINSTALL=$vsInstall" >> $env:GITHUB_ENV
           if (-not $env:VCPKG_ROOT -or -not $env:QIGAO_VCPKG_WINDOWS_TRIPLET) { throw 'Shared vcpkg environment is missing' }
           "QIGAO_VCPKG_ROOT=$env:VCPKG_ROOT" >> $env:GITHUB_ENV
-          "QIGAO_TARGET_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
-          "QIGAO_HOST_TRIPLET=$env:QIGAO_VCPKG_WINDOWS_TRIPLET" >> $env:GITHUB_ENV
+          "QIGAO_TARGET_TRIPLET=qigao-x64-windows-v145" >> $env:GITHUB_ENV
+          "QIGAO_HOST_TRIPLET=qigao-x64-windows-v145" >> $env:GITHUB_ENV
       - name: Configure ccache for this compiler and ABI
         shell: pwsh
         run: |
